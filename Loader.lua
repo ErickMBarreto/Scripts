@@ -1,8 +1,10 @@
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
 
+-- Serviços
 local TweenService = game:GetService("TweenService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local VirtualUser = game:GetService("VirtualUser")
 local CoreGui = game:GetService("CoreGui")
 
 local player = Players.LocalPlayer
@@ -16,23 +18,19 @@ player.CharacterAdded:Connect(function(newChar)
     rootPart = newChar:WaitForChild("HumanoidRootPart")
 end)
 
+-- Configurações Gerais
 local Settings = {
     AutoFarm = false,
-    FarmMode = "Above Head",
-    HeightAboveEnemy = 12,
-    TweenSpeed = 60,
-    ForceTeleport = true,
-    ForceTPEvery = 3,
-    OrbitRadius = 14,
-    OrbitSpeed = 1.8
+    AutoAttack = true,
+    HeightAboveEnemy = 8,
+    TweenSpeed = 50, -- Velocidade em studs/s (suave)
+    AttackSpeed = 0.15 -- Intervalo entre ataques
 }
 
 local currentTween = nil
-local lastForceTP = tick()
-local orbitAngle = 0
-
--- Noclip
 local noclipConnection = nil
+
+-- Noclip para voar sem colidir com paredes/teto
 local function toggleNoclip(enable)
     if enable then
         noclipConnection = RunService.Stepped:Connect(function()
@@ -52,27 +50,59 @@ local function toggleNoclip(enable)
     end
 end
 
--- Movimento suave
-local function tweenTo(targetCFrame)
+-- Voo suave via Tween (Sem teleporte brusco)
+local function smoothFlyTo(targetCFrame)
     if not rootPart or not rootPart.Parent then return end
     
     local distance = (rootPart.Position - targetCFrame.Position).Magnitude
-    local timeToTravel = math.clamp(distance / math.max(Settings.TweenSpeed, 1), 0.05, 5)
+    local duration = distance / math.max(Settings.TweenSpeed, 5)
 
-    if Settings.ForceTeleport and (tick() - lastForceTP >= Settings.ForceTPEvery) then
-        lastForceTP = tick()
-        if currentTween then currentTween:Cancel() end
-        rootPart.CFrame = targetCFrame
-        return
+    if currentTween then
+        currentTween:Cancel()
     end
 
-    if currentTween then currentTween:Cancel() end
-    local tweenInfo = TweenInfo.new(timeToTravel, Enum.EasingStyle.Linear)
+    local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
     currentTween = TweenService:Create(rootPart, tweenInfo, {CFrame = targetCFrame})
     currentTween:Play()
+    return currentTween
 end
 
--- Busca inimigo
+-- Parar qualquer movimento imediatamente
+local function stopMovement()
+    if currentTween then
+        currentTween:Cancel()
+        currentTween = nil
+    end
+    if rootPart and rootPart.AssemblyLinearVelocity then
+        rootPart.AssemblyLinearVelocity = Vector3.zero
+        rootPart.AssemblyAngularVelocity = Vector3.zero
+    end
+end
+
+-- Gatilho de ataque (Tool / Simulação M1 / Remote)
+local function performAttack()
+    local tool = character:FindFirstChildOfClass("Tool")
+    if tool then
+        tool:Activate()
+    end
+
+    VirtualUser:CaptureController()
+    VirtualUser:Button1Down(Vector2.new(0, 0))
+    task.wait(0.02)
+    VirtualUser:Button1Up(Vector2.new(0, 0))
+
+    for _, remote in ipairs(game:GetDescendants()) do
+        if (remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction")) and string.lower(remote.Name):find("attack") then
+            pcall(function()
+                if remote:IsA("RemoteEvent") then
+                    remote:FireServer()
+                end
+            end)
+        end
+    end
+end
+
+-- Busca o inimigo vivo mais próximo
 local function getClosestEnemy()
     local closest, minDistance = nil, math.huge
     for _, obj in ipairs(workspace:GetDescendants()) do
@@ -91,7 +121,7 @@ local function getClosestEnemy()
     return closest
 end
 
--- Busca portal
+-- Busca o portal da masmorra
 local function getPortal()
     for _, obj in ipairs(workspace:GetDescendants()) do
         if obj:IsA("BasePart") or obj:IsA("Model") then
@@ -104,58 +134,70 @@ local function getPortal()
     return nil
 end
 
--- Loop de Farm
+-- Loop de Auto Ataque (Ataca apenas se houver inimigo ativo)
+task.spawn(function()
+    while true do
+        if Settings.AutoFarm and Settings.AutoAttack and character and humanoid and humanoid.Health > 0 then
+            local enemy = getClosestEnemy()
+            if enemy then
+                performAttack()
+            end
+        end
+        task.wait(Settings.AttackSpeed)
+    end
+end)
+
+-- Loop Principal de Checagem e Decisão
 task.spawn(function()
     while true do
         if Settings.AutoFarm and rootPart and humanoid and humanoid.Health > 0 then
             local enemy = getClosestEnemy()
+            local portal = getPortal()
+
             if enemy then
+                -- 1. Tem inimigo: persegue e fica acima dele até derrotá-lo
+                local enemyHum = enemy:FindFirstChildOfClass("Humanoid")
                 local enemyRoot = enemy:FindFirstChild("HumanoidRootPart") or enemy.PrimaryPart
-                if enemyRoot then
-                    local targetCFrame = enemyRoot.CFrame
-
-                    if Settings.FarmMode == "Above Head" then
-                        targetCFrame = enemyRoot.CFrame * CFrame.new(0, Settings.HeightAboveEnemy, 0) * CFrame.Angles(math.rad(-90), 0, 0)
-                    elseif Settings.FarmMode == "Orbit" then
-                        orbitAngle = orbitAngle + math.rad(Settings.OrbitSpeed * 5)
-                        local offset = Vector3.new(math.cos(orbitAngle) * Settings.OrbitRadius, Settings.HeightAboveEnemy, math.sin(orbitAngle) * Settings.OrbitRadius)
-                        targetCFrame = CFrame.new(enemyRoot.Position + offset, enemyRoot.Position)
-                    end
-
-                    tweenTo(targetCFrame)
+                
+                while Settings.AutoFarm and enemyHum and enemyHum.Health > 0 and enemyRoot and enemyRoot.Parent do
+                    local abovePos = enemyRoot.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
+                    local targetCFrame = CFrame.new(abovePos, enemyRoot.Position)
+                    
+                    smoothFlyTo(targetCFrame)
+                    task.wait(0.1)
                 end
+            elseif portal then
+                -- 2. Não tem inimigo, mas tem portal: move suavemente até o portal
+                smoothFlyTo(portal.CFrame + Vector3.new(0, 3, 0))
             else
-                local portal = getPortal()
-                if portal then
-                    tweenTo(portal.CFrame)
-                end
+                -- 3. Não tem inimigo nem portal: FICA PARADO
+                stopMovement()
             end
         else
-            if currentTween then currentTween:Cancel() end
+            stopMovement()
         end
-        task.wait(0.05)
+        task.wait(0.2)
     end
 end)
 
--- Janela Principal Super Compacta
+-- Interface Fluent Compacta
 local Window = Fluent:CreateWindow({
     Title = "IBdihP Hub",
     SubTitle = "Anime Dungeons",
     TabWidth = 90,
-    Size = UDim2.fromOffset(380, 260),
+    Size = UDim2.fromOffset(360, 250),
     Acrylic = false,
     Theme = "Dark",
     MinimizeKey = Enum.KeyCode.RightControl
 })
 
 local Tabs = {
-    Info = Window:AddTab({ Title = "Info", Icon = "info" }),
     Farm = Window:AddTab({ Title = "Farm", Icon = "crosshair" }),
-    Combat = Window:AddTab({ Title = "Combat", Icon = "swords" }),
+    Info = Window:AddTab({ Title = "Info", Icon = "info" }),
     Settings = Window:AddTab({ Title = "Settings", Icon = "settings" })
 }
 
--- Botão Flutuante Quadrado para Minimizar / Reabrir
+-- Botão Flutuante Quadrado (Minimizar / Restaurar)
 local toggleGui = Instance.new("ScreenGui")
 local floatBtn = Instance.new("TextButton")
 local uiCorner = Instance.new("UICorner")
@@ -163,21 +205,17 @@ local uiStroke = Instance.new("UIStroke")
 
 toggleGui.Name = "IBdihP_ToggleBtn"
 toggleGui.ResetOnSpawn = false
-pcall(function()
-    toggleGui.Parent = CoreGui
-end)
-if not toggleGui.Parent then
-    toggleGui.Parent = player:WaitForChild("PlayerGui")
-end
+pcall(function() toggleGui.Parent = CoreGui end)
+if not toggleGui.Parent then toggleGui.Parent = player:WaitForChild("PlayerGui") end
 
 floatBtn.Name = "FloatButton"
 floatBtn.Parent = toggleGui
-floatBtn.BackgroundColor3 = Color3.fromRGB(24, 24, 24)
-floatBtn.Position = UDim2.new(0.02, 0, 0.4, 0)
-floatBtn.Size = UDim2.new(0, 42, 0, 42)
+floatBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+floatBtn.Position = UDim2.new(0.02, 0, 0.45, 0)
+floatBtn.Size = UDim2.new(0, 40, 0, 40)
 floatBtn.Text = "HUB"
-floatBtn.TextColor3 = Color3.fromRGB(0, 255, 170)
-floatBtn.TextSize = 12
+floatBtn.TextColor3 = Color3.fromRGB(0, 255, 150)
+floatBtn.TextSize = 11
 floatBtn.Font = Enum.Font.GothamBold
 floatBtn.Active = true
 floatBtn.Draggable = true
@@ -185,19 +223,15 @@ floatBtn.Visible = false
 
 uiCorner.CornerRadius = UDim.new(0, 8)
 uiCorner.Parent = floatBtn
-
-uiStroke.Color = Color3.fromRGB(0, 255, 170)
+uiStroke.Color = Color3.fromRGB(0, 255, 150)
 uiStroke.Thickness = 1.2
-uiStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 uiStroke.Parent = floatBtn
 
--- Ação ao clicar no quadrado flutuante
 floatBtn.MouseButton1Click:Connect(function()
     Window:Minimize()
     floatBtn.Visible = false
 end)
 
--- Monitora quando a janela foi minimizada pelo topo da UI
 if Window.Frame then
     Window.Frame:GetPropertyChangedSignal("Visible"):Connect(function()
         if not Window.Frame.Visible then
@@ -206,49 +240,35 @@ if Window.Frame then
     end)
 end
 
--- Aba Info: Opção de Escala e Tamanho
-local InfoSection = Tabs.Info:AddSection("Interface / UI Scale")
+-- Controles na Aba Farm
+local FarmSection = Tabs.Farm:AddSection("Auto Farm & Combat")
 
-InfoSection:AddSlider("UIScaleSlider", {
-    Title = "Tamanho da Interface (%)",
-    Description = "Ajuste o tamanho geral da janela",
-    Default = 80,
-    Min = 50,
-    Max = 120,
-    Rounding = 0,
+FarmSection:AddToggle("AutoFarmEnemies", {
+    Title = "Auto Farm Enemies",
+    Description = "Inimigo -> Portal -> Fica parado se não houver nenhum",
+    Default = false,
     Callback = function(Value)
-        local scale = Value / 100
-        local baseWidth, baseHeight = 450, 320
-        Window:SetSize(UDim2.fromOffset(math.floor(baseWidth * scale), math.floor(baseHeight * scale)))
+        Settings.AutoFarm = Value
+        toggleNoclip(Value)
+        if not Value then
+            stopMovement()
+        end
     end
 })
 
-InfoSection:AddButton({
-    Title = "Minimizar para Quadrado Flutuante",
-    Description = "Recolhe a janela e exibe o botão rápido na lateral",
-    Callback = function()
-        Window:Minimize()
-        floatBtn.Visible = true
-    end
-})
-
--- Aba Farm
-local FarmSection = Tabs.Farm:AddSection("Auto Farm")
-
-FarmSection:AddDropdown("FarmMode", {
-    Title = "Farm Mode",
-    Values = {"Above Head", "Orbit"},
-    Default = "Above Head",
+FarmSection:AddToggle("AutoAttackToggle", {
+    Title = "Auto Attack (M1 / Skills)",
+    Default = true,
     Callback = function(Value)
-        Settings.FarmMode = Value
+        Settings.AutoAttack = Value
     end
 })
 
 FarmSection:AddSlider("HeightAboveEnemy", {
-    Title = "Height Above Enemy",
-    Default = 12,
-    Min = 1,
-    Max = 50,
+    Title = "Altura acima do Inimigo",
+    Default = 8,
+    Min = 2,
+    Max = 30,
     Rounding = 0,
     Callback = function(Value)
         Settings.HeightAboveEnemy = Value
@@ -256,67 +276,36 @@ FarmSection:AddSlider("HeightAboveEnemy", {
 })
 
 FarmSection:AddSlider("TweenSpeed", {
-    Title = "Tween Speed",
-    Default = 60,
-    Min = 10,
-    Max = 200,
+    Title = "Velocidade do Voo Suave",
+    Default = 50,
+    Min = 15,
+    Max = 150,
     Rounding = 0,
     Callback = function(Value)
         Settings.TweenSpeed = Value
     end
 })
 
-local ForceTPSection = Tabs.Farm:AddSection("Force Teleport")
+-- Controles na Aba Info
+local InfoSection = Tabs.Info:AddSection("Ajustes de UI")
 
-ForceTPSection:AddToggle("EnableForceTP", {
-    Title = "Enable Force Teleport",
-    Default = true,
-    Callback = function(Value)
-        Settings.ForceTeleport = Value
-    end
-})
-
-ForceTPSection:AddSlider("ForceTPEvery", {
-    Title = "Force TP Every (s)",
-    Default = 3,
-    Min = 1,
-    Max = 10,
+InfoSection:AddSlider("UIScaleSlider", {
+    Title = "Escala da UI (%)",
+    Default = 80,
+    Min = 50,
+    Max = 120,
     Rounding = 0,
     Callback = function(Value)
-        Settings.ForceTPEvery = Value
+        local scale = Value / 100
+        Window:SetSize(UDim2.fromOffset(math.floor(400 * scale), math.floor(280 * scale)))
     end
 })
 
-local OrbitSection = Tabs.Farm:AddSection("Orbit")
-
-OrbitSection:AddSlider("OrbitRadius", {
-    Title = "Orbit Radius",
-    Default = 14,
-    Min = 2,
-    Max = 50,
-    Rounding = 0,
-    Callback = function(Value)
-        Settings.OrbitRadius = Value
-    end
-})
-
-OrbitSection:AddSlider("OrbitSpeed", {
-    Title = "Orbit Speed",
-    Default = 1.8,
-    Min = 0.1,
-    Max = 10,
-    Rounding = 1,
-    Callback = function(Value)
-        Settings.OrbitSpeed = Value
-    end
-})
-
-FarmSection:AddToggle("AutoFarmEnemies", {
-    Title = "Auto Farm Enemies",
-    Default = false,
-    Callback = function(Value)
-        Settings.AutoFarm = Value
-        toggleNoclip(Value)
+InfoSection:AddButton({
+    Title = "Minimizar (Botão Flutuante)",
+    Callback = function()
+        Window:Minimize()
+        floatBtn.Visible = true
     end
 })
 
