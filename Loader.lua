@@ -1,10 +1,9 @@
--- Carrega a biblioteca Fluent UI
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
 
--- Serviços
 local TweenService = game:GetService("TweenService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local CoreGui = game:GetService("CoreGui")
 
 local player = Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
@@ -17,7 +16,6 @@ player.CharacterAdded:Connect(function(newChar)
     rootPart = newChar:WaitForChild("HumanoidRootPart")
 end)
 
--- Tabela de Configurações
 local Settings = {
     AutoFarm = false,
     FarmMode = "Above Head",
@@ -33,7 +31,7 @@ local currentTween = nil
 local lastForceTP = tick()
 local orbitAngle = 0
 
--- Noclip durante o Farm
+-- Noclip
 local noclipConnection = nil
 local function toggleNoclip(enable)
     if enable then
@@ -54,7 +52,7 @@ local function toggleNoclip(enable)
     end
 end
 
--- Movimentação por Tween
+-- Movimento suave
 local function tweenTo(targetCFrame)
     if not rootPart or not rootPart.Parent then return end
     
@@ -139,25 +137,102 @@ task.spawn(function()
     end
 end)
 
--- Janela compacta e reduzida
+-- Janela Principal Super Compacta
 local Window = Fluent:CreateWindow({
     Title = "IBdihP Hub",
     SubTitle = "Anime Dungeons",
-    TabWidth = 110, -- Largura lateral reduzida
-    Size = UDim2.fromOffset(450, 320), -- Tamanho total compacto
-    Acrylic = false, -- Desativar blur melhora performance em mobile/Delta
+    TabWidth = 90,
+    Size = UDim2.fromOffset(380, 260),
+    Acrylic = false,
     Theme = "Dark",
     MinimizeKey = Enum.KeyCode.RightControl
 })
 
 local Tabs = {
+    Info = Window:AddTab({ Title = "Info", Icon = "info" }),
     Farm = Window:AddTab({ Title = "Farm", Icon = "crosshair" }),
     Combat = Window:AddTab({ Title = "Combat", Icon = "swords" }),
-    Player = Window:AddTab({ Title = "Player", Icon = "user" }),
     Settings = Window:AddTab({ Title = "Settings", Icon = "settings" })
 }
 
--- Seção Auto Farm
+-- Botão Flutuante Quadrado para Minimizar / Reabrir
+local toggleGui = Instance.new("ScreenGui")
+local floatBtn = Instance.new("TextButton")
+local uiCorner = Instance.new("UICorner")
+local uiStroke = Instance.new("UIStroke")
+
+toggleGui.Name = "IBdihP_ToggleBtn"
+toggleGui.ResetOnSpawn = false
+pcall(function()
+    toggleGui.Parent = CoreGui
+end)
+if not toggleGui.Parent then
+    toggleGui.Parent = player:WaitForChild("PlayerGui")
+end
+
+floatBtn.Name = "FloatButton"
+floatBtn.Parent = toggleGui
+floatBtn.BackgroundColor3 = Color3.fromRGB(24, 24, 24)
+floatBtn.Position = UDim2.new(0.02, 0, 0.4, 0)
+floatBtn.Size = UDim2.new(0, 42, 0, 42)
+floatBtn.Text = "HUB"
+floatBtn.TextColor3 = Color3.fromRGB(0, 255, 170)
+floatBtn.TextSize = 12
+floatBtn.Font = Enum.Font.GothamBold
+floatBtn.Active = true
+floatBtn.Draggable = true
+floatBtn.Visible = false
+
+uiCorner.CornerRadius = UDim.new(0, 8)
+uiCorner.Parent = floatBtn
+
+uiStroke.Color = Color3.fromRGB(0, 255, 170)
+uiStroke.Thickness = 1.2
+uiStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+uiStroke.Parent = floatBtn
+
+-- Ação ao clicar no quadrado flutuante
+floatBtn.MouseButton1Click:Connect(function()
+    Window:Minimize()
+    floatBtn.Visible = false
+end)
+
+-- Monitora quando a janela foi minimizada pelo topo da UI
+if Window.Frame then
+    Window.Frame:GetPropertyChangedSignal("Visible"):Connect(function()
+        if not Window.Frame.Visible then
+            floatBtn.Visible = true
+        end
+    end)
+end
+
+-- Aba Info: Opção de Escala e Tamanho
+local InfoSection = Tabs.Info:AddSection("Interface / UI Scale")
+
+InfoSection:AddSlider("UIScaleSlider", {
+    Title = "Tamanho da Interface (%)",
+    Description = "Ajuste o tamanho geral da janela",
+    Default = 80,
+    Min = 50,
+    Max = 120,
+    Rounding = 0,
+    Callback = function(Value)
+        local scale = Value / 100
+        local baseWidth, baseHeight = 450, 320
+        Window:SetSize(UDim2.fromOffset(math.floor(baseWidth * scale), math.floor(baseHeight * scale)))
+    end
+})
+
+InfoSection:AddButton({
+    Title = "Minimizar para Quadrado Flutuante",
+    Description = "Recolhe a janela e exibe o botão rápido na lateral",
+    Callback = function()
+        Window:Minimize()
+        floatBtn.Visible = true
+    end
+})
+
+-- Aba Farm
 local FarmSection = Tabs.Farm:AddSection("Auto Farm")
 
 FarmSection:AddDropdown("FarmMode", {
