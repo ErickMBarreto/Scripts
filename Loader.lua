@@ -20,7 +20,7 @@ end)
 -- Tabela de Configurações
 local Settings = {
     AutoFarm = false,
-    FarmMode = "Above Head", -- "Above Head", "Orbit", "Behind"
+    FarmMode = "Above Head",
     HeightAboveEnemy = 12,
     TweenSpeed = 60,
     ForceTeleport = true,
@@ -29,12 +29,11 @@ local Settings = {
     OrbitSpeed = 1.8
 }
 
--- Variáveis de controle de movimento
 local currentTween = nil
 local lastForceTP = tick()
 local orbitAngle = 0
 
--- Desativar colisão e física de queda durante o Farm
+-- Noclip durante o Farm
 local noclipConnection = nil
 local function toggleNoclip(enable)
     if enable then
@@ -55,14 +54,13 @@ local function toggleNoclip(enable)
     end
 end
 
--- Função de movimento suave (Tween)
+-- Movimentação por Tween
 local function tweenTo(targetCFrame)
     if not rootPart or not rootPart.Parent then return end
     
     local distance = (rootPart.Position - targetCFrame.Position).Magnitude
     local timeToTravel = math.clamp(distance / math.max(Settings.TweenSpeed, 1), 0.05, 5)
 
-    -- Force Teleport instantâneo se habilitado
     if Settings.ForceTeleport and (tick() - lastForceTP >= Settings.ForceTPEvery) then
         lastForceTP = tick()
         if currentTween then currentTween:Cancel() end
@@ -76,7 +74,7 @@ local function tweenTo(targetCFrame)
     currentTween:Play()
 end
 
--- Localiza o inimigo mais próximo
+-- Busca inimigo
 local function getClosestEnemy()
     local closest, minDistance = nil, math.huge
     for _, obj in ipairs(workspace:GetDescendants()) do
@@ -95,7 +93,7 @@ local function getClosestEnemy()
     return closest
 end
 
--- Localiza o portal quando a sala estiver limpa
+-- Busca portal
 local function getPortal()
     for _, obj in ipairs(workspace:GetDescendants()) do
         if obj:IsA("BasePart") or obj:IsA("Model") then
@@ -108,7 +106,7 @@ local function getPortal()
     return nil
 end
 
--- Loop de Farm em background
+-- Loop de Farm
 task.spawn(function()
     while true do
         if Settings.AutoFarm and rootPart and humanoid and humanoid.Health > 0 then
@@ -129,7 +127,6 @@ task.spawn(function()
                     tweenTo(targetCFrame)
                 end
             else
-                -- Procura portal se não houver inimigos
                 local portal = getPortal()
                 if portal then
                     tweenTo(portal.CFrame)
@@ -142,33 +139,28 @@ task.spawn(function()
     end
 end)
 
--- Construção da Janela da UI
+-- Janela compacta e reduzida
 local Window = Fluent:CreateWindow({
     Title = "IBdihP Hub",
     SubTitle = "Anime Dungeons",
-    TabWidth = 140,
-    Size = UDim2.fromOffset(580, 420),
-    Acrylic = true,
+    TabWidth = 110, -- Largura lateral reduzida
+    Size = UDim2.fromOffset(450, 320), -- Tamanho total compacto
+    Acrylic = false, -- Desativar blur melhora performance em mobile/Delta
     Theme = "Dark",
     MinimizeKey = Enum.KeyCode.RightControl
 })
 
 local Tabs = {
-    Info = Window:AddTab({ Title = "Info", Icon = "info" }),
-    Main = Window:AddTab({ Title = "Main", Icon = "gamepad-2" }),
-    Combat = Window:AddTab({ Title = "Combat", Icon = "swords" }),
     Farm = Window:AddTab({ Title = "Farm", Icon = "crosshair" }),
-    Equipment = Window:AddTab({ Title = "Equipment", Icon = "shield" }),
-    AutoSell = Window:AddTab({ Title = "Auto Sell", Icon = "coins" }),
-    Quests = Window:AddTab({ Title = "Quests", Icon = "scroll" }),
+    Combat = Window:AddTab({ Title = "Combat", Icon = "swords" }),
     Player = Window:AddTab({ Title = "Player", Icon = "user" }),
     Settings = Window:AddTab({ Title = "Settings", Icon = "settings" })
 }
 
--- Seção Auto Farm na aba Farm
+-- Seção Auto Farm
 local FarmSection = Tabs.Farm:AddSection("Auto Farm")
 
-local DropdownMode = FarmSection:AddDropdown("FarmMode", {
+FarmSection:AddDropdown("FarmMode", {
     Title = "Farm Mode",
     Values = {"Above Head", "Orbit"},
     Default = "Above Head",
@@ -177,9 +169,8 @@ local DropdownMode = FarmSection:AddDropdown("FarmMode", {
     end
 })
 
-local SliderHeight = FarmSection:AddSlider("HeightAboveEnemy", {
+FarmSection:AddSlider("HeightAboveEnemy", {
     Title = "Height Above Enemy",
-    Description = "Altura do personagem acima do alvo",
     Default = 12,
     Min = 1,
     Max = 50,
@@ -189,9 +180,8 @@ local SliderHeight = FarmSection:AddSlider("HeightAboveEnemy", {
     end
 })
 
-local SliderSpeed = FarmSection:AddSlider("TweenSpeed", {
-    Title = "Tween Speed (studs/s)",
-    Description = "Velocidade do voo suave",
+FarmSection:AddSlider("TweenSpeed", {
+    Title = "Tween Speed",
     Default = 60,
     Min = 10,
     Max = 200,
@@ -201,9 +191,9 @@ local SliderSpeed = FarmSection:AddSlider("TweenSpeed", {
     end
 })
 
-local ForceTPSection = Tabs.Farm:AddSection("Force Teleport Settings")
+local ForceTPSection = Tabs.Farm:AddSection("Force Teleport")
 
-local ToggleForceTP = ForceTPSection:AddToggle("EnableForceTP", {
+ForceTPSection:AddToggle("EnableForceTP", {
     Title = "Enable Force Teleport",
     Default = true,
     Callback = function(Value)
@@ -211,9 +201,8 @@ local ToggleForceTP = ForceTPSection:AddToggle("EnableForceTP", {
     end
 })
 
-local SliderForceTP = ForceTPSection:AddSlider("ForceTPEvery", {
-    Title = "Force TP Every...",
-    Description = "Intervalo em segundos para teleporte forçado",
+ForceTPSection:AddSlider("ForceTPEvery", {
+    Title = "Force TP Every (s)",
     Default = 3,
     Min = 1,
     Max = 10,
@@ -223,9 +212,9 @@ local SliderForceTP = ForceTPSection:AddSlider("ForceTPEvery", {
     end
 })
 
-local OrbitSection = Tabs.Farm:AddSection("Orbit Settings")
+local OrbitSection = Tabs.Farm:AddSection("Orbit")
 
-local SliderOrbitRadius = OrbitSection:AddSlider("OrbitRadius", {
+OrbitSection:AddSlider("OrbitRadius", {
     Title = "Orbit Radius",
     Default = 14,
     Min = 2,
@@ -236,7 +225,7 @@ local SliderOrbitRadius = OrbitSection:AddSlider("OrbitRadius", {
     end
 })
 
-local SliderOrbitSpeed = OrbitSection:AddSlider("OrbitSpeed", {
+OrbitSection:AddSlider("OrbitSpeed", {
     Title = "Orbit Speed",
     Default = 1.8,
     Min = 0.1,
@@ -247,9 +236,8 @@ local SliderOrbitSpeed = OrbitSection:AddSlider("OrbitSpeed", {
     end
 })
 
-local ToggleAutoFarm = FarmSection:AddToggle("AutoFarmEnemies", {
+FarmSection:AddToggle("AutoFarmEnemies", {
     Title = "Auto Farm Enemies",
-    Description = "Moves to nearest enemy and attacks automatically",
     Default = false,
     Callback = function(Value)
         Settings.AutoFarm = Value
