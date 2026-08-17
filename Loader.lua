@@ -18,30 +18,33 @@ player.CharacterAdded:Connect(function(newChar)
     rootPart = newChar:WaitForChild("HumanoidRootPart")
 end)
 
--- Configurações Gerais
+-- Configurações
 local Settings = {
     AutoFarm = false,
     AutoAttack = true,
     HeightAboveEnemy = 8,
-    TweenSpeed = 50, -- Velocidade em studs/s (suave)
-    AttackSpeed = 0.15 -- Intervalo entre ataques
+    TweenSpeed = 50,
+    AttackSpeed = 0.15
 }
 
 local currentTween = nil
 local noclipConnection = nil
+local isMoving = false
 
--- Noclip para voar sem colidir com paredes/teto
+-- Noclip seguro: só ativa quando o personagem está ativamente indo a um alvo
 local function toggleNoclip(enable)
     if enable then
-        noclipConnection = RunService.Stepped:Connect(function()
-            if character and Settings.AutoFarm then
-                for _, part in ipairs(character:GetDescendants()) do
-                    if part:IsA("BasePart") and part.CanCollide then
-                        part.CanCollide = false
+        if not noclipConnection then
+            noclipConnection = RunService.Stepped:Connect(function()
+                if character and Settings.AutoFarm and isMoving then
+                    for _, part in ipairs(character:GetDescendants()) do
+                        if part:IsA("BasePart") and part.CanCollide then
+                            part.CanCollide = false
+                        end
                     end
                 end
-            end
-        end)
+            end)
+        end
     else
         if noclipConnection then
             noclipConnection:Disconnect()
@@ -50,10 +53,24 @@ local function toggleNoclip(enable)
     end
 end
 
+-- Parada total e travamento físico
+local function stopMovement()
+    isMoving = false
+    if currentTween then
+        currentTween:Cancel()
+        currentTween = nil
+    end
+    if rootPart and rootPart.Parent then
+        rootPart.AssemblyLinearVelocity = Vector3.zero
+        rootPart.AssemblyAngularVelocity = Vector3.zero
+    end
+end
+
 -- Voo suave via Tween (Sem teleporte brusco)
 local function smoothFlyTo(targetCFrame)
     if not rootPart or not rootPart.Parent then return end
     
+    isMoving = true
     local distance = (rootPart.Position - targetCFrame.Position).Magnitude
     local duration = distance / math.max(Settings.TweenSpeed, 5)
 
@@ -64,51 +81,18 @@ local function smoothFlyTo(targetCFrame)
     local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
     currentTween = TweenService:Create(rootPart, tweenInfo, {CFrame = targetCFrame})
     currentTween:Play()
-    return currentTween
 end
 
--- Parar qualquer movimento imediatamente
-local function stopMovement()
-    if currentTween then
-        currentTween:Cancel()
-        currentTween = nil
-    end
-    if rootPart and rootPart.AssemblyLinearVelocity then
-        rootPart.AssemblyLinearVelocity = Vector3.zero
-        rootPart.AssemblyAngularVelocity = Vector3.zero
-    end
-end
-
--- Gatilho de ataque (Tool / Simulação M1 / Remote)
-local function performAttack()
-    local tool = character:FindFirstChildOfClass("Tool")
-    if tool then
-        tool:Activate()
-    end
-
-    VirtualUser:CaptureController()
-    VirtualUser:Button1Down(Vector2.new(0, 0))
-    task.wait(0.02)
-    VirtualUser:Button1Up(Vector2.new(0, 0))
-
-    for _, remote in ipairs(game:GetDescendants()) do
-        if (remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction")) and string.lower(remote.Name):find("attack") then
-            pcall(function()
-                if remote:IsA("RemoteEvent") then
-                    remote:FireServer()
-                end
-            end)
-        end
-    end
-end
-
--- Busca o inimigo vivo mais próximo
+-- Localiza o inimigo vivo mais próximo
 local function getClosestEnemy()
     local closest, minDistance = nil, math.huge
+    
     for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("Model") and obj ~= character then
+        if obj:IsA("Model") and obj ~= character and not obj:IsDescendantOf(character) then
             local hum = obj:FindFirstChildOfClass("Humanoid")
             local hrp = obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart
+            
+            -- Garante que é um mob real, com vida e não é player
             if hum and hum.Health > 0 and hrp and not Players:GetPlayerFromCharacter(obj) then
                 local dist = (rootPart.Position - hrp.Position).Magnitude
                 if dist < minDistance then
@@ -121,20 +105,53 @@ local function getClosestEnemy()
     return closest
 end
 
--- Busca o portal da masmorra
-local function getPortal()
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("BasePart") or obj:IsA("Model") then
-            local name = string.lower(obj.Name)
-            if string.find(name, "portal") or string.find(name, "gate") or string.find(name, "door") then
-                return obj:IsA("BasePart") and obj or obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+-- Localiza o teleporte exato (Workspace.Game.Teleports.[Teleport].HitBox)
+local function getActiveTeleport()
+    local gameFolder = workspace:FindFirstChild("Game")
+    if not gameFolder then return nil end
+
+    local teleportsFolder = gameFolder:FindFirstChild("Teleports")
+    if not teleportsFolder then return nil end
+
+    local bestHitbox = nil
+    local minDistance = math.huge
+
+    for _, teleportObj in ipairs(teleportsFolder:GetChildren()) do
+        -- Busca a peça HitBox dentro de cada Teleport
+        local hitbox = teleportObj:FindFirstChild("HitBox") or (teleportObj:IsA("BasePart") and teleportObj.Name == "HitBox" and teleportObj)
+        
+        if hitbox and hitbox:IsA("BasePart") then
+            local dist = (rootPart.Position - hitbox.Position).Magnitude
+            if dist < minDistance then
+                minDistance = dist
+                bestHitbox = hitbox
             end
         end
     end
-    return nil
+
+    return bestHitbox
 end
 
--- Loop de Auto Ataque (Ataca apenas se houver inimigo ativo)
+-- Mecânica de Ataque
+local function performAttack()
+    local tool = character:FindFirstChildOfClass("Tool")
+    if tool then tool:Activate() end
+
+    VirtualUser:CaptureController()
+    VirtualUser:Button1Down(Vector2.new(0, 0))
+    task.wait(0.02)
+    VirtualUser:Button1Up(Vector2.new(0, 0))
+
+    for _, remote in ipairs(game:GetDescendants()) do
+        if (remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction")) and string.lower(remote.Name):find("attack") then
+            pcall(function()
+                if remote:IsA("RemoteEvent") then remote:FireServer() end
+            end)
+        end
+    end
+end
+
+-- Loop de Ataque contínuo
 task.spawn(function()
     while true do
         if Settings.AutoFarm and Settings.AutoAttack and character and humanoid and humanoid.Health > 0 then
@@ -147,36 +164,37 @@ task.spawn(function()
     end
 end)
 
--- Loop Principal de Checagem e Decisão
+-- Loop Principal de Lógica: Inimigo -> Teleport HitBox -> Parar
 task.spawn(function()
     while true do
         if Settings.AutoFarm and rootPart and humanoid and humanoid.Health > 0 then
             local enemy = getClosestEnemy()
-            local portal = getPortal()
 
             if enemy then
-                -- 1. Tem inimigo: persegue e fica acima dele até derrotá-lo
+                -- 1. Tem inimigo: voa suavemente e posiciona acima dele
                 local enemyHum = enemy:FindFirstChildOfClass("Humanoid")
                 local enemyRoot = enemy:FindFirstChild("HumanoidRootPart") or enemy.PrimaryPart
                 
-                while Settings.AutoFarm and enemyHum and enemyHum.Health > 0 and enemyRoot and enemyRoot.Parent do
+                if enemyHum and enemyHum.Health > 0 and enemyRoot then
                     local abovePos = enemyRoot.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
                     local targetCFrame = CFrame.new(abovePos, enemyRoot.Position)
-                    
                     smoothFlyTo(targetCFrame)
-                    task.wait(0.1)
                 end
-            elseif portal then
-                -- 2. Não tem inimigo, mas tem portal: move suavemente até o portal
-                smoothFlyTo(portal.CFrame + Vector3.new(0, 3, 0))
             else
-                -- 3. Não tem inimigo nem portal: FICA PARADO
-                stopMovement()
+                -- 2. Não tem inimigo: busca o teleporte exato (Workspace.Game.Teleports)
+                local teleportHitbox = getActiveTeleport()
+                if teleportHitbox then
+                    -- Voa até o centro da HitBox do portal para acionar o teleporte
+                    smoothFlyTo(teleportHitbox.CFrame)
+                else
+                    -- 3. Não tem monstro nem teleporte: FICA 100% PARADO
+                    stopMovement()
+                end
             end
         else
             stopMovement()
         end
-        task.wait(0.2)
+        task.wait(0.15)
     end
 end)
 
@@ -240,12 +258,12 @@ if Window.Frame then
     end)
 end
 
--- Controles na Aba Farm
-local FarmSection = Tabs.Farm:AddSection("Auto Farm & Combat")
+-- Seção de Farm
+local FarmSection = Tabs.Farm:AddSection("Auto Farm")
 
 FarmSection:AddToggle("AutoFarmEnemies", {
     Title = "Auto Farm Enemies",
-    Description = "Inimigo -> Portal -> Fica parado se não houver nenhum",
+    Description = "Inimigos -> Teleports.HitBox -> Parar",
     Default = false,
     Callback = function(Value)
         Settings.AutoFarm = Value
@@ -257,7 +275,7 @@ FarmSection:AddToggle("AutoFarmEnemies", {
 })
 
 FarmSection:AddToggle("AutoAttackToggle", {
-    Title = "Auto Attack (M1 / Skills)",
+    Title = "Auto Attack",
     Default = true,
     Callback = function(Value)
         Settings.AutoAttack = Value
@@ -276,7 +294,7 @@ FarmSection:AddSlider("HeightAboveEnemy", {
 })
 
 FarmSection:AddSlider("TweenSpeed", {
-    Title = "Velocidade do Voo Suave",
+    Title = "Velocidade do Voo",
     Default = 50,
     Min = 15,
     Max = 150,
@@ -286,8 +304,8 @@ FarmSection:AddSlider("TweenSpeed", {
     end
 })
 
--- Controles na Aba Info
-local InfoSection = Tabs.Info:AddSection("Ajustes de UI")
+-- Seção Info
+local InfoSection = Tabs.Info:AddSection("Ajustes")
 
 InfoSection:AddSlider("UIScaleSlider", {
     Title = "Escala da UI (%)",
@@ -302,7 +320,7 @@ InfoSection:AddSlider("UIScaleSlider", {
 })
 
 InfoSection:AddButton({
-    Title = "Minimizar (Botão Flutuante)",
+    Title = "Minimizar para Botão Flutuante",
     Callback = function()
         Window:Minimize()
         floatBtn.Visible = true
