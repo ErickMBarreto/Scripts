@@ -220,7 +220,7 @@ local function triggerGuiButton(btn)
     end
 end
 
--- Detecção Direta do Botão Engage (Main.VirusFrame.Warning.Buttons.Confirm)
+-- Detecção do Botão Engage (Main.VirusFrame.Warning.Buttons.Confirm)
 local function checkAndClickEngageButton()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef then return false end
@@ -420,23 +420,41 @@ task.spawn(function()
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 
-                -- Checagem contínua do Confirm do VirusFrame (Engage)
+                -- Checagem contínua padrão do Engage
                 if Settings.AutoEngage then
                     checkAndClickEngageButton()
                 end
 
                 local ended, playAgainBtn = checkDungeonEnd()
                 if ended then
-                    isDungeonEnded = true
-                    table.clear(usedTeleports)
-                    table.clear(portalHistory)
                     stopMovement()
                     
-                    if Settings.AutoPlayAgain and playAgainBtn then
-                        queueNextExecution()
-                        task.wait(0.8)
-                        triggerGuiButton(playAgainBtn)
-                        task.wait(3.0)
+                    -- Aguarda 2 segundos verificando se a janela de Engage (VirusFrame) aparece
+                    local engaged = false
+                    if Settings.AutoEngage then
+                        for i = 1, 20 do
+                            if checkAndClickEngageButton() then
+                                engaged = true
+                                isDungeonEnded = false
+                                task.wait(1.0)
+                                break
+                            end
+                            task.wait(0.1)
+                        end
+                    end
+                    
+                    -- Se após os 2 segundos o Engage não apareceu, clica no Play Again
+                    if not engaged then
+                        isDungeonEnded = true
+                        table.clear(usedTeleports)
+                        table.clear(portalHistory)
+                        
+                        if Settings.AutoPlayAgain and playAgainBtn then
+                            queueNextExecution()
+                            task.wait(0.8)
+                            triggerGuiButton(playAgainBtn)
+                            task.wait(3.0)
+                        end
                     end
                 else
                     isDungeonEnded = false
