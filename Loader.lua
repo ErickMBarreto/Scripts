@@ -13,7 +13,6 @@ local singletonTag = Instance.new("Folder")
 singletonTag.Name = UNIQUE_ID
 pcall(function() singletonTag.Parent = CoreGui end)
 
--- Limpeza preventiva de interfaces antigas
 for _, gui in ipairs({CoreGui, Players.LocalPlayer and Players.LocalPlayer:FindFirstChild("PlayerGui")}) do
     if gui then
         for _, child in ipairs(gui:GetChildren()) do
@@ -100,7 +99,6 @@ local Settings = {
     AttackSpeed = 0.15
 }
 
--- Estado do Script
 local currentTween = nil
 local noclipConnection = nil
 local usedTeleports = {}
@@ -113,9 +111,6 @@ local dungeonReady = false
 local attackRemote = nil
 local cachedWeaponName = "VoidRods"
 
--- ====================================================================
--- 5. FUNÇÕES DE UTILIDADE E CONTROLE FÍSICO
--- ====================================================================
 local function getCharacter()
     local char = player.Character
     if char and char:FindFirstChild("HumanoidRootPart") and char:FindFirstChild("Humanoid") and char.Humanoid.Health > 0 then
@@ -136,7 +131,6 @@ local function stopMovement()
     end
 end
 
--- Recuperação pós-morte: Desmarca o último portal para permitir voltar à sala do Boss
 player.CharacterAdded:Connect(function()
     stopMovement()
     teleportCooldown = 0
@@ -216,7 +210,7 @@ local function pressKey(keyCode)
 end
 
 -- ====================================================================
--- 6. DETECTORES DINÂMICOS (ARMA, INTERFACE E CONTADOR)
+-- 5. COMBATE NATIVO & INVENTÁRIO
 -- ====================================================================
 local function findAttackRemote()
     if attackRemote and attackRemote.Parent then return attackRemote end
@@ -274,10 +268,8 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 7. SCANNERS DE INIMIGOS E PORTAIS
+-- 6. SCANNERS DE INIMIGOS E PORTAIS PROFUNDOS
 -- ====================================================================
-
--- Extrai a parte física de qualquer entidade (com ou sem Humanoid)
 local function getEntityTargetPart(obj)
     if not obj then return nil end
     return obj:FindFirstChild("HumanoidRootPart")
@@ -291,29 +283,21 @@ local function getEntityTargetPart(obj)
         or obj:FindFirstChildWhichIsA("BasePart")
 end
 
--- Valida se o monstro está realmente vivo
 local function isEntityAlive(obj)
     if not obj or not obj.Parent then return false end
     
     local hum = obj:FindFirstChildOfClass("Humanoid")
-    if hum then
-        return hum.Health > 0
-    end
+    if hum then return hum.Health > 0 end
 
     local hpAttr = obj:GetAttribute("Health") or obj:GetAttribute("HP")
-    if hpAttr then
-        return tonumber(hpAttr) > 0
-    end
+    if hpAttr then return tonumber(hpAttr) > 0 end
 
     local hpVal = obj:FindFirstChild("Health") or obj:FindFirstChild("HP")
-    if hpVal and hpVal:IsA("ValueBase") then
-        return tonumber(hpVal.Value) > 0
-    end
+    if hpVal and hpVal:IsA("ValueBase") then return tonumber(hpVal.Value) > 0 end
 
     return getEntityTargetPart(obj) ~= nil
 end
 
--- Scanner universal que retorna todos os monstros vivos da sala atual
 local function getLivingEnemies()
     local list = {}
     local gameFolder = workspace:FindFirstChild("Game")
@@ -341,28 +325,22 @@ local function getLivingEnemies()
     return list
 end
 
--- Retorna o contador exato de monstros vivos
 local function getEnemiesLeftCount()
-    -- 1. Tenta ler direto do texto da UI
     local pguiRef = player:FindFirstChild("PlayerGui")
     if pguiRef then
         for _, desc in ipairs(pguiRef:GetDescendants()) do
             if desc:IsA("TextLabel") and desc.Visible then
                 local text = desc.Text:lower()
-                if text:find("enemies:") or text:find("monsters:") or text:find("left:") then
+                if text:find("enemie") or text:find("monster") or text:find("left") then
                     local count = text:match("%d+")
                     if count then return tonumber(count) end
                 end
             end
         end
     end
-
-    -- 2. Fallback: conta os monstros vivos na pasta do workspace
-    local enemies = getLivingEnemies()
-    return #enemies
+    return #getLivingEnemies()
 end
 
--- Retorna o monstro mais próximo
 local function getClosestLivingEnemy()
     local _, root = getCharacter()
     if not root then return nil, nil end
@@ -386,7 +364,7 @@ local function getClosestLivingEnemy()
     return closestEnemy, closestPart
 end
 
--- Scanner de Portais ativos não utilizados
+-- Scanner Profundo de Portais (Varre Teleport1, Teleport2, HitBox aninhadas e TouchTransmitter)
 local function getActiveUnusedPortal()
     if tick() < teleportCooldown then
         return nil, math.huge
@@ -395,32 +373,44 @@ local function getActiveUnusedPortal()
     local _, root = getCharacter()
     if not root then return nil, math.huge end
 
-    local teleportParts = {}
+    local portalParts = {}
     local gameFolder = workspace:FindFirstChild("Game")
     local teleportsFolder = (gameFolder and (gameFolder:FindFirstChild("Teleports") or gameFolder:FindFirstChild("Teleport"))) 
         or workspace:FindFirstChild("Teleports") 
         or workspace:FindFirstChild("Teleport")
 
     if teleportsFolder then
-        for _, teleportObj in ipairs(teleportsFolder:GetChildren()) do
-            local hitbox = teleportObj:FindFirstChild("HitBox") 
-                or (teleportObj:IsA("BasePart") and teleportObj) 
-                or teleportObj:FindFirstChildWhichIsA("BasePart")
-
-            if hitbox and not usedTeleports[hitbox] then
-                table.insert(teleportParts, hitbox)
+        for _, desc in ipairs(teleportsFolder:GetDescendants()) do
+            if desc:IsA("BasePart") and (desc.Name:lower():find("hitbox") or desc.Name:lower():find("portal") or desc.Name:lower():find("teleport") or desc:FindFirstChildWhichIsA("TouchTransmitter")) then
+                if not usedTeleports[desc] and not usedTeleports[desc.Parent] then
+                    table.insert(portalParts, desc)
+                end
             end
         end
     end
 
-    if #teleportParts == 0 then
+    -- Varredura de emergência no Workspace por HitBox com Touch
+    if #portalParts == 0 then
+        for _, desc in ipairs(workspace:GetDescendants()) do
+            if desc:IsA("BasePart") and desc:FindFirstChildWhichIsA("TouchTransmitter") then
+                local parentName = desc.Parent and desc.Parent.Name:lower() or ""
+                if parentName:find("teleport") or parentName:find("portal") or parentName:find("gate") then
+                    if not usedTeleports[desc] and not usedTeleports[desc.Parent] then
+                        table.insert(portalParts, desc)
+                    end
+                end
+            end
+        end
+    end
+
+    if #portalParts == 0 then
         return nil, math.huge
     end
 
     local closestHitbox = nil
     local minDistance = math.huge
 
-    for _, hitbox in ipairs(teleportParts) do
+    for _, hitbox in ipairs(portalParts) do
         local dist = (root.Position - hitbox.Position).Magnitude
         if dist < minDistance then
             minDistance = dist
@@ -432,7 +422,7 @@ local function getActiveUnusedPortal()
 end
 
 -- ====================================================================
--- 8. CONTROLES DE INTERFACE (START, ENGAGE, PLAY AGAIN)
+-- 7. EVENTOS DE UI (ENGAGE, START, REPLAY)
 -- ====================================================================
 local function checkAndClickEngageButton()
     local pguiRef = player:FindFirstChild("PlayerGui")
@@ -480,7 +470,7 @@ local function handleDungeonStart()
         local startBtn = dungeonFrame:FindFirstChild("Start") or dungeonFrame:FindFirstChild("Play")
         if startBtn and startBtn:IsA("GuiObject") and startBtn.Visible then
             triggerGuiButton(startBtn)
-            task.wait(Settings.StartWaitTime) -- Espera 3.0s cravados
+            task.wait(Settings.StartWaitTime)
             dungeonReady = true
             return true
         end
@@ -489,7 +479,7 @@ local function handleDungeonStart()
 end
 
 -- ====================================================================
--- 9. MOTORES PARALELOS DE COMBATE (M1 & SKILLS)
+-- 8. THREADS DE COMBATE
 -- ====================================================================
 local function executeNativeAttack()
     if isDungeonEnded then return end
@@ -512,7 +502,6 @@ local function executeNativeAttack()
     end
 end
 
--- Loop de Ataque M1
 task.spawn(function()
     while true do
         if Settings.AutoAttack and not isDungeonEnded then
@@ -525,7 +514,6 @@ task.spawn(function()
     end
 end)
 
--- Loop de Skills: Spell1 (Z), Spell2 (X) e Ultimate (C)
 task.spawn(function()
     while true do
         if Settings.AutoSkills and not isDungeonEnded then
@@ -566,7 +554,7 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINA DE ESTADOS PRINCIPAL (DECISÃO DETERMINÍSTICA)
+-- 9. MÁQUINA DE ESTADOS PRINCIPAL
 -- ====================================================================
 task.spawn(function()
     while true do
@@ -574,12 +562,10 @@ task.spawn(function()
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 
-                -- Checagem contínua do Confirm no VirusFrame (Engage)
                 if Settings.AutoEngage then
                     checkAndClickEngageButton()
                 end
 
-                -- Checagem de Fim de Partida
                 local ended, playAgainBtn = checkDungeonEnd()
                 if ended then
                     isDungeonEnded = true
@@ -597,7 +583,6 @@ task.spawn(function()
                 else
                     isDungeonEnded = false
 
-                    -- Warm-Up Gate: Garante o clique no Start antes de iniciar movimentação
                     if not dungeonReady then
                         if Settings.AutoStart and handleDungeonStart() then
                             stopMovement()
@@ -612,7 +597,7 @@ task.spawn(function()
                     else
                         local enemyCount = getEnemiesLeftCount()
 
-                        -- ESTADO 1: HÁ INIMIGOS VIVOS (COMBATE TOTAL - PORTAL É IGNORADO)
+                        -- ESTADO 1: INIMIGOS VIVOS (COMBATE TOTAL)
                         if enemyCount > 0 then
                             local enemy, enemyPart = getClosestLivingEnemy()
                             if enemy and enemyPart then
@@ -627,7 +612,7 @@ task.spawn(function()
                                 end
                             end
 
-                        -- ESTADO 2: SALA LIMPA (0 INIMIGOS - BUSCA PORTAL OU AGUARDA ONDA)
+                        -- ESTADO 2: SALA LIMPA (0 INIMIGOS -> ENTRA NO PORTAL)
                         else
                             local teleportHitbox, teleportDist = getActiveUnusedPortal()
                             if teleportHitbox then
@@ -635,13 +620,24 @@ task.spawn(function()
                                 
                                 if teleportDist <= 14 then
                                     root.CFrame = teleportHitbox.CFrame
+                                    
+                                    -- Dispara o gatilho de toque nativo (TouchInterest)
+                                    if firetouchinterest then
+                                        pcall(function()
+                                            firetouchinterest(root, teleportHitbox, 0)
+                                            task.wait(0.05)
+                                            firetouchinterest(root, teleportHitbox, 1)
+                                        end)
+                                    end
+
                                     usedTeleports[teleportHitbox] = true
+                                    if teleportHitbox.Parent then usedTeleports[teleportHitbox.Parent] = true end
                                     table.insert(portalHistory, teleportHitbox)
-                                    teleportCooldown = tick() + 2.0
-                                    task.wait(0.8)
+                                    teleportCooldown = tick() + 2.5
+                                    task.wait(1.0)
                                 end
                             else
-                                stopMovement() -- Fase de arena sem portal: aguarda a próxima onda no ar
+                                stopMovement()
                             end
                         end
                     end
@@ -659,7 +655,7 @@ end)
 toggleNoclip(Settings.AutoFarm)
 
 -- ====================================================================
--- 11. INTERFACE GRÁFICA FLUENT & BOTÃO FLUTUANTE
+-- 10. INTERFACE FLUENT
 -- ====================================================================
 local Window = Fluent:CreateWindow({
     Title = "Hub dos Rapazes",
