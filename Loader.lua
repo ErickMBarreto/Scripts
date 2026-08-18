@@ -81,7 +81,6 @@ local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local VirtualUser = game:GetService("VirtualUser")
 
 local attackRemote = nil
 task.spawn(function()
@@ -89,24 +88,6 @@ task.spawn(function()
     if remotesFolder then
         attackRemote = remotesFolder:WaitForChild("Attack", 10)
     end
-end)
-
--- Arma detectada padrão
-local detectedWeaponName = "GiantFrozenBeast"
-
--- SPY INTERNO: Intercepta e salva qualquer nova arma usada
-pcall(function()
-    local rawNamecall
-    rawNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-        local method = getnamecallmethod()
-        local args = {...}
-        if (method == "FireServer" or method == "fireServer") and tostring(self.Name):lower() == "attack" then
-            if args[1] == "M1" and args[2] and typeof(args[2]) == "string" and args[2] ~= "" then
-                detectedWeaponName = args[2]
-            end
-        end
-        return rawNamecall(self, ...)
-    end))
 end)
 
 local Settings = {
@@ -133,6 +114,7 @@ local teleportCooldown = 0
 local lastSkillUse = 0
 local comboIndex = 1
 local isDungeonEnded = false
+local currentWeaponName = "GiantFrozenBeast"
 
 local function getCharacter()
     local char = player.Character
@@ -155,55 +137,48 @@ local function stopMovement()
     end
 end
 
--- Detecção direta de modelos para inicialização imediata sem clique manual
-local function resolveWeaponImmediately()
+-- LEITURA E EXECUÇÃO DIRETA DO ATTACKHANDLER
+local function performNativeAttack()
     local char = player.Character
-    if char then
-        local tool = char:FindFirstChildOfClass("Tool")
-        if tool and tool.Name ~= "" then
-            detectedWeaponName = tool.Name
-            return tool.Name
-        end
+    if not char then return end
 
-        local ignored = {"armor", "headband", "helmet", "aura", "title", "ring", "wing", "cape", "costume", "hair"}
-        for _, child in ipairs(char:GetChildren()) do
-            if child:IsA("Model") and child.Name ~= "Animate" and not Players:GetPlayerFromCharacter(child) then
-                local isBad = false
-                for _, word in ipairs(ignored) do
-                    if child.Name:lower():find(word) then isBad = true; break end
-                end
-                if not isBad then
-                    detectedWeaponName = child.Name
-                    return child.Name
-                end
+    -- 1. Executa via AttackHandler nativo
+    local attackHandler = char:FindFirstChild("AttackHandler")
+    if attackHandler and getsenv then
+        local success, env = pcall(function() return getsenv(attackHandler) end)
+        if success and env then
+            -- Tenta atualizar a arma ativa do script
+            if env.CurrentWeapon or env.Weapon or env.EquippedWeapon then
+                currentWeaponName = tostring(env.CurrentWeapon or env.Weapon or env.EquippedWeapon)
+            end
+
+            -- Invoca a função interna de ataque
+            if env.Attack or env.attack or env.AttackM1 or env.M1 then
+                pcall(function()
+                    local fn = env.Attack or env.attack or env.AttackM1 or env.M1
+                    fn()
+                end)
+                return
             end
         end
     end
-    return detectedWeaponName or "GiantFrozenBeast"
-end
 
--- Simulação nativa de 1 toque na tela para destravar o ataque instantaneamente
-local function simulateInitialAttack()
-    task.spawn(function()
-        resolveWeaponImmediately()
+    -- 2. Fallback via Remote nativo com a arma detectada
+    comboIndex = (comboIndex % 4) + 1
+    if not attackRemote then
+        attackRemote = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Attack")
+    end
+
+    if attackRemote then
         pcall(function()
-            VirtualUser:Button1Down(Vector2.new(500, 500))
-            task.wait(0.05)
-            VirtualUser:Button1Up(Vector2.new(500, 500))
+            attackRemote:FireServer("M1", currentWeaponName, comboIndex, 0, 0, 2)
         end)
-        local char = player.Character
-        local tool = char and char:FindFirstChildOfClass("Tool")
-        if tool then
-            pcall(function() tool:Activate() end)
-        end
-    end)
+    end
 end
 
 player.CharacterAdded:Connect(function()
     stopMovement()
     teleportCooldown = tick() + 1.0
-    task.wait(0.8)
-    simulateInitialAttack()
 
     if #portalHistory > 0 then
         local lastPortal = table.remove(portalHistory)
@@ -318,7 +293,6 @@ local function checkAndClickStartButton()
         triggerGuiButton(startBtn)
         table.clear(usedTeleports)
         table.clear(portalHistory)
-        simulateInitialAttack() -- Dispara simulação de ataque ao iniciar
         return true
     end
 
@@ -407,31 +381,6 @@ local function getDynamicHotbar()
     return nil
 end
 
--- Disparo Nativo de Ataque
-local function executeNativeAttack()
-    if isDungeonEnded then return end
-    comboIndex = (comboIndex % 4) + 1
-    local weapon = resolveWeaponImmediately()
-
-    if not attackRemote then
-        attackRemote = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Attack")
-    end
-
-    if attackRemote then
-        pcall(function()
-            attackRemote:FireServer("M1", weapon, comboIndex, 0, 0, 2)
-        end)
-    end
-
-    local char = player.Character
-    if char then
-        local tool = char:FindFirstChildOfClass("Tool")
-        if tool then
-            pcall(function() tool:Activate() end)
-        end
-    end
-end
-
 local function farmTarget(enemy, enemyRoot)
     while Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyRoot.Parent do
         local enemyHum = enemy:FindFirstChildOfClass("Humanoid")
@@ -447,21 +396,20 @@ local function farmTarget(enemy, enemyRoot)
     end
 end
 
--- Inicia o ciclo de simulação ao rodar o script pela 1ª vez
-simulateInitialAttack()
-
+-- Loop de Ataque
 task.spawn(function()
     while true do
         if Settings.AutoAttack and not isDungeonEnded then
             local char, _, hum = getCharacter()
             if char and hum and hum.Health > 0 then
-                executeNativeAttack()
+                performNativeAttack()
             end
         end
         task.wait(Settings.AttackSpeed)
     end
 end)
 
+-- Loop de Skills
 task.spawn(function()
     while true do
         if Settings.AutoSkills and not isDungeonEnded then
@@ -485,6 +433,7 @@ task.spawn(function()
     end
 end)
 
+-- Loop Principal do Farm
 task.spawn(function()
     while true do
         if Settings.AutoFarm then
@@ -654,17 +603,6 @@ FarmSection:AddToggle("AutoFarmEnemies", {
         toggleNoclip(Value)
         if not Value then
             stopMovement()
-        end
-    end
-})
-
-FarmSection:AddInput("ManualWeaponInput", {
-    Title = "Nome da Arma Ativa",
-    Default = detectedWeaponName,
-    Placeholder = "Ex: GiantFrozenBeast, WaterKatana",
-    Callback = function(Value)
-        if Value and Value ~= "" then
-            detectedWeaponName = Value
         end
     end
 })
