@@ -174,7 +174,6 @@ local function stopMovement()
     end
 end
 
--- TRATAMENTO DE MORTE / RESPAWN: Se morreu no Boss, desmarca Portal 2 e ativa prioridade de retorno
 charConnection = player.CharacterAdded:Connect(function()
     stopMovement()
     teleportCooldown = 0
@@ -182,7 +181,7 @@ charConnection = player.CharacterAdded:Connect(function()
 
     if passedPortal2 then
         passedPortal2 = false
-        needsBossReturn = true -- Prioridade de entrada no portal 2 antes de qualquer ataque
+        needsBossReturn = true
     end
 end)
 
@@ -413,53 +412,24 @@ local function getClosestLivingEnemy()
     return closestEnemy, closestPart
 end
 
--- Busca a HitBox do Teleporte Alvo específico (Teleport1 ou Teleport2)
 local function getSpecificPortalHitbox(portalName)
     local gameFolder = workspace:FindFirstChild("Game")
     local teleportsFolder = (gameFolder and gameFolder:FindFirstChild("Teleports")) or workspace:FindFirstChild("Teleports")
     
     if teleportsFolder then
-        local portalObj = teleportsFolder:FindFirstChild(portalName)
-        if portalObj then
-            return portalObj:FindFirstChild("HitBox") or portalObj:FindFirstChild("Hitbox") or (portalObj:IsA("BasePart") and portalObj) or portalObj:FindFirstChildWhichIsA("BasePart")
+        local pObj = teleportsFolder:FindFirstChild(portalName)
+        if pObj then
+            return pObj:FindFirstChild("HitBox") or pObj:FindFirstChild("Hitbox") or (pObj:IsA("BasePart") and pObj) or pObj:FindFirstChildWhichIsA("BasePart")
         end
     end
 
     for _, desc in ipairs(workspace:GetDescendants()) do
-        if desc.Name == portalName and desc:IsA("Model") then
-            return desc:FindFirstChild("HitBox") or desc:FindFirstChild("Hitbox") or desc:FindFirstChildWhichIsA("BasePart")
+        if desc.Name == portalName then
+            return desc:FindFirstChild("HitBox") or desc:FindFirstChild("Hitbox") or (desc:IsA("BasePart") and desc) or desc:FindFirstChildWhichIsA("BasePart")
         end
     end
 
     return nil
-end
-
--- Força a travessia no portal
-local function enterPortal(hitbox)
-    if not hitbox then return false end
-    local _, root = getCharacter()
-    if not root then return false end
-
-    local dist = (root.Position - hitbox.Position).Magnitude
-    if dist > 10 then
-        smoothFlyTo(hitbox.CFrame)
-    else
-        stopMovement()
-        root.CFrame = hitbox.CFrame
-        if firetouchinterest then
-            pcall(function()
-                firetouchinterest(root, hitbox, 0)
-                task.wait(0.05)
-                firetouchinterest(root, hitbox, 1)
-            end)
-        end
-        task.wait(0.4)
-        local newDist = (root.Position - hitbox.Position).Magnitude
-        if newDist > 35 then
-            return true -- Teleportado com sucesso
-        end
-    end
-    return false
 end
 
 -- ====================================================================
@@ -531,8 +501,16 @@ end
 -- ====================================================================
 -- 9. MOTORES DE COMBATE (M1 & SKILLS)
 -- ====================================================================
+local function shouldPauseCombat()
+    local wave = getCurrentWaveNumber()
+    if needsBossReturn then return true end
+    if not passedPortal1 and wave >= 8 then return true end
+    if not passedPortal2 and wave >= 12 then return true end
+    return false
+end
+
 local function executeNativeAttack()
-    if isDungeonEnded or not isScriptRunning or needsBossReturn then return end
+    if isDungeonEnded or not isScriptRunning or shouldPauseCombat() then return end
     comboIndex = (comboIndex % 4) + 1
     local weapon = getDynamicEquippedWeapon()
 
@@ -554,7 +532,7 @@ end
 
 task.spawn(function()
     while isScriptRunning do
-        if Settings.AutoAttack and not isDungeonEnded and not needsBossReturn then
+        if Settings.AutoAttack and not isDungeonEnded and not shouldPauseCombat() then
             local char, _, hum = getCharacter()
             if char and hum and hum.Health > 0 then
                 executeNativeAttack()
@@ -566,7 +544,7 @@ end)
 
 task.spawn(function()
     while isScriptRunning do
-        if Settings.AutoSkills and not isDungeonEnded and not needsBossReturn then
+        if Settings.AutoSkills and not isDungeonEnded and not shouldPauseCombat() then
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 if (tick() - lastSkillUse) >= Settings.SkillCooldown then
@@ -604,17 +582,46 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINA DE ESTADOS ESPECÍFICA (BLEACH - FASE 4 DETERMINÍSTICA)
+-- 10. MÁQUINA DE ESTADOS DA FASE BLEACH
 -- ====================================================================
+local function forceEnterHitbox(hitbox)
+    local char, root = getCharacter()
+    if not root or not hitbox then return false end
+
+    local initialPos = root.Position
+    local dist = (root.Position - hitbox.Position).Magnitude
+
+    if dist > 8 then
+        smoothFlyTo(hitbox.CFrame)
+    else
+        stopMovement()
+        root.CFrame = hitbox.CFrame
+        
+        if firetouchinterest then
+            pcall(function()
+                firetouchinterest(root, hitbox, 0)
+                task.wait(0.05)
+                firetouchinterest(root, hitbox, 1)
+            end)
+        end
+        
+        task.wait(0.3)
+        if (root.Position - initialPos).Magnitude > 30 then
+            return true
+        end
+    end
+    return false
+end
+
 local function runBleachPhaseFlow()
     local living = getLivingEnemies()
     local wave = getCurrentWaveNumber()
 
-    -- PRIORIDADE 0: RECUPERAÇÃO DE MORTE NO BOSS (Voltar direto pelo Teleport2)
+    -- 1. MORTE NO BOSS: Força retorno imediato ao Teleport2
     if needsBossReturn then
         local p2Hitbox = getSpecificPortalHitbox("Teleport2")
         if p2Hitbox then
-            if enterPortal(p2Hitbox) then
+            if forceEnterHitbox(p2Hitbox) then
                 passedPortal2 = true
                 needsBossReturn = false
                 teleportCooldown = tick() + 2.0
@@ -625,35 +632,39 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- TRANSIÇÃO 1: FIM DA WAVE 7 -> ENTRA NO TELEPORT 1
-    if not passedPortal1 and wave >= 7 and #living == 0 then
+    -- 2. TRANSIÇÃO DA SALA 1 (Chegou na Wave 8 e ainda não passou pelo Portal 1)
+    if not passedPortal1 and wave >= 8 then
         local p1Hitbox = getSpecificPortalHitbox("Teleport1")
         if p1Hitbox then
-            if enterPortal(p1Hitbox) then
+            if forceEnterHitbox(p1Hitbox) then
                 passedPortal1 = true
-                teleportCooldown = tick() + 2.5
+                teleportCooldown = tick() + 2.0
             end
             return
+        else
+            passedPortal1 = true
         end
     end
 
-    -- TRANSIÇÃO 2: FIM DA WAVE 11 -> ENTRA NO TELEPORT 2
-    if passedPortal1 and not passedPortal2 and wave >= 11 and #living == 0 then
+    -- 3. TRANSIÇÃO DA SALA 2 (Chegou na Wave 12 e ainda não passou pelo Portal 2)
+    if not passedPortal2 and wave >= 12 then
         local p2Hitbox = getSpecificPortalHitbox("Teleport2")
         if p2Hitbox then
-            if enterPortal(p2Hitbox) then
+            if forceEnterHitbox(p2Hitbox) then
                 passedPortal2 = true
-                teleportCooldown = tick() + 2.5
+                teleportCooldown = tick() + 2.0
             end
             return
+        else
+            passedPortal2 = true
         end
     end
 
-    -- COMBATE REGULAR (WAVES 1-7, 8-11 OU BOSS 12)
+    -- 4. COMBATE NORMAL NA SALA ATUAL
     if #living > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
-            while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) do
+            while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) and not shouldPauseCombat() do
                 local _, currentRoot = getCharacter()
                 if not currentRoot then break end
 
@@ -664,11 +675,11 @@ local function runBleachPhaseFlow()
             end
         end
     else
-        stopMovement() -- Flutua aguardando o spawn da próxima onda
+        stopMovement()
     end
 end
 
--- Loop Principal de Execução
+-- Loop Principal
 task.spawn(function()
     while isScriptRunning do
         if Settings.AutoFarm then
