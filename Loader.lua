@@ -100,7 +100,7 @@ local Settings = {
     SkillCooldown = 0.8,
     HeightAboveEnemy = 9.0,
     TweenSpeed = 90,
-    AttackSpeed = 0.25, -- Velocidade de clique suavizada
+    AttackSpeed = 0.25,
     LocalRoomRadius = 80,
     PortalTriggerDistance = 35
 }
@@ -114,6 +114,7 @@ local teleportCooldown = 0
 local lastSkillUse = 0
 local comboIndex = 1
 local isDungeonEnded = false
+local cachedWeapon = "Katana"
 
 local function getCharacter()
     local char = player.Character
@@ -148,18 +149,50 @@ player.CharacterAdded:Connect(function()
     end
 end)
 
+-- DETECÇÃO DINÂMICA DE QUALQUER ARMA EQUIPADA
 local function getWeaponName()
+    -- 1. Checa atributos no Player ou Character
     local char = player.Character
+    if player:GetAttribute("EquippedWeapon") then
+        return tostring(player:GetAttribute("EquippedWeapon"))
+    end
+    if char and char:GetAttribute("EquippedWeapon") then
+        return tostring(char:GetAttribute("EquippedWeapon"))
+    end
+    if player:GetAttribute("Weapon") then
+        return tostring(player:GetAttribute("Weapon"))
+    end
+
+    -- 2. Checa Tool equipada no Character
     if char then
         local tool = char:FindFirstChildOfClass("Tool")
-        if tool then return tool.Name end
+        if tool then 
+            cachedWeapon = tool.Name
+            return tool.Name 
+        end
+
+        -- 3. Varre modelos anexados com Part/Mesh ou Handle
         for _, child in ipairs(char:GetChildren()) do
-            if child:IsA("Model") and (child.Name:lower():find("katana") or child.Name:lower():find("sword") or child.Name:lower():find("weapon")) then
-                return child.Name
+            if child:IsA("Model") and not Players:GetPlayerFromCharacter(child) and child.Name ~= "Animate" then
+                if child:FindFirstChild("Handle") or child:FindFirstChildWhichIsA("MeshPart") or child:FindFirstChildWhichIsA("BasePart") then
+                    cachedWeapon = child.Name
+                    return child.Name
+                end
             end
         end
     end
-    return "Katana"
+
+    -- 4. Checa Backpack
+    local backpack = player:FindFirstChild("Backpack")
+    if backpack then
+        local bpTool = backpack:FindFirstChildOfClass("Tool")
+        if bpTool then
+            cachedWeapon = bpTool.Name
+            return bpTool.Name
+        end
+    end
+
+    return cachedWeapon or "Katana"
 end
 
 local function toggleNoclip(enable)
@@ -648,7 +681,7 @@ FarmSection:AddToggle("AutoSkillsToggle", {
 
 FarmSection:AddSlider("AttackSpeedSlider", {
     Title = "Velocidade do Ataque (segundos)",
-    Default = 0.25, -- Slider agora inicia em 0.25s
+    Default = 0.25,
     Min = 0.08,
     Max = 0.50,
     Rounding = 2,
