@@ -90,6 +90,24 @@ task.spawn(function()
     end
 end)
 
+-- Arma detectada da sua captura anterior
+local detectedWeaponName = "GiantFrozenBeast"
+
+-- SPY INTERNO: Intercepta e salva o nome da arma a qualquer momento
+pcall(function()
+    local rawNamecall
+    rawNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+        local method = getnamecallmethod()
+        local args = {...}
+        if (method == "FireServer" or method == "fireServer") and tostring(self.Name):lower() == "attack" then
+            if args[1] == "M1" and args[2] and typeof(args[2]) == "string" and args[2] ~= "" then
+                detectedWeaponName = args[2]
+            end
+        end
+        return rawNamecall(self, ...)
+    end))
+end)
+
 local Settings = {
     AutoFarm = true,
     AutoAttack = true,
@@ -114,7 +132,6 @@ local teleportCooldown = 0
 local lastSkillUse = 0
 local comboIndex = 1
 local isDungeonEnded = false
-local cachedWeapon = "GiantFrozenBeast"
 
 local function getCharacter()
     local char = player.Character
@@ -148,57 +165,6 @@ player.CharacterAdded:Connect(function()
         end
     end
 end)
-
--- DETECTOR DE ARMA POR SOLDA DA MÃO DIREITA + FILTRO DE ARMADURAS
-local function getWeaponName()
-    local char = player.Character
-    if not char then return cachedWeapon or "GiantFrozenBeast" end
-
-    -- 1. Tool ativa
-    local tool = char:FindFirstChildOfClass("Tool")
-    if tool and tool.Name ~= "" then
-        cachedWeapon = tool.Name
-        return tool.Name
-    end
-
-    local rightHand = char:FindFirstChild("RightHand") or char:FindFirstChild("Right Arm")
-    local ignoredKeywords = {"armor", "headband", "helmet", "aura", "title", "ring", "wing", "cape", "costume", "hair", "cloth", "pants", "shirt", "boots"}
-
-    local function isIgnored(name)
-        local n = name:lower()
-        for _, word in ipairs(ignoredKeywords) do
-            if n:find(word) then return true end
-        end
-        return false
-    end
-
-    -- 2. Busca modelo soldado na MÃO DIREITA
-    if rightHand then
-        for _, joint in ipairs(char:GetDescendants()) do
-            if joint:IsA("JointInstance") or joint:IsA("Weld") or joint:IsA("Motor6D") then
-                if joint.Part0 == rightHand or joint.Part1 == rightHand then
-                    local parentModel = joint:FindFirstAncestorOfClass("Model")
-                    if parentModel and parentModel ~= char and not isIgnored(parentModel.Name) then
-                        cachedWeapon = parentModel.Name
-                        return parentModel.Name
-                    end
-                end
-            end
-        end
-    end
-
-    -- 3. Varredura direta dos modelos filhos excluindo cosméticos
-    for _, child in ipairs(char:GetChildren()) do
-        if child:IsA("Model") and child.Name ~= "Animate" and not Players:GetPlayerFromCharacter(child) then
-            if not isIgnored(child.Name) then
-                cachedWeapon = child.Name
-                return child.Name
-            end
-        end
-    end
-
-    return cachedWeapon or "GiantFrozenBeast"
-end
 
 local function toggleNoclip(enable)
     if enable then
@@ -393,10 +359,10 @@ local function getDynamicHotbar()
     return nil
 end
 
+-- Disparo direto do Ataque usando os argumentos exatos capturados
 local function executeNativeAttack()
     if isDungeonEnded then return end
     comboIndex = (comboIndex % 4) + 1
-    local weapon = getWeaponName()
 
     if not attackRemote then
         attackRemote = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Attack")
@@ -404,7 +370,7 @@ local function executeNativeAttack()
 
     if attackRemote then
         pcall(function()
-            attackRemote:FireServer("M1", weapon, comboIndex, 0, 0, 2)
+            attackRemote:FireServer("M1", detectedWeaponName, comboIndex, 0, 0, 2)
         end)
     end
 
@@ -636,6 +602,17 @@ FarmSection:AddToggle("AutoFarmEnemies", {
         toggleNoclip(Value)
         if not Value then
             stopMovement()
+        end
+    end
+})
+
+FarmSection:AddInput("ManualWeaponInput", {
+    Title = "Nome da Arma Ativa",
+    Default = detectedWeaponName,
+    Placeholder = "Ex: GiantFrozenBeast, WaterKatana",
+    Callback = function(Value)
+        if Value and Value ~= "" then
+            detectedWeaponName = Value
         end
     end
 })
