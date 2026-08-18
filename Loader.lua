@@ -76,15 +76,13 @@ if not inDungeon then
 end
 
 -- ====================================================================
--- 4. SERVIÇOS E CONFIGURAÇÕES GLOBAIS
+-- 4. SISTEMA DE SALVAMENTO DE CONFIGURAÇÃO / PRESET (Persistência)
 -- ====================================================================
-local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
-local TweenService = game:GetService("TweenService")
-local RunService = game:GetService("RunService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local VirtualInputManager = game:GetService("VirtualInputManager")
+local HttpService = game:GetService("HttpService")
+local CONFIG_FILE = "HubRapazes_Config.json"
 
 local Settings = {
+    SelectedPhase = "Bleach (Fase 4)",
     AutoFarm = true,
     AutoAttack = true,
     AutoSkills = true,
@@ -96,9 +94,50 @@ local Settings = {
     SkillMaxDistance = 20,
     HeightAboveEnemy = 9.0,
     TweenSpeed = 90,
-    AttackSpeed = 0.15,
-    LocalRoomRadius = 220 -- Raio máximo para considerar inimigos da mesma sala
+    AttackSpeed = 0.15
 }
+
+local function saveConfig()
+    pcall(function()
+        if writefile then
+            local data = HttpService:JSONEncode({
+                SelectedPhase = Settings.SelectedPhase,
+                HeightAboveEnemy = Settings.HeightAboveEnemy,
+                TweenSpeed = Settings.TweenSpeed,
+                AttackSpeed = Settings.AttackSpeed,
+                SkillCooldown = Settings.SkillCooldown
+            })
+            writefile(CONFIG_FILE, data)
+        end
+    end)
+end
+
+local function loadConfig()
+    pcall(function()
+        if readfile and isfile and isfile(CONFIG_FILE) then
+            local raw = readfile(CONFIG_FILE)
+            local data = HttpService:JSONDecode(raw)
+            if data then
+                if data.SelectedPhase then Settings.SelectedPhase = data.SelectedPhase end
+                if data.HeightAboveEnemy then Settings.HeightAboveEnemy = data.HeightAboveEnemy end
+                if data.TweenSpeed then Settings.TweenSpeed = data.TweenSpeed end
+                if data.AttackSpeed then Settings.AttackSpeed = data.AttackSpeed end
+                if data.SkillCooldown then Settings.SkillCooldown = data.SkillCooldown end
+            end
+        end
+    end)
+end
+
+loadConfig()
+
+-- ====================================================================
+-- 5. SERVIÇOS E ESTADOS
+-- ====================================================================
+local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local isScriptRunning = true
 local currentTween = nil
@@ -215,7 +254,7 @@ local function pressKey(keyCode)
 end
 
 -- ====================================================================
--- 5. COMBATE NATIVO & INVENTÁRIO
+-- 6. COMBATE NATIVO & INVENTÁRIO
 -- ====================================================================
 local function findAttackRemote()
     if attackRemote and attackRemote.Parent then return attackRemote end
@@ -273,7 +312,7 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 6. SCANNERS DE INIMIGOS LOCAIS & PORTAIS
+-- 7. SCANNERS DE COMBATE E PORTAIS (BLEACH)
 -- ====================================================================
 local function getEntityTargetPart(obj)
     if not obj or not obj.Parent then return nil end
@@ -293,39 +332,27 @@ local function isEntityAlive(obj)
     if not obj or not obj.Parent then return false end
     
     local hum = obj:FindFirstChildOfClass("Humanoid")
-    if hum then 
-        return hum.Health > 0 
-    end
+    if hum then return hum.Health > 0 end
 
     local hpAttr = obj:GetAttribute("Health") or obj:GetAttribute("HP")
-    if hpAttr then 
-        return tonumber(hpAttr) > 0 
-    end
+    if hpAttr then return tonumber(hpAttr) > 0 end
 
     local hpVal = obj:FindFirstChild("Health") or obj:FindFirstChild("HP")
-    if hpVal and hpVal:IsA("ValueBase") then 
-        return tonumber(hpVal.Value) > 0 
-    end
+    if hpVal and hpVal:IsA("ValueBase") then return tonumber(hpVal.Value) > 0 end
 
     return getEntityTargetPart(obj) ~= nil
 end
 
--- Retorna apenas inimigos que pertencem à sala atual (dentro do raio configurado)
-local function getLivingLocalEnemies()
+local function getLivingEnemies()
     local list = {}
-    local char, root = getCharacter()
-    if not root then return list end
-
+    local char = player.Character
     local gameFolder = workspace:FindFirstChild("Game")
     local enemiesFolder = (gameFolder and gameFolder:FindFirstChild("Enemies")) or workspace:FindFirstChild("Enemies")
 
     if enemiesFolder then
         for _, enemy in ipairs(enemiesFolder:GetChildren()) do
             if isEntityAlive(enemy) then
-                local part = getEntityTargetPart(enemy)
-                if part and (root.Position - part.Position).Magnitude <= Settings.LocalRoomRadius then
-                    table.insert(list, enemy)
-                end
+                table.insert(list, enemy)
             end
         end
     end
@@ -335,10 +362,7 @@ local function getLivingLocalEnemies()
             if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
                 if obj.Name:lower():find("enemy") or obj.Name:lower():find("mob") or obj.Name:lower():find("boss") or obj:FindFirstChildOfClass("Humanoid") then
                     if isEntityAlive(obj) then
-                        local part = getEntityTargetPart(obj)
-                        if part and (root.Position - part.Position).Magnitude <= Settings.LocalRoomRadius then
-                            table.insert(list, obj)
-                        end
+                        table.insert(list, obj)
                     end
                 end
             end
@@ -352,7 +376,7 @@ local function getClosestLivingEnemy()
     local _, root = getCharacter()
     if not root then return nil, nil end
 
-    local enemies = getLivingLocalEnemies()
+    local enemies = getLivingEnemies()
     local closestEnemy, closestPart = nil, nil
     local minDistance = math.huge
 
@@ -371,8 +395,7 @@ local function getClosestLivingEnemy()
     return closestEnemy, closestPart
 end
 
--- Scanner de Portais
-local function getActiveUnusedPortal()
+local function getBleachPortal()
     if tick() < teleportCooldown then
         return nil, math.huge
     end
@@ -380,43 +403,27 @@ local function getActiveUnusedPortal()
     local _, root = getCharacter()
     if not root then return nil, math.huge end
 
-    local portalParts = {}
+    local candidates = {}
     local gameFolder = workspace:FindFirstChild("Game")
-    local teleportsFolder = (gameFolder and (gameFolder:FindFirstChild("Teleports") or gameFolder:FindFirstChild("Teleport"))) 
-        or workspace:FindFirstChild("Teleports") 
-        or workspace:FindFirstChild("Teleport")
+    local teleportsFolder = (gameFolder and gameFolder:FindFirstChild("Teleports")) or workspace:FindFirstChild("Teleports")
 
     if teleportsFolder then
-        for _, desc in ipairs(teleportsFolder:GetDescendants()) do
-            if desc:IsA("BasePart") and (desc.Name:lower():find("hitbox") or desc.Name:lower():find("portal") or desc.Name:lower():find("teleport") or desc:FindFirstChildWhichIsA("TouchTransmitter")) then
-                if not usedTeleports[desc] and not usedTeleports[desc.Parent] then
-                    table.insert(portalParts, desc)
-                end
+        for _, obj in ipairs(teleportsFolder:GetChildren()) do
+            local hitbox = obj:FindFirstChild("HitBox") or obj:FindFirstChild("Hitbox") or (obj:IsA("BasePart") and obj) or obj:FindFirstChildWhichIsA("BasePart")
+            if hitbox and not usedTeleports[hitbox] and not usedTeleports[obj] then
+                table.insert(candidates, hitbox)
             end
         end
     end
 
-    if #portalParts == 0 then
-        for _, desc in ipairs(workspace:GetDescendants()) do
-            if desc:IsA("BasePart") and desc:FindFirstChildWhichIsA("TouchTransmitter") then
-                local parentName = desc.Parent and desc.Parent.Name:lower() or ""
-                if parentName:find("teleport") or parentName:find("portal") or parentName:find("gate") then
-                    if not usedTeleports[desc] and not usedTeleports[desc.Parent] then
-                        table.insert(portalParts, desc)
-                    end
-                end
-            end
-        end
-    end
-
-    if #portalParts == 0 then
+    if #candidates == 0 then
         return nil, math.huge
     end
 
     local closestHitbox = nil
     local minDistance = math.huge
 
-    for _, hitbox in ipairs(portalParts) do
+    for _, hitbox in ipairs(candidates) do
         local dist = (root.Position - hitbox.Position).Magnitude
         if dist < minDistance then
             minDistance = dist
@@ -428,21 +435,32 @@ local function getActiveUnusedPortal()
 end
 
 -- ====================================================================
--- 7. EVENTOS DE UI (ENGAGE, START, REPLAY)
+-- 8. EVENTOS DE UI (ENGAGE / VIRUS EM QUALQUER FASE, START, REPLAY)
 -- ====================================================================
 local function checkAndClickEngageButton()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef or not isScriptRunning then return false end
 
+    -- 1. Detecção no VirusFrame específico
     local main = pguiRef:FindFirstChild("Main")
     local virusFrame = main and main:FindFirstChild("VirusFrame")
-    local warning = virusFrame and virusFrame:FindFirstChild("Warning")
-    local buttons = warning and warning:FindFirstChild("Buttons")
-    local confirmBtn = buttons and buttons:FindFirstChild("Confirm")
+    if virusFrame and virusFrame.Visible then
+        local confirmBtn = virusFrame:FindFirstChild("Confirm", true) or virusFrame:FindFirstChild("Engage", true)
+        if confirmBtn and confirmBtn:IsA("GuiObject") and confirmBtn.Visible then
+            triggerGuiButton(confirmBtn)
+            return true
+        end
+    end
 
-    if confirmBtn and confirmBtn:IsA("GuiObject") and confirmBtn.Visible and virusFrame.Visible then
-        triggerGuiButton(confirmBtn)
-        return true
+    -- 2. Detecção Universal de Engage em qualquer pop-up de Boss
+    for _, desc in ipairs(pguiRef:GetDescendants()) do
+        if (desc:IsA("TextButton") or desc:IsA("ImageButton")) and desc.Visible then
+            local txt = desc:IsA("TextButton") and desc.Text:lower() or desc.Name:lower()
+            if txt:find("engage") or (txt:find("confirm") and desc:FindFirstAncestorWhichIsA("Frame") and desc:FindFirstAncestorWhichIsA("Frame").Name:lower():find("virus")) then
+                triggerGuiButton(desc)
+                return true
+            end
+        end
     end
 
     return false
@@ -485,7 +503,7 @@ local function handleDungeonStart()
 end
 
 -- ====================================================================
--- 8. THREADS DE COMBATE
+-- 9. THREADS DE COMBATE
 -- ====================================================================
 local function executeNativeAttack()
     if isDungeonEnded or not isScriptRunning then return end
@@ -560,14 +578,66 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 9. MÁQUINA DE ESTADOS PRINCIPAL
+-- 10. MÁQUINA DE ESTADOS DA FASE BLEACH
 -- ====================================================================
+local function runBleachPhaseFlow()
+    local living = getLivingEnemies()
+
+    -- 1. Monstros vivos (Ondas 1-7, 8-11 e Boss): Combate contínuo
+    if #living > 0 then
+        local enemy, enemyPart = getClosestLivingEnemy()
+        if enemy and enemyPart then
+            while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) do
+                local _, currentRoot = getCharacter()
+                if not currentRoot then break end
+
+                local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
+                local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
+                smoothFlyTo(targetCFrame)
+                task.wait(0.05)
+            end
+        end
+
+    -- 2. Sala limpa (0 monstros): Entra no portal (pós-onda 7 ou pós-onda 11)
+    else
+        local teleportHitbox, teleportDist = getBleachPortal()
+        if teleportHitbox then
+            smoothFlyTo(teleportHitbox.CFrame)
+            
+            if teleportDist <= 14 then
+                local _, root = getCharacter()
+                if root then
+                    root.CFrame = teleportHitbox.CFrame
+                end
+                
+                if firetouchinterest and root then
+                    pcall(function()
+                        firetouchinterest(root, teleportHitbox, 0)
+                        task.wait(0.05)
+                        firetouchinterest(root, teleportHitbox, 1)
+                    end)
+                end
+
+                usedTeleports[teleportHitbox] = true
+                if teleportHitbox.Parent then usedTeleports[teleportHitbox.Parent] = true end
+                table.insert(portalHistory, teleportHitbox)
+                teleportCooldown = tick() + 2.5
+                task.wait(1.0)
+            end
+        else
+            stopMovement()
+        end
+    end
+end
+
+-- Loop Principal
 task.spawn(function()
     while isScriptRunning do
         if Settings.AutoFarm then
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 
+                -- Checagem contínua do Engage / Virus em qualquer fase
                 if Settings.AutoEngage then
                     checkAndClickEngageButton()
                 end
@@ -601,49 +671,8 @@ task.spawn(function()
                         end
                         task.wait(0.2)
                     else
-                        local livingLocalEnemies = getLivingLocalEnemies()
-
-                        -- ESTADO 1: HÁ INIMIGOS NA SALA (< 220 STUDS)
-                        if #livingLocalEnemies > 0 then
-                            local enemy, enemyPart = getClosestLivingEnemy()
-                            if enemy and enemyPart then
-                                while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) do
-                                    local _, currentRoot = getCharacter()
-                                    if not currentRoot then break end
-
-                                    local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
-                                    local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
-                                    smoothFlyTo(targetCFrame)
-                                    task.wait(0.05)
-                                end
-                            end
-
-                        -- ESTADO 2: SALA LIMPA (SEM INIMIGOS POR PERTO -> ENTRA NO PORTAL)
-                        else
-                            local teleportHitbox, teleportDist = getActiveUnusedPortal()
-                            if teleportHitbox then
-                                smoothFlyTo(teleportHitbox.CFrame)
-                                
-                                if teleportDist <= 14 then
-                                    root.CFrame = teleportHitbox.CFrame
-                                    
-                                    if firetouchinterest then
-                                        pcall(function()
-                                            firetouchinterest(root, teleportHitbox, 0)
-                                            task.wait(0.05)
-                                            firetouchinterest(root, teleportHitbox, 1)
-                                        end)
-                                    end
-
-                                    usedTeleports[teleportHitbox] = true
-                                    if teleportHitbox.Parent then usedTeleports[teleportHitbox.Parent] = true end
-                                    table.insert(portalHistory, teleportHitbox)
-                                    teleportCooldown = tick() + 2.5
-                                    task.wait(1.0)
-                                end
-                            else
-                                stopMovement()
-                            end
+                        if Settings.SelectedPhase == "Bleach (Fase 4)" then
+                            runBleachPhaseFlow()
                         end
                     end
                 end
@@ -660,13 +689,13 @@ end)
 toggleNoclip(Settings.AutoFarm)
 
 -- ====================================================================
--- 10. INTERFACE FLUENT & KILLSWITCH TOTAL
+-- 11. INTERFACE FLUENT COM PERSISTÊNCIA AUTOMÁTICA
 -- ====================================================================
 local Window = Fluent:CreateWindow({
     Title = "Hub dos Rapazes",
     SubTitle = "Anime Dungeons",
     TabWidth = 140,
-    Size = UDim2.fromOffset(520, 360),
+    Size = UDim2.fromOffset(520, 380),
     Acrylic = false,
     Theme = "Dark",
     MinimizeKey = Enum.KeyCode.RightControl
@@ -774,11 +803,25 @@ task.spawn(function()
     end
 end)
 
-local FarmSection = Tabs.Farm:AddSection("Auto Farm & Combate")
+local FarmSection = Tabs.Farm:AddSection("Seleção de Fase")
 
-FarmSection:AddToggle("AutoFarmEnemies", {
+FarmSection:AddDropdown("PhaseSelector", {
+    Title = "Selecionar Fase",
+    Values = { "Bleach (Fase 4)" },
+    Default = Settings.SelectedPhase,
+    Callback = function(Value)
+        Settings.SelectedPhase = Value
+        saveConfig() -- Salva no arquivo local
+        table.clear(usedTeleports)
+        table.clear(portalHistory)
+    end
+})
+
+local CombatSection = Tabs.Farm:AddSection("Auto Farm & Combate")
+
+CombatSection:AddToggle("AutoFarmEnemies", {
     Title = "Auto Farm Universal",
-    Description = "Start -> Farm -> Portal/Spawn -> Auto Replay",
+    Description = "Start -> Farm -> Portais Mapeados -> Auto Replay",
     Default = true,
     Callback = function(Value)
         Settings.AutoFarm = Value
@@ -789,16 +832,16 @@ FarmSection:AddToggle("AutoFarmEnemies", {
     end
 })
 
-FarmSection:AddToggle("AutoEngageToggle", {
-    Title = "Auto Engage (Virus Boss)",
-    Description = "Clica automaticamente em Confirm no VirusFrame",
+CombatSection:AddToggle("AutoEngageToggle", {
+    Title = "Auto Engage (Boss Secreto)",
+    Description = "Clica automaticamente em Engage/Confirm em qualquer fase",
     Default = true,
     Callback = function(Value)
         Settings.AutoEngage = Value
     end
 })
 
-FarmSection:AddToggle("AutoPlayAgainToggle", {
+CombatSection:AddToggle("AutoPlayAgainToggle", {
     Title = "Auto Play Again",
     Description = "Clica em Jogar Novamente e persiste entre partidas",
     Default = true,
@@ -807,7 +850,7 @@ FarmSection:AddToggle("AutoPlayAgainToggle", {
     end
 })
 
-FarmSection:AddToggle("AutoStartToggle", {
+CombatSection:AddToggle("AutoStartToggle", {
     Title = "Auto Start Dungeon",
     Description = "Aguarda a fase carregar e inicia sozinho (espera 3s)",
     Default = true,
@@ -816,7 +859,7 @@ FarmSection:AddToggle("AutoStartToggle", {
     end
 })
 
-FarmSection:AddToggle("AutoAttackToggle", {
+CombatSection:AddToggle("AutoAttackToggle", {
     Title = "Auto Attack (Remote Nativo)",
     Description = "Dispara os ataques M1 continuamente",
     Default = true,
@@ -825,7 +868,7 @@ FarmSection:AddToggle("AutoAttackToggle", {
     end
 })
 
-FarmSection:AddToggle("AutoSkillsToggle", {
+CombatSection:AddToggle("AutoSkillsToggle", {
     Title = "Auto Skills (Z, X e Ultimate)",
     Description = "Dispara skills apenas perto de inimigos",
     Default = true,
@@ -834,9 +877,9 @@ FarmSection:AddToggle("AutoSkillsToggle", {
     end
 })
 
-FarmSection:AddSlider("SkillMaxDistSlider", {
+CombatSection:AddSlider("SkillMaxDistSlider", {
     Title = "Distância das Skills (studs)",
-    Default = 20,
+    Default = Settings.SkillMaxDistance,
     Min = 8,
     Max = 40,
     Rounding = 0,
@@ -845,47 +888,51 @@ FarmSection:AddSlider("SkillMaxDistSlider", {
     end
 })
 
-FarmSection:AddSlider("AttackSpeedSlider", {
+CombatSection:AddSlider("AttackSpeedSlider", {
     Title = "Velocidade do Ataque (segundos)",
-    Default = 0.15,
+    Default = Settings.AttackSpeed,
     Min = 0.04,
     Max = 0.35,
     Rounding = 2,
     Callback = function(Value)
         Settings.AttackSpeed = Value
+        saveConfig()
     end
 })
 
-FarmSection:AddSlider("SkillCooldownSlider", {
+CombatSection:AddSlider("SkillCooldownSlider", {
     Title = "Intervalo das Skills (segundos)",
-    Default = 0.8,
+    Default = Settings.SkillCooldown,
     Min = 0.2,
     Max = 4,
     Rounding = 1,
     Callback = function(Value)
         Settings.SkillCooldown = Value
+        saveConfig()
     end
 })
 
-FarmSection:AddSlider("HeightAboveEnemy", {
+CombatSection:AddSlider("HeightAboveEnemy", {
     Title = "Altura acima do Inimigo",
-    Default = 9.0,
+    Default = Settings.HeightAboveEnemy,
     Min = 1,
     Max = 20,
     Rounding = 1,
     Callback = function(Value)
         Settings.HeightAboveEnemy = Value
+        saveConfig()
     end
 })
 
-FarmSection:AddSlider("TweenSpeed", {
+CombatSection:AddSlider("TweenSpeed", {
     Title = "Velocidade do Voo",
-    Default = 90,
+    Default = Settings.TweenSpeed,
     Min = 20,
     Max = 160,
     Rounding = 0,
     Callback = function(Value)
         Settings.TweenSpeed = Value
+        saveConfig()
     end
 })
 
