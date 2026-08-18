@@ -226,9 +226,9 @@ local function smoothFlyTo(targetCFrame)
     currentTween:Play()
 end
 
+-- CLIQUE LIMPO (Sem tocar/travar a tela física)
 local function triggerGuiButton(btn)
     if not btn or not btn.Parent or not isScriptRunning then return end
-    
     if firesignal then
         pcall(function() firesignal(btn.Activated) end)
         pcall(function() firesignal(btn.MouseButton1Click) end)
@@ -241,16 +241,6 @@ local function triggerGuiButton(btn)
         for _, c in ipairs(getconnections(btn.MouseButton1Down)) do pcall(function() c:Fire() end) end
         for _, c in ipairs(getconnections(btn.MouseButton1Up)) do pcall(function() c:Fire() end) end
     end
-
-    pcall(function()
-        local pos = btn.AbsolutePosition
-        local size = btn.AbsoluteSize
-        local centerX = pos.X + (size.X / 2)
-        local centerY = pos.Y + (size.Y / 2)
-        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 1)
-        task.wait(0.04)
-        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 1)
-    end)
 end
 
 local function pressKey(keyCode)
@@ -328,7 +318,7 @@ local function getCurrentWaveNumber()
     if pguiRef then
         for _, desc in ipairs(pguiRef:GetDescendants()) do
             if desc:IsA("TextLabel") and desc.Visible and desc.Text ~= "" then
-                local current, total = desc.Text:match("(%d+)%s*/%s*(%d+)")
+                local current = desc.Text:match("(%d+)%s*/%s*%d+")
                 if current then
                     return tonumber(current)
                 end
@@ -446,26 +436,20 @@ local function getPortalPart(portalName)
 end
 
 -- ====================================================================
--- 8. CONTROLES DE INTERFACE (AUTO START EM PARALELO, ENGAGE, REPLAY)
+-- 8. CONTROLES DE INTERFACE (START, ENGAGE, REPLAY)
 -- ====================================================================
-task.spawn(function()
-    while isScriptRunning do
-        if Settings.AutoStart then
-            local pguiRef = player:FindFirstChild("PlayerGui")
-            if pguiRef then
-                local main = pguiRef:FindFirstChild("Main")
-                local df = main and main:FindFirstChild("DungeonFrame")
-                if df and df.Visible then
-                    local startBtn = df:FindFirstChild("Start") or df:FindFirstChild("Play")
-                    if startBtn and startBtn.Visible then
-                        triggerGuiButton(startBtn)
-                    end
-                end
-            end
+local function checkDungeonStartButton()
+    local pguiRef = player:FindFirstChild("PlayerGui")
+    if not pguiRef then return end
+    local main = pguiRef:FindFirstChild("Main")
+    local df = main and main:FindFirstChild("DungeonFrame")
+    if df and df.Visible then
+        local startBtn = df:FindFirstChild("Start") or df:FindFirstChild("Play")
+        if startBtn and startBtn:IsA("GuiObject") and startBtn.Visible then
+            triggerGuiButton(startBtn)
         end
-        task.wait(1.0)
     end
-end)
+end
 
 local function checkAndClickEngageButton()
     local pguiRef = player:FindFirstChild("PlayerGui")
@@ -606,9 +590,9 @@ local function flyToPortalLocation(portalPart)
 
     smoothFlyTo(portalPart.CFrame)
 
-    if dist <= 15 then
-        task.wait(0.3)
-        if (root.Position - initialPos).Magnitude > 30 then
+    if dist <= 16 then
+        task.wait(0.35)
+        if (root.Position - initialPos).Magnitude > 25 then
             return true
         end
     end
@@ -619,7 +603,7 @@ local function runBleachPhaseFlow()
     local enemies = getAllLivingEnemies()
     local wave = getCurrentWaveNumber()
 
-    -- 1. MORTE NO BOSS: Voa direto até o Teleport2
+    -- 1. MORTE NO BOSS: Voa direto até o Teleport2 para voltar
     if needsBossReturn then
         local p2 = getPortalPart("Teleport2")
         if p2 then
@@ -634,7 +618,7 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 2. TRANSIÇÃO SALA 1: Só aciona a partir da WAVE 8
+    -- 2. TRANSIÇÃO SALA 1: Só aciona quando a Wave for 8 ou mais
     if not passedPortal1 and wave >= 8 then
         local p1 = getPortalPart("Teleport1")
         if p1 then
@@ -648,7 +632,7 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 3. TRANSIÇÃO SALA 2: Só aciona a partir da WAVE 12
+    -- 3. TRANSIÇÃO SALA 2: Só aciona quando a Wave for 12 ou mais
     if passedPortal1 and not passedPortal2 and wave >= 12 then
         local p2 = getPortalPart("Teleport2")
         if p2 then
@@ -662,7 +646,7 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 4. COMBATE NORMAL: Ataca o inimigo mais próximo
+    -- 4. COMBATE NORMAL: Foco no monstro mais próximo
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
@@ -688,6 +672,10 @@ task.spawn(function()
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 
+                if Settings.AutoStart then
+                    checkDungeonStartButton()
+                end
+
                 if Settings.AutoEngage then
                     checkAndClickEngageButton()
                 end
