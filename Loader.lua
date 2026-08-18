@@ -218,7 +218,6 @@ local function triggerGuiButton(btn)
     end
 end
 
--- Detecção do Botão Engage (VirusFrame)
 local function checkAndClickEngageButton()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef then return false end
