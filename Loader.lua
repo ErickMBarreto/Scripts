@@ -1,47 +1,131 @@
+-- Espera o jogo carregar completamente
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
+local pgui = player:WaitForChild("PlayerGui", 15)
+
+-- Trava de Segurança: Não executa se estiver no Lobby
+local function isInsideDungeon()
+    local main = pgui and pgui:FindFirstChild("Main")
+    if main and main:FindFirstChild("DungeonFrame") then return true end
+    if workspace:FindFirstChild("Game") and workspace.Game:FindFirstChild("Enemies") then return true end
+    return false
+end
+
+local inDungeon = false
+for i = 1, 10 do
+    if isInsideDungeon() then
+        inDungeon = true
+        break
+    end
+    task.wait(0.5)
+end
+
+if not inDungeon then return end
+
+-- Carrega a UI Fluent
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
 
--- Serviços
 local TweenService = game:GetService("TweenService")
-local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local VirtualUser = game:GetService("VirtualUser")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CoreGui = game:GetService("CoreGui")
 
-local player = Players.LocalPlayer
-local character = player.Character or player.CharacterAdded:Wait()
-local humanoid = character:WaitForChild("Humanoid")
-local rootPart = character:WaitForChild("HumanoidRootPart")
-
-player.CharacterAdded:Connect(function(newChar)
-    character = newChar
-    humanoid = newChar:WaitForChild("Humanoid")
-    rootPart = newChar:WaitForChild("HumanoidRootPart")
+local attackRemote = nil
+task.spawn(function()
+    local remotesFolder = ReplicatedStorage:WaitForChild("Remotes", 10)
+    if remotesFolder then
+        attackRemote = remotesFolder:WaitForChild("Attack", 10)
+    end
 end)
 
--- Configurações
 local Settings = {
-    AutoFarm = false,
+    AutoFarm = true,
     AutoAttack = true,
-    HeightAboveEnemy = 8,
-    TweenSpeed = 50,
-    AttackSpeed = 0.15
+    AutoSkills = true,
+    AutoStart = true,
+    AutoPlayAgain = true,
+    AutoEngage = true,
+    SkillCooldown = 0.8,
+    HeightAboveEnemy = 9.0,
+    TweenSpeed = 90,
+    AttackSpeed = 0.15,
+    MaxEnemyDistance = 75,
+    PortalTriggerDistance = 35
 }
 
 local currentTween = nil
 local noclipConnection = nil
 local isMoving = false
+local usedTeleports = {}
+local portalHistory = {}
+local teleportCooldown = 0
+local lastSkillUse = 0
+local comboIndex = 1
+local isDungeonEnded = false
 
--- Noclip seguro: só ativa quando o personagem está ativamente indo a um alvo
+local function getCharacter()
+    local char = player.Character
+    if char and char:FindFirstChild("HumanoidRootPart") and char:FindFirstChild("Humanoid") and char.Humanoid.Health > 0 then
+        return char, char.HumanoidRootPart, char.Humanoid
+    end
+    return nil, nil, nil
+end
+
+local function stopMovement()
+    isMoving = false
+    if currentTween then
+        currentTween:Cancel()
+        currentTween = nil
+    end
+    local _, root = getCharacter()
+    if root and root.Parent then
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end
+end
+
+player.CharacterAdded:Connect(function()
+    stopMovement()
+    teleportCooldown = tick() + 1.0
+
+    if #portalHistory > 0 then
+        local lastPortal = table.remove(portalHistory)
+        if lastPortal then
+            usedTeleports[lastPortal] = nil
+        end
+    end
+end)
+
+local function getWeaponName()
+    local char = player.Character
+    if char then
+        local tool = char:FindFirstChildOfClass("Tool")
+        if tool then return tool.Name end
+        for _, child in ipairs(char:GetChildren()) do
+            if child:IsA("Model") and (child.Name:lower():find("katana") or child.Name:lower():find("sword") or child.Name:lower():find("weapon")) then
+                return child.Name
+            end
+        end
+    end
+    return "Katana"
+end
+
 local function toggleNoclip(enable)
     if enable then
         if not noclipConnection then
             noclipConnection = RunService.Stepped:Connect(function()
-                if character and Settings.AutoFarm and isMoving then
-                    for _, part in ipairs(character:GetDescendants()) do
+                local char, root = getCharacter()
+                if char and root and Settings.AutoFarm and not isDungeonEnded then
+                    for _, part in ipairs(char:GetDescendants()) do
                         if part:IsA("BasePart") and part.CanCollide then
                             part.CanCollide = false
                         end
                     end
+                    root.AssemblyLinearVelocity = Vector3.zero
                 end
             end)
         end
@@ -53,25 +137,13 @@ local function toggleNoclip(enable)
     end
 end
 
--- Parada total e travamento físico
-local function stopMovement()
-    isMoving = false
-    if currentTween then
-        currentTween:Cancel()
-        currentTween = nil
-    end
-    if rootPart and rootPart.Parent then
-        rootPart.AssemblyLinearVelocity = Vector3.zero
-        rootPart.AssemblyAngularVelocity = Vector3.zero
-    end
-end
-
--- Voo suave via Tween (Sem teleporte brusco)
 local function smoothFlyTo(targetCFrame)
-    if not rootPart or not rootPart.Parent then return end
+    if isDungeonEnded then return end
+    local _, root = getCharacter()
+    if not root or not root.Parent then return end
     
     isMoving = true
-    local distance = (rootPart.Position - targetCFrame.Position).Magnitude
+    local distance = (root.Position - targetCFrame.Position).Magnitude
     local duration = distance / math.max(Settings.TweenSpeed, 5)
 
     if currentTween then
@@ -79,131 +151,295 @@ local function smoothFlyTo(targetCFrame)
     end
 
     local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
-    currentTween = TweenService:Create(rootPart, tweenInfo, {CFrame = targetCFrame})
+    currentTween = TweenService:Create(root, tweenInfo, {CFrame = targetCFrame})
     currentTween:Play()
 end
 
--- Localiza o inimigo vivo mais próximo
-local function getClosestEnemy()
-    local closest, minDistance = nil, math.huge
-    
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("Model") and obj ~= character and not obj:IsDescendantOf(character) then
-            local hum = obj:FindFirstChildOfClass("Humanoid")
-            local hrp = obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart
+local function triggerGuiButton(btn)
+    if not btn or not btn.Parent then return end
+    if firesignal then
+        pcall(function() firesignal(btn.Activated) end)
+        pcall(function() firesignal(btn.MouseButton1Click) end)
+        pcall(function() firesignal(btn.MouseButton1Down) end)
+        pcall(function() firesignal(btn.MouseButton1Up) end)
+    end
+    if getconnections then
+        for _, c in ipairs(getconnections(btn.Activated)) do pcall(function() c:Fire() end) end
+        for _, c in ipairs(getconnections(btn.MouseButton1Click)) do pcall(function() c:Fire() end) end
+        for _, c in ipairs(getconnections(btn.MouseButton1Down)) do pcall(function() c:Fire() end) end
+    end
+end
+
+local function checkAndClickEngageButton()
+    local pguiRef = player:FindFirstChild("PlayerGui")
+    if not pguiRef then return false end
+
+    for _, obj in ipairs(pguiRef:GetDescendants()) do
+        if obj:IsA("GuiObject") and (obj:IsA("TextButton") or obj:IsA("ImageButton")) and obj.Visible then
+            local name = obj.Name:lower()
+            local text = (obj:IsA("TextButton") and obj.Text:lower()) or ""
             
-            -- Garante que é um mob real, com vida e não é player
-            if hum and hum.Health > 0 and hrp and not Players:GetPlayerFromCharacter(obj) then
-                local dist = (rootPart.Position - hrp.Position).Magnitude
-                if dist < minDistance then
-                    minDistance = dist
-                    closest = obj
+            if name == "engage" or name:find("engage") or text == "engage" or text:find("engage") then
+                triggerGuiButton(obj)
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function checkDungeonEnd()
+    local pguiRef = player:FindFirstChild("PlayerGui")
+    if not pguiRef then return false end
+
+    local main = pguiRef:FindFirstChild("Main")
+    local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
+    local dungeonStats = dungeonFrame and dungeonFrame:FindFirstChild("DungeonStats")
+    local endActions = dungeonStats and dungeonStats:FindFirstChild("EndActions")
+    local playAgainBtn = endActions and endActions:FindFirstChild("PlayAgain")
+
+    if playAgainBtn and playAgainBtn:IsA("GuiObject") and playAgainBtn.Visible and dungeonStats.Visible then
+        return true, playAgainBtn
+    end
+
+    return false, nil
+end
+
+local function checkAndClickStartButton()
+    local pguiRef = player:FindFirstChild("PlayerGui")
+    if not pguiRef then return false end
+
+    local main = pguiRef:FindFirstChild("Main")
+    local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
+    local startBtn = dungeonFrame and dungeonFrame:FindFirstChild("Start")
+
+    if startBtn and startBtn:IsA("GuiObject") and startBtn.Visible and dungeonFrame.Visible then
+        triggerGuiButton(startBtn)
+        table.clear(usedTeleports)
+        table.clear(portalHistory)
+        return true
+    end
+
+    return false
+end
+
+local function getClosestEnemyInCurrentRoom()
+    local _, root = getCharacter()
+    if not root then return nil, nil end
+
+    local gameFolder = workspace:FindFirstChild("Game")
+    local enemiesFolder = (gameFolder and gameFolder:FindFirstChild("Enemies")) or workspace:FindFirstChild("Enemies")
+
+    if not enemiesFolder then return nil, nil end
+
+    local closestEnemy, closestRoot = nil, nil
+    local minDistance = Settings.MaxEnemyDistance
+
+    for _, enemy in ipairs(enemiesFolder:GetChildren()) do
+        if enemy:IsA("Model") or enemy:IsA("Folder") or enemy:IsA("BasePart") then
+            local hum = enemy:FindFirstChildOfClass("Humanoid")
+            if not hum or hum.Health > 0 then
+                local targetPart = enemy:FindFirstChild("Bot") 
+                    or enemy:FindFirstChild("HumanoidRootPart") 
+                    or enemy:FindFirstChild("Hitbox") 
+                    or enemy:FindFirstChild("Torso")
+                    or (enemy:IsA("Model") and enemy.PrimaryPart)
+                    or (enemy:IsA("BasePart") and enemy)
+                    or enemy:FindFirstChildWhichIsA("BasePart")
+
+                if targetPart and targetPart:IsA("BasePart") then
+                    local dist = (root.Position - targetPart.Position).Magnitude
+                    if dist < minDistance then
+                        minDistance = dist
+                        closestEnemy = enemy
+                        closestRoot = targetPart
+                    end
                 end
             end
         end
     end
-    return closest
+
+    return closestEnemy, closestRoot
 end
 
--- Localiza o teleporte exato (Workspace.Game.Teleports.[Teleport].HitBox)
 local function getActiveTeleport()
+    if tick() < teleportCooldown then
+        return nil, math.huge
+    end
+
+    local _, root = getCharacter()
+    if not root then return nil, math.huge end
+
     local gameFolder = workspace:FindFirstChild("Game")
-    if not gameFolder then return nil end
+    local teleportsFolder = gameFolder and gameFolder:FindFirstChild("Teleports")
 
-    local teleportsFolder = gameFolder:FindFirstChild("Teleports")
-    if not teleportsFolder then return nil end
+    if teleportsFolder then
+        local closestHitbox = nil
+        local minDistance = math.huge
 
-    local bestHitbox = nil
-    local minDistance = math.huge
-
-    for _, teleportObj in ipairs(teleportsFolder:GetChildren()) do
-        -- Busca a peça HitBox dentro de cada Teleport
-        local hitbox = teleportObj:FindFirstChild("HitBox") or (teleportObj:IsA("BasePart") and teleportObj.Name == "HitBox" and teleportObj)
-        
-        if hitbox and hitbox:IsA("BasePart") then
-            local dist = (rootPart.Position - hitbox.Position).Magnitude
-            if dist < minDistance then
-                minDistance = dist
-                bestHitbox = hitbox
+        for _, teleportObj in ipairs(teleportsFolder:GetChildren()) do
+            local hitbox = teleportObj:FindFirstChild("HitBox") or (teleportObj:IsA("BasePart") and teleportObj.Name == "HitBox" and teleportObj)
+            
+            if hitbox and hitbox:IsA("BasePart") and not usedTeleports[hitbox] then
+                local dist = (root.Position - hitbox.Position).Magnitude
+                if dist < minDistance then
+                    minDistance = dist
+                    closestHitbox = hitbox
+                end
             end
         end
+
+        return closestHitbox, minDistance
     end
 
-    return bestHitbox
+    return nil, math.huge
 end
 
--- Mecânica de Ataque
-local function performAttack()
-    local tool = character:FindFirstChildOfClass("Tool")
-    if tool then tool:Activate() end
+local function getDynamicHotbar()
+    local pguiRef = player:FindFirstChild("PlayerGui")
+    if not pguiRef then return nil end
 
-    VirtualUser:CaptureController()
-    VirtualUser:Button1Down(Vector2.new(0, 0))
-    task.wait(0.02)
-    VirtualUser:Button1Up(Vector2.new(0, 0))
+    local mainGui = pguiRef:FindFirstChild("Main")
+    if mainGui and mainGui:FindFirstChild("FrontFrame") and mainGui.FrontFrame:FindFirstChild("Hotbar") then
+        return mainGui.FrontFrame.Hotbar:FindFirstChild("List") or mainGui.FrontFrame.Hotbar
+    end
+    return nil
+end
 
-    for _, remote in ipairs(game:GetDescendants()) do
-        if (remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction")) and string.lower(remote.Name):find("attack") then
-            pcall(function()
-                if remote:IsA("RemoteEvent") then remote:FireServer() end
-            end)
-        end
+local function executeNativeAttack()
+    if isDungeonEnded then return end
+    comboIndex = (comboIndex % 4) + 1
+    local weapon = getWeaponName()
+
+    if not attackRemote then
+        attackRemote = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Attack")
+    end
+
+    if attackRemote then
+        pcall(function()
+            attackRemote:FireServer("M1", weapon, comboIndex, 0, 0, 2)
+        end)
+    end
+
+    local char = player.Character
+    if char then
+        local tool = char:FindFirstChildOfClass("Tool")
+        if tool then tool:Activate() end
     end
 end
 
--- Loop de Ataque contínuo
 task.spawn(function()
     while true do
-        if Settings.AutoFarm and Settings.AutoAttack and character and humanoid and humanoid.Health > 0 then
-            local enemy = getClosestEnemy()
-            if enemy then
-                performAttack()
+        if Settings.AutoAttack and not isDungeonEnded then
+            local char, _, hum = getCharacter()
+            if char and hum and hum.Health > 0 then
+                executeNativeAttack()
             end
         end
         task.wait(Settings.AttackSpeed)
     end
 end)
 
--- Loop Principal de Lógica: Inimigo -> Teleport HitBox -> Parar
 task.spawn(function()
     while true do
-        if Settings.AutoFarm and rootPart and humanoid and humanoid.Health > 0 then
-            local enemy = getClosestEnemy()
+        if Settings.AutoSkills and not isDungeonEnded then
+            local char, _, hum = getCharacter()
+            if char and hum and hum.Health > 0 then
+                if (tick() - lastSkillUse) >= Settings.SkillCooldown then
+                    lastSkillUse = tick()
+                    local hotbarList = getDynamicHotbar()
+                    if hotbarList then
+                        local spell1 = hotbarList:FindFirstChild("Spell1", true)
+                        local spell2 = hotbarList:FindFirstChild("Spell2", true)
 
-            if enemy then
-                -- 1. Tem inimigo: voa suavemente e posiciona acima dele
-                local enemyHum = enemy:FindFirstChildOfClass("Humanoid")
-                local enemyRoot = enemy:FindFirstChild("HumanoidRootPart") or enemy.PrimaryPart
-                
-                if enemyHum and enemyHum.Health > 0 and enemyRoot then
-                    local abovePos = enemyRoot.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
-                    local targetCFrame = CFrame.new(abovePos, enemyRoot.Position)
-                    smoothFlyTo(targetCFrame)
+                        if spell1 then triggerGuiButton(spell1) end
+                        task.wait(0.08)
+                        if spell2 then triggerGuiButton(spell2) end
+                    end
+                end
+            end
+        end
+        task.wait(0.1)
+    end
+end)
+
+task.spawn(function()
+    while true do
+        if Settings.AutoFarm then
+            local char, root, hum = getCharacter()
+            if char and root and hum and hum.Health > 0 then
+                local ended, playAgainBtn = checkDungeonEnd()
+                if ended then
+                    isDungeonEnded = true
+                    table.clear(usedTeleports)
+                    table.clear(portalHistory)
+                    stopMovement()
+                    
+                    if Settings.AutoPlayAgain and playAgainBtn then
+                        task.wait(0.8)
+                        triggerGuiButton(playAgainBtn)
+                        task.wait(3.0)
+                    end
+                else
+                    isDungeonEnded = false
+
+                    if Settings.AutoEngage and checkAndClickEngageButton() then
+                        task.wait(1.0)
+                    end
+
+                    if Settings.AutoStart and checkAndClickStartButton() then
+                        stopMovement()
+                        task.wait(3.0)
+                    end
+
+                    local enemy, enemyRoot = getClosestEnemyInCurrentRoom()
+
+                    if enemy and enemyRoot then
+                        while Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyRoot.Parent do
+                            local enemyHum = enemy:FindFirstChildOfClass("Humanoid")
+                            if enemyHum and enemyHum.Health <= 0 then break end
+
+                            local _, currentRoot = getCharacter()
+                            if not currentRoot then break end
+
+                            local abovePos = enemyRoot.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
+                            local targetCFrame = CFrame.new(abovePos, enemyRoot.Position)
+                            smoothFlyTo(targetCFrame)
+                            task.wait(0.05)
+                        end
+                    else
+                        local teleportHitbox, teleportDist = getActiveTeleport()
+                        if teleportHitbox then
+                            smoothFlyTo(teleportHitbox.CFrame)
+                            if teleportDist <= 6 then
+                                usedTeleports[teleportHitbox] = true
+                                table.insert(portalHistory, teleportHitbox)
+                                teleportCooldown = tick() + 3.0
+                                stopMovement()
+                                task.wait(1.2)
+                            end
+                        else
+                            stopMovement()
+                        end
+                    end
                 end
             else
-                -- 2. Não tem inimigo: busca o teleporte exato (Workspace.Game.Teleports)
-                local teleportHitbox = getActiveTeleport()
-                if teleportHitbox then
-                    -- Voa até o centro da HitBox do portal para acionar o teleporte
-                    smoothFlyTo(teleportHitbox.CFrame)
-                else
-                    -- 3. Não tem monstro nem teleporte: FICA 100% PARADO
-                    stopMovement()
-                end
+                stopMovement()
             end
         else
             stopMovement()
         end
-        task.wait(0.15)
+        task.wait(0.05)
     end
 end)
 
--- Interface Fluent Compacta
+toggleNoclip(Settings.AutoFarm)
+
 local Window = Fluent:CreateWindow({
-    Title = "IBdihP Hub",
+    Title = "Hub dos Rapazes",
     SubTitle = "Anime Dungeons",
-    TabWidth = 90,
-    Size = UDim2.fromOffset(360, 250),
+    TabWidth = 140,
+    Size = UDim2.fromOffset(520, 360),
     Acrylic = false,
     Theme = "Dark",
     MinimizeKey = Enum.KeyCode.RightControl
@@ -211,60 +447,74 @@ local Window = Fluent:CreateWindow({
 
 local Tabs = {
     Farm = Window:AddTab({ Title = "Farm", Icon = "crosshair" }),
-    Info = Window:AddTab({ Title = "Info", Icon = "info" }),
     Settings = Window:AddTab({ Title = "Settings", Icon = "settings" })
 }
 
--- Botão Flutuante Quadrado (Minimizar / Restaurar)
 local toggleGui = Instance.new("ScreenGui")
-local floatBtn = Instance.new("TextButton")
-local uiCorner = Instance.new("UICorner")
-local uiStroke = Instance.new("UIStroke")
-
-toggleGui.Name = "IBdihP_ToggleBtn"
+toggleGui.Name = "IBdihP_PersistentToggle"
 toggleGui.ResetOnSpawn = false
+toggleGui.DisplayOrder = 999999
+toggleGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
 pcall(function() toggleGui.Parent = CoreGui end)
 if not toggleGui.Parent then toggleGui.Parent = player:WaitForChild("PlayerGui") end
 
+local floatBtn = Instance.new("TextButton")
 floatBtn.Name = "FloatButton"
 floatBtn.Parent = toggleGui
-floatBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-floatBtn.Position = UDim2.new(0.02, 0, 0.45, 0)
-floatBtn.Size = UDim2.new(0, 40, 0, 40)
+floatBtn.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+floatBtn.Position = UDim2.new(0.02, 0, 0.35, 0)
+floatBtn.Size = UDim2.new(0, 48, 0, 48)
 floatBtn.Text = "HUB"
-floatBtn.TextColor3 = Color3.fromRGB(0, 255, 150)
-floatBtn.TextSize = 11
+floatBtn.TextColor3 = Color3.fromRGB(0, 255, 170)
+floatBtn.TextSize = 12
 floatBtn.Font = Enum.Font.GothamBold
 floatBtn.Active = true
 floatBtn.Draggable = true
 floatBtn.Visible = false
 
-uiCorner.CornerRadius = UDim.new(0, 8)
-uiCorner.Parent = floatBtn
-uiStroke.Color = Color3.fromRGB(0, 255, 150)
-uiStroke.Thickness = 1.2
+local uiCorner = Instance.new("UICorner", floatBtn)
+uiCorner.CornerRadius = UDim.new(0, 10)
+
+local uiStroke = Instance.new("UIStroke", floatBtn)
+uiStroke.Color = Color3.fromRGB(0, 255, 170)
+uiStroke.Thickness = 1.6
 uiStroke.Parent = floatBtn
 
-floatBtn.MouseButton1Click:Connect(function()
-    Window:Minimize()
-    floatBtn.Visible = false
-end)
-
-if Window.Frame then
-    Window.Frame:GetPropertyChangedSignal("Visible"):Connect(function()
-        if not Window.Frame.Visible then
-            floatBtn.Visible = true
+local function toggleUI(show)
+    floatBtn.Visible = not show
+    for _, gui in ipairs({CoreGui, player.PlayerGui}) do
+        for _, child in ipairs(gui:GetChildren()) do
+            if child:IsA("ScreenGui") and child ~= toggleGui and (child.Name:find("Fluent") or child.Name:find("ScreenGui")) then
+                child.Enabled = show
+            end
         end
-    end)
+    end
 end
 
--- Seção de Farm
-local FarmSection = Tabs.Farm:AddSection("Auto Farm")
+floatBtn.MouseButton1Click:Connect(function()
+    toggleUI(true)
+end)
+
+task.spawn(function()
+    task.wait(0.8)
+    for _, gui in ipairs({CoreGui, player.PlayerGui}) do
+        for _, btn in ipairs(gui:GetDescendants()) do
+            if (btn:IsA("ImageButton") or btn:IsA("TextButton")) and (btn.Name:lower():find("min") or btn.Name:lower():find("close")) then
+                btn.MouseButton1Click:Connect(function()
+                    toggleUI(false)
+                end)
+            end
+        end
+    end
+end)
+
+local FarmSection = Tabs.Farm:AddSection("Auto Farm & Combate")
 
 FarmSection:AddToggle("AutoFarmEnemies", {
     Title = "Auto Farm Enemies",
-    Description = "Inimigos -> Teleports.HitBox -> Parar",
-    Default = false,
+    Description = "Start -> Farm -> Portal -> Auto Replay",
+    Default = true,
     Callback = function(Value)
         Settings.AutoFarm = Value
         toggleNoclip(Value)
@@ -274,20 +524,79 @@ FarmSection:AddToggle("AutoFarmEnemies", {
     end
 })
 
+FarmSection:AddToggle("AutoEngageToggle", {
+    Title = "Auto Engage (Boss Secreto)",
+    Description = "Clica automaticamente no botão Engage",
+    Default = true,
+    Callback = function(Value)
+        Settings.AutoEngage = Value
+    end
+})
+
+FarmSection:AddToggle("AutoPlayAgainToggle", {
+    Title = "Auto Play Again",
+    Description = "Clica em Jogar Novamente e persiste entre partidas",
+    Default = true,
+    Callback = function(Value)
+        Settings.AutoPlayAgain = Value
+    end
+})
+
+FarmSection:AddToggle("AutoStartToggle", {
+    Title = "Auto Start Dungeon",
+    Description = "Aperta 'Start' e aguarda 3s automaticamente",
+    Default = true,
+    Callback = function(Value)
+        Settings.AutoStart = Value
+    end
+})
+
 FarmSection:AddToggle("AutoAttackToggle", {
-    Title = "Auto Attack",
+    Title = "Auto Attack (Remote Nativo)",
+    Description = "Dispara os ataques M1 continuamente",
     Default = true,
     Callback = function(Value)
         Settings.AutoAttack = Value
     end
 })
 
+FarmSection:AddToggle("AutoSkillsToggle", {
+    Title = "Auto Skills (Spell1 & Spell2)",
+    Description = "Dispara automaticamente Spell1 e Spell2",
+    Default = true,
+    Callback = function(Value)
+        Settings.AutoSkills = Value
+    end
+})
+
+FarmSection:AddSlider("AttackSpeedSlider", {
+    Title = "Velocidade do Ataque (segundos)",
+    Default = 0.15,
+    Min = 0.04,
+    Max = 0.35,
+    Rounding = 2,
+    Callback = function(Value)
+        Settings.AttackSpeed = Value
+    end
+})
+
+FarmSection:AddSlider("SkillCooldownSlider", {
+    Title = "Intervalo das Skills (segundos)",
+    Default = 0.8,
+    Min = 0.2,
+    Max = 4,
+    Rounding = 1,
+    Callback = function(Value)
+        Settings.SkillCooldown = Value
+    end
+})
+
 FarmSection:AddSlider("HeightAboveEnemy", {
     Title = "Altura acima do Inimigo",
-    Default = 8,
-    Min = 2,
-    Max = 30,
-    Rounding = 0,
+    Default = 9.0,
+    Min = 1,
+    Max = 20,
+    Rounding = 1,
     Callback = function(Value)
         Settings.HeightAboveEnemy = Value
     end
@@ -295,35 +604,12 @@ FarmSection:AddSlider("HeightAboveEnemy", {
 
 FarmSection:AddSlider("TweenSpeed", {
     Title = "Velocidade do Voo",
-    Default = 50,
-    Min = 15,
-    Max = 150,
+    Default = 90,
+    Min = 20,
+    Max = 160,
     Rounding = 0,
     Callback = function(Value)
         Settings.TweenSpeed = Value
-    end
-})
-
--- Seção Info
-local InfoSection = Tabs.Info:AddSection("Ajustes")
-
-InfoSection:AddSlider("UIScaleSlider", {
-    Title = "Escala da UI (%)",
-    Default = 80,
-    Min = 50,
-    Max = 120,
-    Rounding = 0,
-    Callback = function(Value)
-        local scale = Value / 100
-        Window:SetSize(UDim2.fromOffset(math.floor(400 * scale), math.floor(280 * scale)))
-    end
-})
-
-InfoSection:AddButton({
-    Title = "Minimizar para Botão Flutuante",
-    Callback = function()
-        Window:Minimize()
-        floatBtn.Visible = true
     end
 })
 
