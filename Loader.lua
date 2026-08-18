@@ -1,5 +1,5 @@
 -- ====================================================================
--- 1. TRAVA DE INSTÂNCIA ÚNICA
+-- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA (Impede duplicatas na tela)
 -- ====================================================================
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
@@ -13,6 +13,7 @@ local singletonTag = Instance.new("Folder")
 singletonTag.Name = UNIQUE_ID
 pcall(function() singletonTag.Parent = CoreGui end)
 
+-- Limpeza preventiva de interfaces antigas
 for _, gui in ipairs({CoreGui, Players.LocalPlayer and Players.LocalPlayer:FindFirstChild("PlayerGui")}) do
     if gui then
         for _, child in ipairs(gui:GetChildren()) do
@@ -24,7 +25,7 @@ for _, gui in ipairs({CoreGui, Players.LocalPlayer and Players.LocalPlayer:FindF
 end
 
 -- ====================================================================
--- 2. REEXECUÇÃO AUTOMÁTICA
+-- 2. REEXECUÇÃO AUTOMÁTICA INFINITA (Delta / Mobile)
 -- ====================================================================
 local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Loader.lua"
 
@@ -215,9 +216,11 @@ local function triggerGuiButton(btn)
         for _, c in ipairs(getconnections(btn.Activated)) do pcall(function() c:Fire() end) end
         for _, c in ipairs(getconnections(btn.MouseButton1Click)) do pcall(function() c:Fire() end) end
         for _, c in ipairs(getconnections(btn.MouseButton1Down)) do pcall(function() c:Fire() end) end
+        for _, c in ipairs(getconnections(btn.MouseButton1Up)) do pcall(function() c:Fire() end) end
     end
 end
 
+-- Detecção Direta do Botão Engage (Main.VirusFrame.Warning.Buttons.Confirm)
 local function checkAndClickEngageButton()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef then return false end
@@ -417,6 +420,7 @@ task.spawn(function()
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 
+                -- Checagem contínua do Confirm do VirusFrame (Engage)
                 if Settings.AutoEngage then
                     checkAndClickEngageButton()
                 end
