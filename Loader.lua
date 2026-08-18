@@ -90,6 +90,24 @@ task.spawn(function()
     end
 end)
 
+-- Arma detectada padrão inicial
+local activeWeaponName = "GiantFrozenBeast"
+
+-- SPY passivo seguro para capturar caso troque de arma
+pcall(function()
+    local rawNamecall
+    rawNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+        local method = getnamecallmethod()
+        local args = {...}
+        if (method == "FireServer" or method == "fireServer") and tostring(self.Name):lower() == "attack" then
+            if args[1] == "M1" and args[2] and typeof(args[2]) == "string" and args[2] ~= "" then
+                activeWeaponName = args[2]
+            end
+        end
+        return rawNamecall(self, ...)
+    end))
+end)
+
 local Settings = {
     AutoFarm = true,
     AutoAttack = true,
@@ -114,7 +132,6 @@ local teleportCooldown = 0
 local lastSkillUse = 0
 local comboIndex = 1
 local isDungeonEnded = false
-local currentWeaponName = "GiantFrozenBeast"
 
 local function getCharacter()
     local char = player.Character
@@ -137,43 +154,31 @@ local function stopMovement()
     end
 end
 
--- LEITURA E EXECUÇÃO DIRETA DO ATTACKHANDLER
-local function performNativeAttack()
+-- Detecção direta e sem travas da arma no personagem
+local function getActiveWeapon()
     local char = player.Character
-    if not char then return end
+    if char then
+        local tool = char:FindFirstChildOfClass("Tool")
+        if tool and tool.Name ~= "" then
+            activeWeaponName = tool.Name
+            return tool.Name
+        end
 
-    -- 1. Executa via AttackHandler nativo
-    local attackHandler = char:FindFirstChild("AttackHandler")
-    if attackHandler and getsenv then
-        local success, env = pcall(function() return getsenv(attackHandler) end)
-        if success and env then
-            -- Tenta atualizar a arma ativa do script
-            if env.CurrentWeapon or env.Weapon or env.EquippedWeapon then
-                currentWeaponName = tostring(env.CurrentWeapon or env.Weapon or env.EquippedWeapon)
-            end
-
-            -- Invoca a função interna de ataque
-            if env.Attack or env.attack or env.AttackM1 or env.M1 then
-                pcall(function()
-                    local fn = env.Attack or env.attack or env.AttackM1 or env.M1
-                    fn()
-                end)
-                return
+        local ignored = {"armor", "headband", "helmet", "aura", "title", "ring", "wing", "cape", "costume", "hair"}
+        for _, child in ipairs(char:GetChildren()) do
+            if child:IsA("Model") and child.Name ~= "Animate" and not Players:GetPlayerFromCharacter(child) then
+                local isBad = false
+                for _, word in ipairs(ignored) do
+                    if child.Name:lower():find(word) then isBad = true; break end
+                end
+                if not isBad then
+                    activeWeaponName = child.Name
+                    return child.Name
+                end
             end
         end
     end
-
-    -- 2. Fallback via Remote nativo com a arma detectada
-    comboIndex = (comboIndex % 4) + 1
-    if not attackRemote then
-        attackRemote = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Attack")
-    end
-
-    if attackRemote then
-        pcall(function()
-            attackRemote:FireServer("M1", currentWeaponName, comboIndex, 0, 0, 2)
-        end)
-    end
+    return activeWeaponName or "GiantFrozenBeast"
 end
 
 player.CharacterAdded:Connect(function()
@@ -381,6 +386,31 @@ local function getDynamicHotbar()
     return nil
 end
 
+-- Ataque Nativo Direto e Sem Travas
+local function executeNativeAttack()
+    if isDungeonEnded then return end
+    comboIndex = (comboIndex % 4) + 1
+    local weapon = getActiveWeapon()
+
+    if not attackRemote then
+        attackRemote = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Attack")
+    end
+
+    if attackRemote then
+        pcall(function()
+            attackRemote:FireServer("M1", weapon, comboIndex, 0, 0, 2)
+        end)
+    end
+
+    local char = player.Character
+    if char then
+        local tool = char:FindFirstChildOfClass("Tool")
+        if tool then
+            pcall(function() tool:Activate() end)
+        end
+    end
+end
+
 local function farmTarget(enemy, enemyRoot)
     while Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyRoot.Parent do
         local enemyHum = enemy:FindFirstChildOfClass("Humanoid")
@@ -396,13 +426,13 @@ local function farmTarget(enemy, enemyRoot)
     end
 end
 
--- Loop de Ataque
+-- Loop de Ataque Automático
 task.spawn(function()
     while true do
         if Settings.AutoAttack and not isDungeonEnded then
             local char, _, hum = getCharacter()
             if char and hum and hum.Health > 0 then
-                performNativeAttack()
+                executeNativeAttack()
             end
         end
         task.wait(Settings.AttackSpeed)
@@ -603,6 +633,17 @@ FarmSection:AddToggle("AutoFarmEnemies", {
         toggleNoclip(Value)
         if not Value then
             stopMovement()
+        end
+    end
+})
+
+FarmSection:AddInput("ManualWeaponInput", {
+    Title = "Nome da Arma Ativa",
+    Default = activeWeaponName,
+    Placeholder = "Ex: GiantFrozenBeast, WaterKatana",
+    Callback = function(Value)
+        if Value and Value ~= "" then
+            activeWeaponName = Value
         end
     end
 })
