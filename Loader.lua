@@ -118,8 +118,7 @@ local Settings = {
     SkillCooldown = 0.8,
     HeightAboveEnemy = 9.0,
     TweenSpeed = 95,
-    AttackSpeed = 0.18,
-    ImmediatePortalRadius = 45 -- Se houver portal até essa distância, entra antes de voar longe
+    AttackSpeed = 0.18
 }
 
 local currentTween = nil
@@ -309,10 +308,29 @@ local function checkAndClickStartButton()
     return false
 end
 
+-- LEITURA DO CONTADOR DE INIMIGOS DA INTERFACE
+local function getEnemyCountFromUI()
+    local pguiRef = player:FindFirstChild("PlayerGui")
+    local main = pguiRef and pguiRef:FindFirstChild("Main")
+    local dFrame = main and main:FindFirstChild("DungeonFrame")
+    local sHolder = dFrame and dFrame:FindFirstChild("StatsHolder")
+    local enemiesFrame = sHolder and sHolder:FindFirstChild("Enemies")
+    local amountLabel = enemiesFrame and enemiesFrame:FindFirstChild("Amount")
+
+    if amountLabel and amountLabel:IsA("TextLabel") and dFrame.Visible then
+        local rawText = amountLabel.Text:gsub("%D", "")
+        local count = tonumber(rawText)
+        if count then
+            return count
+        end
+    end
+    return nil
+end
+
 -- BUSCA DO INIMIGO MAIS PRÓXIMO
 local function getClosestEnemy()
     local _, root = getCharacter()
-    if not root then return nil, nil, math.huge end
+    if not root then return nil, nil end
 
     local closestEnemy, closestRoot = nil, nil
     local minDistance = math.huge
@@ -350,7 +368,7 @@ local function getClosestEnemy()
         end
     end
 
-    return closestEnemy, closestRoot, minDistance
+    return closestEnemy, closestRoot
 end
 
 -- BUSCA DE PORTAIS / DOORBORDERS
@@ -471,7 +489,7 @@ task.spawn(function()
     end
 end)
 
--- LOOP PRINCIPAL: DECISÃO CORRIGIDA
+-- LOOP PRINCIPAL BASEADO NO CONTADOR DE INIMIGOS
 task.spawn(function()
     while true do
         if Settings.AutoFarm then
@@ -519,34 +537,31 @@ task.spawn(function()
                         task.wait(3.0)
                     end
 
-                    local enemy, enemyRoot, enemyDist = getClosestEnemy()
-                    local teleportHitbox, teleportDist = getActiveTeleport()
+                    local uiEnemyCount = getEnemyCountFromUI()
+                    local enemy, enemyRoot = getClosestEnemy()
 
-                    -- 1. Se há um portal/porta bem próximo (até 45 studs), entra nele imediatamente
-                    if teleportHitbox and teleportDist <= Settings.ImmediatePortalRadius then
-                        smoothFlyTo(teleportHitbox.CFrame)
-                        if teleportDist <= 6 then
-                            usedTeleports[teleportHitbox] = true
-                            table.insert(portalHistory, teleportHitbox)
-                            teleportCooldown = tick() + 3.0
+                    -- SE HOUVER INIMIGOS NO CONTADOR OU NO MAPA: COMBATE TOTAL
+                    if (uiEnemyCount and uiEnemyCount > 0) or (enemy and enemyRoot) then
+                        if enemy and enemyRoot then
+                            farmTarget(enemy, enemyRoot)
+                        else
                             stopMovement()
-                            task.wait(1.0)
-                        end
-                    -- 2. Senão, se existirem inimigos vivos, ataca o mais próximo
-                    elseif enemy and enemyRoot then
-                        farmTarget(enemy, enemyRoot)
-                    -- 3. Se não há inimigos na sala, procura qualquer portal no mapa
-                    elseif teleportHitbox then
-                        smoothFlyTo(teleportHitbox.CFrame)
-                        if teleportDist <= 6 then
-                            usedTeleports[teleportHitbox] = true
-                            table.insert(portalHistory, teleportHitbox)
-                            teleportCooldown = tick() + 3.0
-                            stopMovement()
-                            task.wait(1.0)
                         end
                     else
-                        stopMovement()
+                        -- SALA ZERADA (0 INIMIGOS): AVANÇA PARA O PORTAL/PORTA
+                        local teleportHitbox, teleportDist = getActiveTeleport()
+                        if teleportHitbox then
+                            smoothFlyTo(teleportHitbox.CFrame)
+                            if teleportDist <= 6 then
+                                usedTeleports[teleportHitbox] = true
+                                table.insert(portalHistory, teleportHitbox)
+                                teleportCooldown = tick() + 3.0
+                                stopMovement()
+                                task.wait(1.0)
+                            end
+                        else
+                            stopMovement()
+                        end
                     end
                 end
             else
