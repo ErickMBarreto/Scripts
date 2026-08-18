@@ -228,8 +228,11 @@ local function smoothFlyTo(targetCFrame)
     currentTween:Play()
 end
 
+-- CLIQUE ROBUSTO COM COORDENADAS FÍSICAS (FUNCIONA 100% NO MOBILE/DELTA)
 local function triggerGuiButton(btn)
     if not btn or not btn.Parent or not isScriptRunning then return end
+    
+    -- 1. Dispara conexões diretas
     if firesignal then
         pcall(function() firesignal(btn.Activated) end)
         pcall(function() firesignal(btn.MouseButton1Click) end)
@@ -242,6 +245,17 @@ local function triggerGuiButton(btn)
         for _, c in ipairs(getconnections(btn.MouseButton1Down)) do pcall(function() c:Fire() end) end
         for _, c in ipairs(getconnections(btn.MouseButton1Up)) do pcall(function() c:Fire() end) end
     end
+
+    -- 2. Clique físico via VirtualInputManager na posição absoluta do botão
+    pcall(function()
+        local pos = btn.AbsolutePosition
+        local size = btn.AbsoluteSize
+        local centerX = pos.X + (size.X / 2)
+        local centerY = pos.Y + (size.Y / 2)
+        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, true, game, 1)
+        task.wait(0.05)
+        VirtualInputManager:SendMouseButtonEvent(centerX, centerY, 0, false, game, 1)
+    end)
 end
 
 local function pressKey(keyCode)
@@ -423,7 +437,6 @@ local function getClosestLocalEnemy()
     return closestEnemy, closestPart
 end
 
--- Pega o Portal (Teleport1 ou Teleport2)
 local function getPortalPart(portalName)
     local gameFolder = workspace:FindFirstChild("Game")
     local teleportsFolder = (gameFolder and gameFolder:FindFirstChild("Teleports")) or workspace:FindFirstChild("Teleports")
@@ -445,8 +458,37 @@ local function getPortalPart(portalName)
 end
 
 -- ====================================================================
--- 8. CONTROLES DE INTERFACE (ENGAGE, START, REPLAY)
+-- 8. CONTROLES DE INTERFACE (AUTO START ROBUSTO, ENGAGE, REPLAY)
 -- ====================================================================
+local function findStartButton()
+    local pguiRef = player:FindFirstChild("PlayerGui")
+    if not pguiRef then return nil end
+
+    -- 1. Procura na estrutura padrão (Main.DungeonFrame)
+    local main = pguiRef:FindFirstChild("Main")
+    local df = main and main:FindFirstChild("DungeonFrame")
+    if df and df.Visible then
+        local start = df:FindFirstChild("Start") or df:FindFirstChild("Play")
+        if start and start:IsA("GuiObject") and start.Visible then
+            return start
+        end
+    end
+
+    -- 2. Varredura recursiva por botões com texto de início
+    for _, btn in ipairs(pguiRef:GetDescendants()) do
+        if (btn:IsA("TextButton") or btn:IsA("ImageButton")) and btn.Visible then
+            local txt = btn:IsA("TextButton") and btn.Text:lower() or btn.Name:lower()
+            if txt:find("start") or txt:find("começar") or txt:find("iniciar") or txt == "play" then
+                if not txt:find("again") then -- Não confunde com Play Again
+                    return btn
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
 local function checkAndClickEngageButton()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef or not isScriptRunning then return false end
@@ -491,25 +533,6 @@ local function checkDungeonEnd()
     return false, nil
 end
 
-local function handleDungeonStart()
-    local pguiRef = player:FindFirstChild("PlayerGui")
-    if not pguiRef or not isScriptRunning then return false end
-
-    local main = pguiRef:FindFirstChild("Main")
-    local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
-    
-    if dungeonFrame and dungeonFrame.Visible then
-        local startBtn = dungeonFrame:FindFirstChild("Start") or dungeonFrame:FindFirstChild("Play")
-        if startBtn and startBtn:IsA("GuiObject") and startBtn.Visible then
-            triggerGuiButton(startBtn)
-            task.wait(Settings.StartWaitTime)
-            dungeonReady = true
-            return true
-        end
-    end
-    return false
-end
-
 -- ====================================================================
 -- 9. TRAVA E EXECUÇÃO DE COMBATE
 -- ====================================================================
@@ -517,6 +540,7 @@ local function isPortalTransitionActive()
     local wave = getCurrentWaveNumber()
     local localEnemies = getLocalLivingEnemies()
 
+    if not dungeonReady then return true end
     if needsBossReturn then return true end
     if not passedPortal1 and (wave >= 8 or #localEnemies == 0) then return true end
     if passedPortal1 and not passedPortal2 and (wave >= 12 or #localEnemies == 0) then return true end
@@ -596,7 +620,7 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINA DE ESTADOS DA FASE BLEACH (VOO DIRETO AO PORTAL)
+-- 10. MÁQUINA DE ESTADOS DA FASE BLEACH
 -- ====================================================================
 local function flyToPortalLocation(portalPart)
     local char, root = getCharacter()
@@ -605,14 +629,12 @@ local function flyToPortalLocation(portalPart)
     local initialPos = root.Position
     local dist = (root.Position - portalPart.Position).Magnitude
 
-    -- Voa em direção ao portal
     smoothFlyTo(portalPart.CFrame)
 
-    -- Ao chegar a menos de 15 studs, o jogo já aciona o TP por proximidade
     if dist <= 15 then
         task.wait(0.3)
         if (root.Position - initialPos).Magnitude > 30 then
-            return true -- Confirmou o teleporte
+            return true
         end
     end
     return false
@@ -684,7 +706,7 @@ local function runBleachPhaseFlow()
     end
 end
 
--- Loop Principal
+-- LOOP PRINCIPAL COM ROTINA DE START GARANTIDA
 task.spawn(function()
     while isScriptRunning do
         if Settings.AutoFarm then
@@ -713,15 +735,20 @@ task.spawn(function()
                 else
                     isDungeonEnded = false
 
+                    -- ROTINA DE AUTO START ROBUSTA
                     if not dungeonReady then
-                        if Settings.AutoStart and handleDungeonStart() then
-                            stopMovement()
-                        else
-                            local pguiRef = player:FindFirstChild("PlayerGui")
-                            local df = pguiRef and pguiRef:FindFirstChild("Main") and pguiRef.Main:FindFirstChild("DungeonFrame")
-                            if not df or not df.Visible or not df:FindFirstChild("Start") or not df.Start.Visible then
+                        stopMovement()
+                        if Settings.AutoStart then
+                            local startBtn = findStartButton()
+                            if startBtn then
+                                triggerGuiButton(startBtn)
+                                task.wait(Settings.StartWaitTime)
+                            else
+                                -- Se não há botão de Start visível, a fase já iniciou
                                 dungeonReady = true
                             end
+                        else
+                            dungeonReady = true
                         end
                         task.wait(0.2)
                     else
