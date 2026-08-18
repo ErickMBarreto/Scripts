@@ -1,3 +1,28 @@
+-- ====================================================================
+-- TRAVA DE INSTÂNCIA ÚNICA (Impede abrir mais de 1 script na tela)
+-- ====================================================================
+if getgenv().HubRapazesLoaded then
+    return
+end
+getgenv().HubRapazesLoaded = true
+
+-- ====================================================================
+-- AUTO-REEXECUÇÃO INFINITA
+-- ====================================================================
+local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Loader.lua"
+
+local queue = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or queueonteleport
+if queue then
+    pcall(function()
+        queue(string.format([[
+            getgenv().HubRapazesLoaded = nil
+            repeat task.wait(0.5) until game:IsLoaded() and game.Players.LocalPlayer
+            task.wait(1.5)
+            loadstring(game:HttpGet("%s"))()
+        ]], scriptURL))
+    end)
+end
+
 -- Espera o jogo carregar completamente
 if not game:IsLoaded() then
     game.Loaded:Wait()
@@ -24,7 +49,19 @@ for i = 1, 10 do
     task.wait(0.5)
 end
 
-if not inDungeon then return end
+if not inDungeon then 
+    getgenv().HubRapazesLoaded = nil
+    return 
+end
+
+-- Limpa GUIs antigas duplicadas caso ainda existam na tela
+for _, oldGui in ipairs({game:GetService("CoreGui"), pgui}) do
+    for _, child in ipairs(oldGui:GetChildren()) do
+        if child.Name == "IBdihP_PersistentToggle" or child.Name:find("Fluent") then
+            pcall(function() child:Destroy() end)
+        end
+    end
+end
 
 -- Carrega a UI Fluent
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
@@ -66,7 +103,6 @@ local teleportCooldown = 0
 local lastSkillUse = 0
 local comboIndex = 1
 local isDungeonEnded = false
-local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Loader.lua"
 
 local function getCharacter()
     local char = player.Character
@@ -172,7 +208,7 @@ local function triggerGuiButton(btn)
     end
 end
 
--- Detecção e Clique Agressivo do Botão Engage!
+-- Detecção do Botão Engage!
 local function checkAndClickEngageButton()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef then return false end
@@ -182,7 +218,6 @@ local function checkAndClickEngageButton()
             local name = obj.Name:lower()
             local text = (obj:IsA("TextButton") and obj.Text:lower()) or ""
             
-            -- Checa também labels filhos caso o botão use imagem com texto por cima
             local childText = ""
             local labelChild = obj:FindFirstChildOfClass("TextLabel")
             if labelChild then
@@ -379,7 +414,6 @@ task.spawn(function()
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 
-                -- Checagem contínua do botão Engage!
                 if Settings.AutoEngage then
                     checkAndClickEngageButton()
                 end
@@ -392,14 +426,6 @@ task.spawn(function()
                     stopMovement()
                     
                     if Settings.AutoPlayAgain and playAgainBtn then
-                        local queue = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or queueonteleport
-                        if queue then
-                            queue(string.format([[
-                                repeat task.wait(0.5) until game:IsLoaded() and game.Players.LocalPlayer
-                                task.wait(2)
-                                loadstring(game:HttpGet("%s"))()
-                            ]], scriptURL))
-                        end
                         task.wait(0.8)
                         triggerGuiButton(playAgainBtn)
                         task.wait(3.0)
