@@ -100,8 +100,8 @@ local Settings = {
     SkillCooldown = 0.8,
     HeightAboveEnemy = 9.0,
     TweenSpeed = 90,
-    AttackSpeed = 0.15,
-    LocalRoomRadius = 80, -- Raio prioritário para limpar a sala atual
+    AttackSpeed = 0.25, -- Velocidade de clique suavizada
+    LocalRoomRadius = 80,
     PortalTriggerDistance = 35
 }
 
@@ -273,7 +273,6 @@ local function checkAndClickStartButton()
     return false
 end
 
--- Busca flexível por raio de distância
 local function getClosestEnemyInRadius(maxDistance)
     local _, root = getCharacter()
     if not root then return nil, nil end
@@ -378,7 +377,6 @@ local function executeNativeAttack()
     end
 end
 
--- Rotina de Farm no Alvo
 local function farmTarget(enemy, enemyRoot)
     while Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyRoot.Parent do
         local enemyHum = enemy:FindFirstChildOfClass("Humanoid")
@@ -394,6 +392,7 @@ local function farmTarget(enemy, enemyRoot)
     end
 end
 
+-- Loop de Ataque com velocidade calibrada
 task.spawn(function()
     while true do
         if Settings.AutoAttack and not isDungeonEnded then
@@ -429,7 +428,6 @@ task.spawn(function()
     end
 end)
 
--- Loop Principal com Busca Híbrida Inteligente e Espera de 2s no Engage
 task.spawn(function()
     while true do
         if Settings.AutoFarm then
@@ -444,7 +442,6 @@ task.spawn(function()
                 if ended then
                     stopMovement()
                     
-                    -- Aguarda 2 segundos verificando se a janela de Engage (VirusFrame) aparece
                     local engaged = false
                     if Settings.AutoEngage then
                         for i = 1, 20 do
@@ -458,7 +455,6 @@ task.spawn(function()
                         end
                     end
                     
-                    -- Se o Engage não apareceu após os 2 segundos, clica em Play Again
                     if not engaged then
                         isDungeonEnded = true
                         table.clear(usedTeleports)
@@ -479,13 +475,11 @@ task.spawn(function()
                         task.wait(3.0)
                     end
 
-                    -- ETAPA 1: Procura primeiro inimigos dentro da sala atual (raio de 80 studs)
                     local localEnemy, localRoot = getClosestEnemyInRadius(Settings.LocalRoomRadius)
 
                     if localEnemy and localRoot then
                         farmTarget(localEnemy, localRoot)
                     else
-                        -- ETAPA 2: Sem monstros locais, procura se há portal aberto no mapa
                         local teleportHitbox, teleportDist = getActiveTeleport()
                         if teleportHitbox then
                             smoothFlyTo(teleportHitbox.CFrame)
@@ -497,7 +491,6 @@ task.spawn(function()
                                 task.wait(1.2)
                             end
                         else
-                            -- ETAPA 3: Sem portais (fase contínua/aberta), expande a busca para qualquer distância
                             local distantEnemy, distantRoot = getClosestEnemyInRadius(math.huge)
                             if distantEnemy and distantRoot then
                                 farmTarget(distantEnemy, distantRoot)
@@ -655,9 +648,9 @@ FarmSection:AddToggle("AutoSkillsToggle", {
 
 FarmSection:AddSlider("AttackSpeedSlider", {
     Title = "Velocidade do Ataque (segundos)",
-    Default = 0.15,
-    Min = 0.04,
-    Max = 0.35,
+    Default = 0.25, -- Slider agora inicia em 0.25s
+    Min = 0.08,
+    Max = 0.50,
     Rounding = 2,
     Callback = function(Value)
         Settings.AttackSpeed = Value
