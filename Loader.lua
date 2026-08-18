@@ -94,8 +94,7 @@ local Settings = {
     SkillMaxDistance = 20,
     HeightAboveEnemy = 9.0,
     TweenSpeed = 90,
-    AttackSpeed = 0.15,
-    LocalFightRadius = 160
+    AttackSpeed = 0.15
 }
 
 local function saveConfig()
@@ -145,6 +144,7 @@ local currentTween = nil
 local noclipConnection = nil
 local charConnection = nil
 
+-- Estados Rígidos por Wave
 local passedPortal1 = false
 local passedPortal2 = false
 local needsBossReturn = false
@@ -228,11 +228,9 @@ local function smoothFlyTo(targetCFrame)
     currentTween:Play()
 end
 
--- CLIQUE ROBUSTO COM COORDENADAS FÍSICAS (FUNCIONA 100% NO MOBILE/DELTA)
 local function triggerGuiButton(btn)
     if not btn or not btn.Parent or not isScriptRunning then return end
     
-    -- 1. Dispara conexões diretas
     if firesignal then
         pcall(function() firesignal(btn.Activated) end)
         pcall(function() firesignal(btn.MouseButton1Click) end)
@@ -246,7 +244,6 @@ local function triggerGuiButton(btn)
         for _, c in ipairs(getconnections(btn.MouseButton1Up)) do pcall(function() c:Fire() end) end
     end
 
-    -- 2. Clique físico via VirtualInputManager na posição absoluta do botão
     pcall(function()
         local pos = btn.AbsolutePosition
         local size = btn.AbsoluteSize
@@ -377,19 +374,24 @@ local function isEntityAlive(obj)
     return getEntityTargetPart(obj) ~= nil
 end
 
-local function getLocalLivingEnemies()
+-- Busca inimigos da área atual permitida
+local function getPermittedLivingEnemies()
     local list = {}
     local char, root = getCharacter()
     if not root then return list end
 
+    local wave = getCurrentWaveNumber()
     local gameFolder = workspace:FindFirstChild("Game")
     local enemiesFolder = (gameFolder and gameFolder:FindFirstChild("Enemies")) or workspace:FindFirstChild("Enemies")
+
+    -- Define o raio máximo de alcance de acordo com o estágio da Wave
+    local maxAllowedDist = (wave <= 7) and 180 or ((wave <= 11) and 240 or 500)
 
     if enemiesFolder then
         for _, enemy in ipairs(enemiesFolder:GetChildren()) do
             if isEntityAlive(enemy) then
                 local part = getEntityTargetPart(enemy)
-                if part and (root.Position - part.Position).Magnitude <= Settings.LocalFightRadius then
+                if part and (root.Position - part.Position).Magnitude <= maxAllowedDist then
                     table.insert(list, enemy)
                 end
             end
@@ -402,7 +404,7 @@ local function getLocalLivingEnemies()
                 if obj.Name:lower():find("enemy") or obj.Name:lower():find("mob") or obj.Name:lower():find("boss") or obj:FindFirstChildOfClass("Humanoid") then
                     if isEntityAlive(obj) then
                         local part = getEntityTargetPart(obj)
-                        if part and (root.Position - part.Position).Magnitude <= Settings.LocalFightRadius then
+                        if part and (root.Position - part.Position).Magnitude <= maxAllowedDist then
                             table.insert(list, obj)
                         end
                     end
@@ -414,11 +416,11 @@ local function getLocalLivingEnemies()
     return list
 end
 
-local function getClosestLocalEnemy()
+local function getClosestPermittedEnemy()
     local _, root = getCharacter()
     if not root then return nil, nil end
 
-    local enemies = getLocalLivingEnemies()
+    local enemies = getPermittedLivingEnemies()
     local closestEnemy, closestPart = nil, nil
     local minDistance = math.huge
 
@@ -458,13 +460,12 @@ local function getPortalPart(portalName)
 end
 
 -- ====================================================================
--- 8. CONTROLES DE INTERFACE (AUTO START ROBUSTO, ENGAGE, REPLAY)
+-- 8. CONTROLES DE INTERFACE (AUTO START, ENGAGE, REPLAY)
 -- ====================================================================
 local function findStartButton()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef then return nil end
 
-    -- 1. Procura na estrutura padrão (Main.DungeonFrame)
     local main = pguiRef:FindFirstChild("Main")
     local df = main and main:FindFirstChild("DungeonFrame")
     if df and df.Visible then
@@ -474,12 +475,11 @@ local function findStartButton()
         end
     end
 
-    -- 2. Varredura recursiva por botões com texto de início
     for _, btn in ipairs(pguiRef:GetDescendants()) do
         if (btn:IsA("TextButton") or btn:IsA("ImageButton")) and btn.Visible then
             local txt = btn:IsA("TextButton") and btn.Text:lower() or btn.Name:lower()
             if txt:find("start") or txt:find("começar") or txt:find("iniciar") or txt == "play" then
-                if not txt:find("again") then -- Não confunde com Play Again
+                if not txt:find("again") then
                     return btn
                 end
             end
@@ -538,12 +538,13 @@ end
 -- ====================================================================
 local function isPortalTransitionActive()
     local wave = getCurrentWaveNumber()
-    local localEnemies = getLocalLivingEnemies()
-
     if not dungeonReady then return true end
     if needsBossReturn then return true end
-    if not passedPortal1 and (wave >= 8 or #localEnemies == 0) then return true end
-    if passedPortal1 and not passedPortal2 and (wave >= 12 or #localEnemies == 0) then return true end
+    
+    -- BLOQUEIO ESTRITO APENAS NA TRANSIÇÃO REAL (WAVE 8+ PARA PORTAL 1 / WAVE 12+ PARA PORTAL 2)
+    if not passedPortal1 and wave >= 8 then return true end
+    if passedPortal1 and not passedPortal2 and wave >= 12 then return true end
+    
     return false
 end
 
@@ -586,7 +587,7 @@ task.spawn(function()
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 if (tick() - lastSkillUse) >= Settings.SkillCooldown then
-                    local _, enemyPart = getClosestLocalEnemy()
+                    local _, enemyPart = getClosestPermittedEnemy()
                     if enemyPart and enemyPart.Parent then
                         local distance = (root.Position - enemyPart.Position).Magnitude
                         if distance <= Settings.SkillMaxDistance then
@@ -641,10 +642,10 @@ local function flyToPortalLocation(portalPart)
 end
 
 local function runBleachPhaseFlow()
-    local localEnemies = getLocalLivingEnemies()
+    local enemies = getPermittedLivingEnemies()
     local wave = getCurrentWaveNumber()
 
-    -- 1. MORTE NO BOSS: Voa direto até o Teleport2 para voltar à sala
+    -- 1. MORTE NO BOSS: Voa direto até o Teleport2
     if needsBossReturn then
         local p2 = getPortalPart("Teleport2")
         if p2 then
@@ -659,8 +660,8 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 2. BLOQUEIO SALA 1: Voa até onde o Teleport1 está
-    if not passedPortal1 and (wave >= 8 or #localEnemies == 0) then
+    -- 2. TRANSIÇÃO SALA 1: Só acontece a partir da WAVE 8 (Wave 7 100% finalizada)
+    if not passedPortal1 and wave >= 8 then
         local p1 = getPortalPart("Teleport1")
         if p1 then
             if flyToPortalLocation(p1) then
@@ -673,8 +674,8 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 3. BLOQUEIO SALA 2: Voa até onde o Teleport2 está
-    if passedPortal1 and not passedPortal2 and (wave >= 12 or #localEnemies == 0) then
+    -- 3. TRANSIÇÃO SALA 2: Só acontece a partir da WAVE 12 (Wave 11 100% finalizada)
+    if passedPortal1 and not passedPortal2 and wave >= 12 then
         local p2 = getPortalPart("Teleport2")
         if p2 then
             if flyToPortalLocation(p2) then
@@ -688,8 +689,8 @@ local function runBleachPhaseFlow()
     end
 
     -- 4. COMBATE NORMAL NA SALA ATUAL
-    if #localEnemies > 0 then
-        local enemy, enemyPart = getClosestLocalEnemy()
+    if #enemies > 0 then
+        local enemy, enemyPart = getClosestPermittedEnemy()
         if enemy and enemyPart then
             while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) and not isPortalTransitionActive() do
                 local _, currentRoot = getCharacter()
@@ -702,11 +703,11 @@ local function runBleachPhaseFlow()
             end
         end
     else
-        stopMovement()
+        stopMovement() -- Flutua aguardando o spawn dos monstros da onda seguinte
     end
 end
 
--- LOOP PRINCIPAL COM ROTINA DE START GARANTIDA
+-- LOOP PRINCIPAL
 task.spawn(function()
     while isScriptRunning do
         if Settings.AutoFarm then
@@ -735,7 +736,6 @@ task.spawn(function()
                 else
                     isDungeonEnded = false
 
-                    -- ROTINA DE AUTO START ROBUSTA
                     if not dungeonReady then
                         stopMovement()
                         if Settings.AutoStart then
@@ -744,7 +744,6 @@ task.spawn(function()
                                 triggerGuiButton(startBtn)
                                 task.wait(Settings.StartWaitTime)
                             else
-                                -- Se não há botão de Start visível, a fase já iniciou
                                 dungeonReady = true
                             end
                         else
