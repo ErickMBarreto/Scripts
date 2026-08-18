@@ -90,23 +90,6 @@ task.spawn(function()
     end
 end)
 
--- Captura dinâmica automática da arma em uso caso você ataque manualmente
-local currentActiveWeapon = "GiantFrozenBeast"
-
-pcall(function()
-    local oldHook
-    oldHook = hookmetamethod(game, "__namecall", function(self, ...)
-        local method = getnamecallmethod()
-        local args = {...}
-        if (method == "FireServer" or method == "fireServer") and tostring(self.Name):lower():find("attack") then
-            if args[1] == "M1" and args[2] and typeof(args[2]) == "string" then
-                currentActiveWeapon = args[2]
-            end
-        end
-        return oldHook(self, ...)
-    end)
-end)
-
 local Settings = {
     AutoFarm = true,
     AutoAttack = true,
@@ -131,6 +114,7 @@ local teleportCooldown = 0
 local lastSkillUse = 0
 local comboIndex = 1
 local isDungeonEnded = false
+local cachedWeapon = "GiantFrozenBeast"
 
 local function getCharacter()
     local char = player.Character
@@ -165,25 +149,55 @@ player.CharacterAdded:Connect(function()
     end
 end)
 
--- Detecta dinamicamente a arma pelo modelo anexado ao Character
+-- DETECTOR DE ARMA POR SOLDA DA MÃO DIREITA + FILTRO DE ARMADURAS
 local function getWeaponName()
     local char = player.Character
-    if char then
-        local tool = char:FindFirstChildOfClass("Tool")
-        if tool and tool.Name ~= "" then
-            return tool.Name
-        end
+    if not char then return cachedWeapon or "GiantFrozenBeast" end
 
-        for _, child in ipairs(char:GetChildren()) do
-            if child:IsA("Model") and child.Name ~= "Animate" and not Players:GetPlayerFromCharacter(child) then
-                if child:FindFirstChild("Handle") or child:FindFirstChildWhichIsA("BasePart") then
-                    return child.Name
+    -- 1. Tool ativa
+    local tool = char:FindFirstChildOfClass("Tool")
+    if tool and tool.Name ~= "" then
+        cachedWeapon = tool.Name
+        return tool.Name
+    end
+
+    local rightHand = char:FindFirstChild("RightHand") or char:FindFirstChild("Right Arm")
+    local ignoredKeywords = {"armor", "headband", "helmet", "aura", "title", "ring", "wing", "cape", "costume", "hair", "cloth", "pants", "shirt", "boots"}
+
+    local function isIgnored(name)
+        local n = name:lower()
+        for _, word in ipairs(ignoredKeywords) do
+            if n:find(word) then return true end
+        end
+        return false
+    end
+
+    -- 2. Busca modelo soldado na MÃO DIREITA
+    if rightHand then
+        for _, joint in ipairs(char:GetDescendants()) do
+            if joint:IsA("JointInstance") or joint:IsA("Weld") or joint:IsA("Motor6D") then
+                if joint.Part0 == rightHand or joint.Part1 == rightHand then
+                    local parentModel = joint:FindFirstAncestorOfClass("Model")
+                    if parentModel and parentModel ~= char and not isIgnored(parentModel.Name) then
+                        cachedWeapon = parentModel.Name
+                        return parentModel.Name
+                    end
                 end
             end
         end
     end
 
-    return currentActiveWeapon or "GiantFrozenBeast"
+    -- 3. Varredura direta dos modelos filhos excluindo cosméticos
+    for _, child in ipairs(char:GetChildren()) do
+        if child:IsA("Model") and child.Name ~= "Animate" and not Players:GetPlayerFromCharacter(child) then
+            if not isIgnored(child.Name) then
+                cachedWeapon = child.Name
+                return child.Name
+            end
+        end
+    end
+
+    return cachedWeapon or "GiantFrozenBeast"
 end
 
 local function toggleNoclip(enable)
