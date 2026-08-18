@@ -1,41 +1,62 @@
 -- ====================================================================
--- TRAVA DE INSTÂNCIA ÚNICA (Impede abrir mais de 1 script na tela)
+-- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA (Impede duplicatas na tela)
 -- ====================================================================
-if getgenv().HubRapazesLoaded then
+local CoreGui = game:GetService("CoreGui")
+local Players = game:GetService("Players")
+
+local UNIQUE_ID = "HubRapazes_Singleton_Tag"
+if CoreGui:FindFirstChild(UNIQUE_ID) then
     return
 end
-getgenv().HubRapazesLoaded = true
+
+local singletonTag = Instance.new("Folder")
+singletonTag.Name = UNIQUE_ID
+pcall(function() singletonTag.Parent = CoreGui end)
+
+-- Limpeza preventiva de interfaces antigas
+for _, gui in ipairs({CoreGui, Players.LocalPlayer and Players.LocalPlayer:FindFirstChild("PlayerGui")}) do
+    if gui then
+        for _, child in ipairs(gui:GetChildren()) do
+            if child.Name == "IBdihP_PersistentToggle" or child.Name:find("Fluent") then
+                pcall(function() child:Destroy() end)
+            end
+        end
+    end
+end
 
 -- ====================================================================
--- AUTO-REEXECUÇÃO INFINITA
+-- 2. REEXECUÇÃO AUTOMÁTICA INFINITA (Delta / Mobile)
 -- ====================================================================
 local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Loader.lua"
 
-local queue = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or queueonteleport
-if queue then
-    pcall(function()
-        queue(string.format([[
-            getgenv().HubRapazesLoaded = nil
-            repeat task.wait(0.5) until game:IsLoaded() and game.Players.LocalPlayer
-            task.wait(1.5)
-            loadstring(game:HttpGet("%s"))()
-        ]], scriptURL))
-    end)
+local function queueNextExecution()
+    local queueFunc = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or queueonteleport
+    if queueFunc then
+        pcall(function()
+            queueFunc(string.format([[
+                repeat task.wait(0.5) until game:IsLoaded() and game.Players.LocalPlayer
+                task.wait(1)
+                loadstring(game:HttpGet("%s"))()
+            ]], scriptURL))
+        end)
+    end
 end
 
--- Espera o jogo carregar completamente
+queueNextExecution()
+
+-- ====================================================================
+-- 3. ESPERA DE CARREGAMENTO E TRAVA DO LOBBY
+-- ====================================================================
 if not game:IsLoaded() then
     game.Loaded:Wait()
 end
 
-local Players = game:GetService("Players")
 local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
 local pgui = player:WaitForChild("PlayerGui", 15)
 
--- Trava de Segurança: Não executa se estiver no Lobby
 local function isInsideDungeon()
     local main = pgui and pgui:FindFirstChild("Main")
-    if main and main:FindFirstChild("DungeonFrame") then return true end
+    if main and (main:FindFirstChild("DungeonFrame") or main:FindFirstChild("VirusFrame")) then return true end
     if workspace:FindFirstChild("Game") and workspace.Game:FindFirstChild("Enemies") then return true end
     return false
 end
@@ -49,27 +70,18 @@ for i = 1, 10 do
     task.wait(0.5)
 end
 
-if not inDungeon then 
-    getgenv().HubRapazesLoaded = nil
-    return 
+if not inDungeon then
+    pcall(function() singletonTag:Destroy() end)
+    return
 end
 
--- Limpa GUIs antigas duplicadas caso ainda existam na tela
-for _, oldGui in ipairs({game:GetService("CoreGui"), pgui}) do
-    for _, child in ipairs(oldGui:GetChildren()) do
-        if child.Name == "IBdihP_PersistentToggle" or child.Name:find("Fluent") then
-            pcall(function() child:Destroy() end)
-        end
-    end
-end
-
--- Carrega a UI Fluent
+-- ====================================================================
+-- 4. FLUXO PRINCIPAL DO HUB DOS RAPAZES
+-- ====================================================================
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
-
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local CoreGui = game:GetService("CoreGui")
 
 local attackRemote = nil
 task.spawn(function()
@@ -208,28 +220,22 @@ local function triggerGuiButton(btn)
     end
 end
 
--- Detecção do Botão Engage!
+-- Detecção Direta do Botão Engage (Main.VirusFrame.Warning.Buttons.Confirm)
 local function checkAndClickEngageButton()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef then return false end
 
-    for _, obj in ipairs(pguiRef:GetDescendants()) do
-        if obj:IsA("GuiObject") and (obj:IsA("TextButton") or obj:IsA("ImageButton")) then
-            local name = obj.Name:lower()
-            local text = (obj:IsA("TextButton") and obj.Text:lower()) or ""
-            
-            local childText = ""
-            local labelChild = obj:FindFirstChildOfClass("TextLabel")
-            if labelChild then
-                childText = labelChild.Text:lower()
-            end
+    local main = pguiRef:FindFirstChild("Main")
+    local virusFrame = main and main:FindFirstChild("VirusFrame")
+    local warning = virusFrame and virusFrame:FindFirstChild("Warning")
+    local buttons = warning and warning:FindFirstChild("Buttons")
+    local confirmBtn = buttons and buttons:FindFirstChild("Confirm")
 
-            if name:find("engage") or text:find("engage") or childText:find("engage") then
-                triggerGuiButton(obj)
-                return true
-            end
-        end
+    if confirmBtn and confirmBtn:IsA("GuiObject") and confirmBtn.Visible and virusFrame.Visible then
+        triggerGuiButton(confirmBtn)
+        return true
     end
+
     return false
 end
 
@@ -414,6 +420,7 @@ task.spawn(function()
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 
+                -- Checagem contínua do Confirm do VirusFrame (Engage)
                 if Settings.AutoEngage then
                     checkAndClickEngageButton()
                 end
@@ -426,6 +433,7 @@ task.spawn(function()
                     stopMovement()
                     
                     if Settings.AutoPlayAgain and playAgainBtn then
+                        queueNextExecution()
                         task.wait(0.8)
                         triggerGuiButton(playAgainBtn)
                         task.wait(3.0)
@@ -571,8 +579,8 @@ FarmSection:AddToggle("AutoFarmEnemies", {
 })
 
 FarmSection:AddToggle("AutoEngageToggle", {
-    Title = "Auto Engage (Boss Secreto)",
-    Description = "Clica automaticamente no botão Engage!",
+    Title = "Auto Engage (Virus Boss)",
+    Description = "Clica automaticamente em Confirm no VirusFrame",
     Default = true,
     Callback = function(Value)
         Settings.AutoEngage = Value
