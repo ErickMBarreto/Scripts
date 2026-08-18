@@ -180,7 +180,7 @@ charConnection = player.CharacterAdded:Connect(function()
     teleportCooldown = 0
     attackRemote = nil
 
-    if passedPortal2 then
+    if Settings.SelectedPhase == "Bleach (Fase 4)" and passedPortal2 then
         passedPortal2 = false
         needsBossReturn = true
     end
@@ -226,7 +226,6 @@ local function smoothFlyTo(targetCFrame)
     currentTween:Play()
 end
 
--- CLIQUE LIMPO (Sem tocar/travar a tela física)
 local function triggerGuiButton(btn)
     if not btn or not btn.Parent or not isScriptRunning then return end
     if firesignal then
@@ -436,7 +435,7 @@ local function getPortalPart(portalName)
 end
 
 -- ====================================================================
--- 8. CONTROLES DE INTERFACE (START, ENGAGE, REPLAY)
+-- 8. CONTROLES DE INTERFACE (PRIORIDADE ENGAGE > PLAY AGAIN)
 -- ====================================================================
 local function checkDungeonStartButton()
     local pguiRef = player:FindFirstChild("PlayerGui")
@@ -480,7 +479,7 @@ end
 
 local function checkDungeonEnd()
     local pguiRef = player:FindFirstChild("PlayerGui")
-    if not pguiRef or not isScriptRunning then return false end
+    if not pguiRef or not isScriptRunning then return false, nil end
 
     local main = pguiRef:FindFirstChild("Main")
     local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
@@ -499,10 +498,12 @@ end
 -- 9. TRAVA E EXECUÇÃO DE COMBATE
 -- ====================================================================
 local function isPortalTransitionActive()
-    local wave = getCurrentWaveNumber()
-    if needsBossReturn then return true end
-    if not passedPortal1 and wave >= 8 then return true end
-    if passedPortal1 and not passedPortal2 and wave >= 12 then return true end
+    if Settings.SelectedPhase == "Bleach (Fase 4)" then
+        local wave = getCurrentWaveNumber()
+        if needsBossReturn then return true end
+        if not passedPortal1 and wave >= 8 then return true end
+        if passedPortal1 and not passedPortal2 and wave >= 12 then return true end
+    end
     return false
 end
 
@@ -579,8 +580,10 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINA DE ESTADOS DA FASE BLEACH
+-- 10. MÁQUINAS DE ESTADOS ISOLADAS POR FASE
 -- ====================================================================
+
+-- 1. FASE BLEACH
 local function flyToPortalLocation(portalPart)
     local char, root = getCharacter()
     if not root or not portalPart then return false end
@@ -603,7 +606,6 @@ local function runBleachPhaseFlow()
     local enemies = getAllLivingEnemies()
     local wave = getCurrentWaveNumber()
 
-    -- 1. MORTE NO BOSS: Voa direto até o Teleport2 para voltar
     if needsBossReturn then
         local p2 = getPortalPart("Teleport2")
         if p2 then
@@ -618,7 +620,6 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 2. TRANSIÇÃO SALA 1: Só aciona quando a Wave for 8 ou mais
     if not passedPortal1 and wave >= 8 then
         local p1 = getPortalPart("Teleport1")
         if p1 then
@@ -632,7 +633,6 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 3. TRANSIÇÃO SALA 2: Só aciona quando a Wave for 12 ou mais
     if passedPortal1 and not passedPortal2 and wave >= 12 then
         local p2 = getPortalPart("Teleport2")
         if p2 then
@@ -646,7 +646,6 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 4. COMBATE NORMAL: Foco no monstro mais próximo
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
@@ -665,7 +664,31 @@ local function runBleachPhaseFlow()
     end
 end
 
--- LOOP PRINCIPAL
+-- 2. FASE INCURSÃO
+local function runIncursionPhaseFlow()
+    local enemies = getAllLivingEnemies()
+
+    if #enemies > 0 then
+        local enemy, enemyPart = getClosestLivingEnemy()
+        if enemy and enemyPart then
+            while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) do
+                local _, currentRoot = getCharacter()
+                if not currentRoot then break end
+
+                local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
+                local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
+                smoothFlyTo(targetCFrame)
+                task.wait(0.05)
+            end
+        end
+    else
+        stopMovement()
+    end
+end
+
+-- ====================================================================
+-- LOOP PRINCIPAL (PRIORIDADE: ENGAGE PRIMEIRO, DEPOIS REPLAY)
+-- ====================================================================
 task.spawn(function()
     while isScriptRunning do
         if Settings.AutoFarm then
@@ -676,28 +699,44 @@ task.spawn(function()
                     checkDungeonStartButton()
                 end
 
+                -- 1. PRIORIDADE MÁXIMA: CHECAGEM DO ENGAGE (VIRUS BOSS)
+                local engaged = false
                 if Settings.AutoEngage then
-                    checkAndClickEngageButton()
+                    engaged = checkAndClickEngageButton()
                 end
 
-                local ended, playAgainBtn = checkDungeonEnd()
-                if ended then
-                    isDungeonEnded = true
-                    passedPortal1 = false
-                    passedPortal2 = false
-                    needsBossReturn = false
-                    stopMovement()
-                    
-                    if Settings.AutoPlayAgain and playAgainBtn then
-                        queueNextExecution()
-                        task.wait(0.8)
-                        triggerGuiButton(playAgainBtn)
-                        task.wait(3.0)
-                    end
-                else
+                -- Se clicou em Engage, espera o Boss nascer e não reinicia a partida
+                if engaged then
                     isDungeonEnded = false
-                    if Settings.SelectedPhase == "Bleach (Fase 4)" then
-                        runBleachPhaseFlow()
+                    task.wait(2.0)
+                else
+                    -- 2. CHECAGEM DO FIM DE PARTIDA (PLAY AGAIN)
+                    local ended, playAgainBtn = checkDungeonEnd()
+                    if ended then
+                        isDungeonEnded = true
+                        passedPortal1 = false
+                        passedPortal2 = false
+                        needsBossReturn = false
+                        stopMovement()
+                        
+                        -- Faz uma última checagem de Engage antes de apertar em Replay
+                        if Settings.AutoEngage and checkAndClickEngageButton() then
+                            isDungeonEnded = false
+                            task.wait(2.0)
+                        elseif Settings.AutoPlayAgain and playAgainBtn then
+                            queueNextExecution()
+                            task.wait(0.8)
+                            triggerGuiButton(playAgainBtn)
+                            task.wait(3.0)
+                        end
+                    else
+                        isDungeonEnded = false
+                        
+                        if Settings.SelectedPhase == "Bleach (Fase 4)" then
+                            runBleachPhaseFlow()
+                        elseif Settings.SelectedPhase == "Incursão" then
+                            runIncursionPhaseFlow()
+                        end
                     end
                 end
             else
@@ -831,7 +870,7 @@ local PhaseSection = Tabs.Farm:AddSection("Fase Ativa")
 
 PhaseSection:AddDropdown("PhaseSelector", {
     Title = "Selecionar Fase",
-    Values = { "Bleach (Fase 4)" },
+    Values = { "Bleach (Fase 4)", "Incursão" },
     Default = Settings.SelectedPhase,
     Callback = function(Value)
         Settings.SelectedPhase = Value
@@ -859,7 +898,7 @@ CombatSection:AddToggle("AutoFarmToggle", {
 
 CombatSection:AddToggle("AutoEngageToggle", {
     Title = "Auto Engage (Boss Secreto)",
-    Description = "Clica automaticamente em Engage/Confirm em qualquer fase",
+    Description = "Prioridade: Clica em Engage antes do Play Again",
     Default = true,
     Callback = function(Value)
         Settings.AutoEngage = Value
