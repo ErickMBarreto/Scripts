@@ -81,6 +81,8 @@ local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local attackRemote = nil
 task.spawn(function()
@@ -88,24 +90,6 @@ task.spawn(function()
     if remotesFolder then
         attackRemote = remotesFolder:WaitForChild("Attack", 10)
     end
-end)
-
--- Arma detectada padrão inicial
-local activeWeaponName = "GiantFrozenBeast"
-
--- SPY passivo seguro para capturar caso troque de arma
-pcall(function()
-    local rawNamecall
-    rawNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-        local method = getnamecallmethod()
-        local args = {...}
-        if (method == "FireServer" or method == "fireServer") and tostring(self.Name):lower() == "attack" then
-            if args[1] == "M1" and args[2] and typeof(args[2]) == "string" and args[2] ~= "" then
-                activeWeaponName = args[2]
-            end
-        end
-        return rawNamecall(self, ...)
-    end))
 end)
 
 local Settings = {
@@ -118,7 +102,7 @@ local Settings = {
     SkillCooldown = 0.8,
     HeightAboveEnemy = 9.0,
     TweenSpeed = 90,
-    AttackSpeed = 0.25,
+    AttackSpeed = 0.22,
     LocalRoomRadius = 80,
     PortalTriggerDistance = 35
 }
@@ -132,6 +116,7 @@ local teleportCooldown = 0
 local lastSkillUse = 0
 local comboIndex = 1
 local isDungeonEnded = false
+local activeWeaponName = "GiantFrozenBeast"
 
 local function getCharacter()
     local char = player.Character
@@ -154,31 +139,83 @@ local function stopMovement()
     end
 end
 
--- Detecção direta e sem travas da arma no personagem
-local function getActiveWeapon()
+-- DETECTA QUALQUER ARMA EQUIPADA IGNORANDO COSMÉTICOS
+local function detectEquippedWeapon()
     local char = player.Character
-    if char then
-        local tool = char:FindFirstChildOfClass("Tool")
-        if tool and tool.Name ~= "" then
-            activeWeaponName = tool.Name
-            return tool.Name
-        end
+    if not char then return activeWeaponName end
 
-        local ignored = {"armor", "headband", "helmet", "aura", "title", "ring", "wing", "cape", "costume", "hair"}
-        for _, child in ipairs(char:GetChildren()) do
-            if child:IsA("Model") and child.Name ~= "Animate" and not Players:GetPlayerFromCharacter(child) then
-                local isBad = false
-                for _, word in ipairs(ignored) do
-                    if child.Name:lower():find(word) then isBad = true; break end
+    local tool = char:FindFirstChildOfClass("Tool")
+    if tool and tool.Name ~= "" then
+        activeWeaponName = tool.Name
+        return tool.Name
+    end
+
+    local ignored = {"armor", "headband", "helmet", "aura", "title", "ring", "wing", "cape", "costume", "hair", "cloth"}
+    for _, child in ipairs(char:GetChildren()) do
+        if child:IsA("Model") and child.Name ~= "Animate" and not Players:GetPlayerFromCharacter(child) then
+            local isBad = false
+            for _, word in ipairs(ignored) do
+                if child.Name:lower():find(word) then
+                    isBad = true
+                    break
                 end
-                if not isBad then
-                    activeWeaponName = child.Name
-                    return child.Name
-                end
+            end
+            if not isBad then
+                activeWeaponName = child.Name
+                return child.Name
             end
         end
     end
     return activeWeaponName or "GiantFrozenBeast"
+end
+
+-- DISPARO NATIVO UNIVERSAL (Input Engine + Remote Fallback)
+local fakeInputObject = {
+    UserInputType = Enum.UserInputType.MouseButton1,
+    UserInputState = Enum.UserInputState.Begin,
+    KeyCode = Enum.KeyCode.Unknown,
+    Position = Vector3.new(500, 500, 0)
+}
+
+local function triggerAttack()
+    if isDungeonEnded then return end
+    
+    -- 1. Aciona todos os listeners de clique do cliente do jogo
+    if getconnections then
+        for _, conn in ipairs(getconnections(UserInputService.InputBegan)) do
+            pcall(function()
+                conn:Fire(fakeInputObject, false)
+            end)
+        end
+    end
+
+    -- 2. Envio físico na engine do Roblox
+    pcall(function()
+        if VirtualInputManager then
+            VirtualInputManager:SendMouseButtonEvent(500, 500, 0, true, game, 1)
+            VirtualInputManager:SendMouseButtonEvent(500, 500, 0, false, game, 1)
+        end
+    end)
+
+    -- 3. Disparo direto no Remote nativo
+    comboIndex = (comboIndex % 4) + 1
+    local weapon = detectEquippedWeapon()
+
+    if not attackRemote then
+        attackRemote = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Attack")
+    end
+
+    if attackRemote then
+        pcall(function()
+            attackRemote:FireServer("M1", weapon, comboIndex, 0, 0, 2)
+        end)
+    end
+
+    local char = player.Character
+    local tool = char and char:FindFirstChildOfClass("Tool")
+    if tool then
+        pcall(function() tool:Activate() end)
+    end
 end
 
 player.CharacterAdded:Connect(function()
@@ -386,31 +423,6 @@ local function getDynamicHotbar()
     return nil
 end
 
--- Ataque Nativo Direto e Sem Travas
-local function executeNativeAttack()
-    if isDungeonEnded then return end
-    comboIndex = (comboIndex % 4) + 1
-    local weapon = getActiveWeapon()
-
-    if not attackRemote then
-        attackRemote = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Attack")
-    end
-
-    if attackRemote then
-        pcall(function()
-            attackRemote:FireServer("M1", weapon, comboIndex, 0, 0, 2)
-        end)
-    end
-
-    local char = player.Character
-    if char then
-        local tool = char:FindFirstChildOfClass("Tool")
-        if tool then
-            pcall(function() tool:Activate() end)
-        end
-    end
-end
-
 local function farmTarget(enemy, enemyRoot)
     while Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyRoot.Parent do
         local enemyHum = enemy:FindFirstChildOfClass("Humanoid")
@@ -426,13 +438,13 @@ local function farmTarget(enemy, enemyRoot)
     end
 end
 
--- Loop de Ataque Automático
+-- Loop de Ataque
 task.spawn(function()
     while true do
         if Settings.AutoAttack and not isDungeonEnded then
             local char, _, hum = getCharacter()
             if char and hum and hum.Health > 0 then
-                executeNativeAttack()
+                triggerAttack()
             end
         end
         task.wait(Settings.AttackSpeed)
@@ -637,17 +649,6 @@ FarmSection:AddToggle("AutoFarmEnemies", {
     end
 })
 
-FarmSection:AddInput("ManualWeaponInput", {
-    Title = "Nome da Arma Ativa",
-    Default = activeWeaponName,
-    Placeholder = "Ex: GiantFrozenBeast, WaterKatana",
-    Callback = function(Value)
-        if Value and Value ~= "" then
-            activeWeaponName = Value
-        end
-    end
-})
-
 FarmSection:AddToggle("AutoEngageToggle", {
     Title = "Auto Engage (Virus Boss)",
     Description = "Clica automaticamente em Confirm no VirusFrame",
@@ -676,8 +677,8 @@ FarmSection:AddToggle("AutoStartToggle", {
 })
 
 FarmSection:AddToggle("AutoAttackToggle", {
-    Title = "Auto Attack (Remote Nativo)",
-    Description = "Dispara os ataques M1 continuamente",
+    Title = "Auto Attack (Híbrido Input + Remote)",
+    Description = "Dispara os ataques M1 continuamente de forma 100% autônoma",
     Default = true,
     Callback = function(Value)
         Settings.AutoAttack = Value
@@ -695,7 +696,7 @@ FarmSection:AddToggle("AutoSkillsToggle", {
 
 FarmSection:AddSlider("AttackSpeedSlider", {
     Title = "Velocidade do Ataque (segundos)",
-    Default = 0.25,
+    Default = 0.22,
     Min = 0.08,
     Max = 0.50,
     Rounding = 2,
