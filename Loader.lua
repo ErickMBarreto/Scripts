@@ -339,6 +339,7 @@ local function getClosestEnemyInRadius(maxDistance)
     return closestEnemy, closestRoot
 end
 
+-- DETECTA PORTAIS TRADICIONAIS E PORTAS DE ESTÁGIOS (DoorBorders / Teleports)
 local function getActiveTeleport()
     if tick() < teleportCooldown then
         return nil, math.huge
@@ -348,14 +349,18 @@ local function getActiveTeleport()
     if not root then return nil, math.huge end
 
     local gameFolder = workspace:FindFirstChild("Game")
-    local teleportsFolder = gameFolder and gameFolder:FindFirstChild("Teleports")
+    if not gameFolder then return nil, math.huge end
 
+    local closestHitbox = nil
+    local minDistance = math.huge
+
+    -- 1. Varre Workspace.Game.Teleports
+    local teleportsFolder = gameFolder:FindFirstChild("Teleports")
     if teleportsFolder then
-        local closestHitbox = nil
-        local minDistance = math.huge
-
         for _, teleportObj in ipairs(teleportsFolder:GetChildren()) do
-            local hitbox = teleportObj:FindFirstChild("HitBox") or (teleportObj:IsA("BasePart") and teleportObj.Name == "HitBox" and teleportObj)
+            local hitbox = teleportObj:FindFirstChild("HitBox") 
+                or teleportObj:FindFirstChild("Hitbox")
+                or (teleportObj:IsA("BasePart") and teleportObj)
             
             if hitbox and hitbox:IsA("BasePart") and not usedTeleports[hitbox] then
                 local dist = (root.Position - hitbox.Position).Magnitude
@@ -365,11 +370,28 @@ local function getActiveTeleport()
                 end
             end
         end
-
-        return closestHitbox, minDistance
     end
 
-    return nil, math.huge
+    -- 2. Varre Workspace.Game.Stages (DoorBorders / Doors / Portais)
+    local stagesFolder = gameFolder:FindFirstChild("Stages")
+    if stagesFolder then
+        for _, stage in ipairs(stagesFolder:GetChildren()) do
+            for _, desc in ipairs(stage:GetDescendants()) do
+                if desc:IsA("BasePart") and not usedTeleports[desc] then
+                    local n = desc.Name:lower()
+                    if n:find("doorborder") or n:find("door") or n:find("portal") or n:find("teleport") or n:find("hitbox") then
+                        local dist = (root.Position - desc.Position).Magnitude
+                        if dist < minDistance then
+                            minDistance = dist
+                            closestHitbox = desc
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return closestHitbox, minDistance
 end
 
 local function getDynamicHotbar()
@@ -648,7 +670,7 @@ FarmSection:AddToggle("AutoStartToggle", {
 
 FarmSection:AddToggle("AutoAttackToggle", {
     Title = "Auto Attack (Remote Nativo)",
-    Description = "Dispara os ataques M1 com a SnowKatana",
+    Description = "Dispara os ataques M1 continuamente",
     Default = true,
     Callback = function(Value)
         Settings.AutoAttack = Value
