@@ -329,7 +329,7 @@ local function getEnemyCountFromUI()
     return nil
 end
 
--- VERIFICADOR DE VIDA REAL (NumberValue Health / HasDied BoolValue)
+-- VERIFICADOR DE VIDA REAL DO INIMIGO
 local function isEnemyAlive(enemy)
     if not enemy or not enemy.Parent then return false end
 
@@ -356,7 +356,7 @@ local function isEnemyAlive(enemy)
     return true
 end
 
--- PARTE DE CONTATO FÍSICO DO INIMIGO (Prioriza 'Bot')
+-- PARTE DE CONTATO FÍSICO DO INIMIGO (Bot)
 local function getTargetPartFromModel(model)
     if not model then return nil end
     return model:FindFirstChild("Bot")
@@ -378,11 +378,12 @@ local function getClosestEnemy()
 
     local foldersToScan = {}
     local gameFolder = workspace:FindFirstChild("Game")
-    if gameFolder then
-        if gameFolder:FindFirstChild("Enemies") then table.insert(foldersToScan, gameFolder.Enemies) end
-        if gameFolder:FindFirstChild("Stages") then table.insert(foldersToScan, gameFolder.Stages) end
+    if gameFolder and gameFolder:FindFirstChild("Enemies") then
+        table.insert(foldersToScan, gameFolder.Enemies)
     end
-    if workspace:FindFirstChild("Enemies") then table.insert(foldersToScan, workspace.Enemies) end
+    if workspace:FindFirstChild("Enemies") then
+        table.insert(foldersToScan, workspace.Enemies)
+    end
 
     for _, container in ipairs(foldersToScan) do
         for _, enemy in ipairs(container:GetChildren()) do
@@ -400,30 +401,12 @@ local function getClosestEnemy()
                 end
             end
         end
-
-        if not closestEnemy then
-            for _, desc in ipairs(container:GetDescendants()) do
-                if desc:IsA("Model") and desc ~= player.Character and not Players:GetPlayerFromCharacter(desc) and desc.Parent ~= player.Character then
-                    if isEnemyAlive(desc) then
-                        local targetPart = getTargetPartFromModel(desc)
-                        if targetPart and targetPart:IsA("BasePart") then
-                            local dist = (root.Position - targetPart.Position).Magnitude
-                            if dist < minDistance then
-                                minDistance = dist
-                                closestEnemy = desc
-                                closestRoot = targetPart
-                            end
-                        end
-                    end
-                end
-            end
-        end
     end
 
     return closestEnemy, closestRoot
 end
 
--- BUSCA DE PORTAIS / DOORBORDERS
+-- BUSCA EXCLUSIVA DO PORTAL REAL: Workspace.Game.Teleports.*.HitBox
 local function getActiveTeleport()
     if tick() < teleportCooldown then
         return nil, math.huge
@@ -433,44 +416,22 @@ local function getActiveTeleport()
     if not root then return nil, math.huge end
 
     local gameFolder = workspace:FindFirstChild("Game")
-    if not gameFolder then return nil, math.huge end
+    local teleportsFolder = gameFolder and gameFolder:FindFirstChild("Teleports")
+    if not teleportsFolder then return nil, math.huge end
 
     local closestHitbox = nil
     local minDistance = math.huge
 
-    -- 1. Workspace.Game.Teleports
-    local teleportsFolder = gameFolder:FindFirstChild("Teleports")
-    if teleportsFolder then
-        for _, teleportObj in ipairs(teleportsFolder:GetChildren()) do
-            local hitbox = teleportObj:FindFirstChild("HitBox") 
-                or teleportObj:FindFirstChild("Hitbox")
-                or (teleportObj:IsA("BasePart") and teleportObj)
-            
-            if hitbox and hitbox:IsA("BasePart") and not usedTeleports[hitbox] then
-                local dist = (root.Position - hitbox.Position).Magnitude
-                if dist < minDistance then
-                    minDistance = dist
-                    closestHitbox = hitbox
-                end
-            end
-        end
-    end
-
-    -- 2. Workspace.Game.Stages (DoorBorders)
-    local stagesFolder = gameFolder:FindFirstChild("Stages")
-    if stagesFolder then
-        for _, stage in ipairs(stagesFolder:GetChildren()) do
-            for _, desc in ipairs(stage:GetDescendants()) do
-                if desc:IsA("BasePart") and not usedTeleports[desc] then
-                    local n = desc.Name:lower()
-                    if n:find("doorborder") or n:find("door") or n:find("portal") or n:find("teleport") then
-                        local dist = (root.Position - desc.Position).Magnitude
-                        if dist < minDistance then
-                            minDistance = dist
-                            closestHitbox = desc
-                        end
-                    end
-                end
+    for _, teleportObj in ipairs(teleportsFolder:GetChildren()) do
+        local hitbox = teleportObj:FindFirstChild("HitBox") 
+            or teleportObj:FindFirstChild("Hitbox")
+            or (teleportObj:IsA("BasePart") and teleportObj)
+        
+        if hitbox and hitbox:IsA("BasePart") and not usedTeleports[hitbox] then
+            local dist = (root.Position - hitbox.Position).Magnitude
+            if dist < minDistance then
+                minDistance = dist
+                closestHitbox = hitbox
             end
         end
     end
@@ -589,13 +550,13 @@ task.spawn(function()
                     local uiCount = getEnemyCountFromUI()
                     local enemy, enemyRoot = getClosestEnemy()
 
-                    -- Prioridade 1: Ataca o inimigo vivo mais próximo
+                    -- Prioridade 1: Inimigo vivo encontrado no mapa
                     if enemy and enemyRoot then
                         farmTarget(enemy, enemyRoot)
-                    -- Prioridade 2: Aguarda spawn se o contador da UI indicar inimigos restantes
+                    -- Prioridade 2: Contador da UI maior que 0 (aguarda spawn dos monstros)
                     elseif uiCount and uiCount > 0 then
                         stopMovement()
-                    -- Prioridade 3: Sala limpa -> voa para a porta/portal
+                    -- Prioridade 3: Sala 100% limpa -> Voa direto para o portal de teleporte
                     else
                         local teleportHitbox, teleportDist = getActiveTeleport()
                         if teleportHitbox then
