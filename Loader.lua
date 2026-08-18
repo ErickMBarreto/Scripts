@@ -1,5 +1,5 @@
 -- ====================================================================
--- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA
+-- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA (Singleton Anti-Duplicação)
 -- ====================================================================
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
@@ -13,6 +13,7 @@ local singletonTag = Instance.new("Folder")
 singletonTag.Name = UNIQUE_ID
 pcall(function() singletonTag.Parent = CoreGui end)
 
+-- Limpeza preventiva de interfaces antigas
 for _, gui in ipairs({CoreGui, Players.LocalPlayer and Players.LocalPlayer:FindFirstChild("PlayerGui")}) do
     if gui then
         for _, child in ipairs(gui:GetChildren()) do
@@ -76,29 +77,13 @@ if not inDungeon then
 end
 
 -- ====================================================================
--- 4. FLUXO PRINCIPAL DO HUB DOS RAPAZES
+-- 4. SERVIÇOS E CONFIGURAÇÕES GLOBAIS
 -- ====================================================================
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-
--- Localizador de Remote de Ataque
-local attackRemote = nil
-local function findAttackRemote()
-    if attackRemote then return attackRemote end
-    for _, container in ipairs({ReplicatedStorage, ReplicatedStorage:FindFirstChild("Remotes"), ReplicatedStorage:FindFirstChild("Events")}) do
-        if container then
-            local rem = container:FindFirstChild("Attack") or container:FindFirstChild("M1") or container:FindFirstChild("Combat")
-            if rem and rem:IsA("RemoteEvent") then
-                attackRemote = rem
-                return attackRemote
-            end
-        end
-    end
-    return nil
-end
-findAttackRemote()
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local Settings = {
     AutoFarm = true,
@@ -107,6 +92,7 @@ local Settings = {
     AutoStart = true,
     AutoPlayAgain = true,
     AutoEngage = true,
+    StartWaitTime = 3.0,
     SkillCooldown = 0.8,
     SkillMaxDistance = 20,
     HeightAboveEnemy = 9.0,
@@ -114,9 +100,9 @@ local Settings = {
     AttackSpeed = 0.15
 }
 
+-- Estado do Script
 local currentTween = nil
 local noclipConnection = nil
-local isMoving = false
 local usedTeleports = {}
 local portalHistory = {}
 local teleportCooldown = 0
@@ -124,8 +110,12 @@ local lastSkillUse = 0
 local comboIndex = 1
 local isDungeonEnded = false
 local dungeonReady = false
+local attackRemote = nil
 local cachedWeaponName = "VoidRods"
 
+-- ====================================================================
+-- 5. FUNÇÕES DE UTILIDADE E CONTROLE FÍSICO
+-- ====================================================================
 local function getCharacter()
     local char = player.Character
     if char and char:FindFirstChild("HumanoidRootPart") and char:FindFirstChild("Humanoid") and char.Humanoid.Health > 0 then
@@ -135,7 +125,6 @@ local function getCharacter()
 end
 
 local function stopMovement()
-    isMoving = false
     if currentTween then
         currentTween:Cancel()
         currentTween = nil
@@ -147,10 +136,12 @@ local function stopMovement()
     end
 end
 
+-- Recuperação pós-morte: Desmarca o último portal para permitir voltar à sala do Boss
 player.CharacterAdded:Connect(function()
     stopMovement()
     teleportCooldown = 0
     dungeonReady = false
+    attackRemote = nil
 
     if #portalHistory > 0 then
         local lastPortal = table.remove(portalHistory)
@@ -160,48 +151,6 @@ player.CharacterAdded:Connect(function()
     end
 end)
 
--- Detector Dinâmico da Arma Equipada direto da UI e do Personagem
-local function getDynamicEquippedWeapon()
-    local pguiRef = player:FindFirstChild("PlayerGui")
-    if pguiRef then
-        local main = pguiRef:FindFirstChild("Main")
-        local mainFrame = main and main:FindFirstChild("MainFrame")
-        local items = mainFrame and mainFrame:FindFirstChild("Items")
-        local scroll = items and items:FindFirstChild("Scroll")
-        
-        if scroll then
-            for _, slot in ipairs(scroll:GetChildren()) do
-                if slot:IsA("GuiObject") then
-                    -- Checa se o slot tem tag/valor de item
-                    local itemVal = slot:FindFirstChild("Item")
-                    local isItem = slot:GetAttribute("Item") or (itemVal and itemVal.Value)
-                    
-                    -- Checa se possui o botão/texto "Equip" ou "Unequip"
-                    for _, desc in ipairs(slot:GetDescendants()) do
-                        if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text:lower():find("unequip") then
-                            cachedWeaponName = slot.Name
-                            return cachedWeaponName
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    -- Fallback: checa ferramentas no personagem
-    local char = player.Character
-    if char then
-        local tool = char:FindFirstChildOfClass("Tool")
-        if tool then 
-            cachedWeaponName = tool.Name
-            return cachedWeaponName
-        end
-    end
-
-    return cachedWeaponName
-end
-
--- Noclip e Flutuação Anti-Gravidade
 local function toggleNoclip(enable)
     if enable then
         if not noclipConnection then
@@ -230,7 +179,6 @@ local function smoothFlyTo(targetCFrame)
     local _, root = getCharacter()
     if not root or not root.Parent then return end
     
-    isMoving = true
     local distance = (root.Position - targetCFrame.Position).Magnitude
     local duration = distance / math.max(Settings.TweenSpeed, 5)
 
@@ -259,7 +207,233 @@ local function triggerGuiButton(btn)
     end
 end
 
--- Detecção Direta do Botão Confirm (VirusFrame/Engage)
+local function pressKey(keyCode)
+    pcall(function()
+        VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+        task.wait(0.02)
+        VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+    end)
+end
+
+-- ====================================================================
+-- 6. DETECTORES DINÂMICOS (ARMA, INTERFACE E CONTADOR)
+-- ====================================================================
+local function findAttackRemote()
+    if attackRemote and attackRemote.Parent then return attackRemote end
+    for _, container in ipairs({ReplicatedStorage, ReplicatedStorage:FindFirstChild("Remotes"), ReplicatedStorage:FindFirstChild("Events")}) do
+        if container then
+            local rem = container:FindFirstChild("Attack") or container:FindFirstChild("M1") or container:FindFirstChild("Combat")
+            if rem and rem:IsA("RemoteEvent") then
+                attackRemote = rem
+                return attackRemote
+            end
+        end
+    end
+    return nil
+end
+
+local function getDynamicEquippedWeapon()
+    local pguiRef = player:FindFirstChild("PlayerGui")
+    if pguiRef then
+        local scroll = pguiRef:FindFirstChild("Scroll", true)
+        if scroll and scroll.Parent and scroll.Parent.Name == "Items" then
+            for _, slot in ipairs(scroll:GetChildren()) do
+                if slot:IsA("GuiObject") then
+                    for _, desc in ipairs(slot:GetDescendants()) do
+                        if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text:lower():find("unequip") then
+                            cachedWeaponName = slot.Name
+                            return cachedWeaponName
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    local char = player.Character
+    if char then
+        local tool = char:FindFirstChildOfClass("Tool")
+        if tool then
+            cachedWeaponName = tool.Name
+            return cachedWeaponName
+        end
+    end
+
+    return cachedWeaponName
+end
+
+local function getDynamicHotbar()
+    local pguiRef = player:FindFirstChild("PlayerGui")
+    if not pguiRef then return nil end
+
+    local mainGui = pguiRef:FindFirstChild("Main")
+    if mainGui and mainGui:FindFirstChild("FrontFrame") and mainGui.FrontFrame:FindFirstChild("Hotbar") then
+        return mainGui.FrontFrame.Hotbar:FindFirstChild("List") or mainGui.FrontFrame.Hotbar
+    end
+    return nil
+end
+
+-- ====================================================================
+-- 7. SCANNERS DE INIMIGOS E PORTAIS
+-- ====================================================================
+
+-- Extrai a parte física de qualquer entidade (com ou sem Humanoid)
+local function getEntityTargetPart(obj)
+    if not obj then return nil end
+    return obj:FindFirstChild("HumanoidRootPart")
+        or obj:FindFirstChild("Bot")
+        or obj:FindFirstChild("Hitbox")
+        or obj:FindFirstChild("HitBox")
+        or obj:FindFirstChild("Torso")
+        or obj:FindFirstChild("Head")
+        or (obj:IsA("Model") and obj.PrimaryPart)
+        or (obj:IsA("BasePart") and obj)
+        or obj:FindFirstChildWhichIsA("BasePart")
+end
+
+-- Valida se o monstro está realmente vivo
+local function isEntityAlive(obj)
+    if not obj or not obj.Parent then return false end
+    
+    local hum = obj:FindFirstChildOfClass("Humanoid")
+    if hum then
+        return hum.Health > 0
+    end
+
+    local hpAttr = obj:GetAttribute("Health") or obj:GetAttribute("HP")
+    if hpAttr then
+        return tonumber(hpAttr) > 0
+    end
+
+    local hpVal = obj:FindFirstChild("Health") or obj:FindFirstChild("HP")
+    if hpVal and hpVal:IsA("ValueBase") then
+        return tonumber(hpVal.Value) > 0
+    end
+
+    return getEntityTargetPart(obj) ~= nil
+end
+
+-- Scanner universal que retorna todos os monstros vivos da sala atual
+local function getLivingEnemies()
+    local list = {}
+    local gameFolder = workspace:FindFirstChild("Game")
+    local enemiesFolder = (gameFolder and gameFolder:FindFirstChild("Enemies")) or workspace:FindFirstChild("Enemies")
+
+    if enemiesFolder then
+        for _, enemy in ipairs(enemiesFolder:GetChildren()) do
+            if isEntityAlive(enemy) then
+                table.insert(list, enemy)
+            end
+        end
+    end
+
+    if #list == 0 then
+        local char = player.Character
+        for _, obj in ipairs(workspace:GetChildren()) do
+            if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
+                if isEntityAlive(obj) then
+                    table.insert(list, obj)
+                end
+            end
+        end
+    end
+
+    return list
+end
+
+-- Retorna o contador exato de monstros vivos
+local function getEnemiesLeftCount()
+    -- 1. Tenta ler direto do texto da UI
+    local pguiRef = player:FindFirstChild("PlayerGui")
+    if pguiRef then
+        for _, desc in ipairs(pguiRef:GetDescendants()) do
+            if desc:IsA("TextLabel") and desc.Visible then
+                local text = desc.Text:lower()
+                if text:find("enemies:") or text:find("monsters:") or text:find("left:") then
+                    local count = text:match("%d+")
+                    if count then return tonumber(count) end
+                end
+            end
+        end
+    end
+
+    -- 2. Fallback: conta os monstros vivos na pasta do workspace
+    local enemies = getLivingEnemies()
+    return #enemies
+end
+
+-- Retorna o monstro mais próximo
+local function getClosestLivingEnemy()
+    local _, root = getCharacter()
+    if not root then return nil, nil end
+
+    local enemies = getLivingEnemies()
+    local closestEnemy, closestPart = nil, nil
+    local minDistance = math.huge
+
+    for _, enemy in ipairs(enemies) do
+        local targetPart = getEntityTargetPart(enemy)
+        if targetPart and targetPart:IsA("BasePart") then
+            local dist = (root.Position - targetPart.Position).Magnitude
+            if dist < minDistance then
+                minDistance = dist
+                closestEnemy = enemy
+                closestPart = targetPart
+            end
+        end
+    end
+
+    return closestEnemy, closestPart
+end
+
+-- Scanner de Portais ativos não utilizados
+local function getActiveUnusedPortal()
+    if tick() < teleportCooldown then
+        return nil, math.huge
+    end
+
+    local _, root = getCharacter()
+    if not root then return nil, math.huge end
+
+    local teleportParts = {}
+    local gameFolder = workspace:FindFirstChild("Game")
+    local teleportsFolder = (gameFolder and (gameFolder:FindFirstChild("Teleports") or gameFolder:FindFirstChild("Teleport"))) 
+        or workspace:FindFirstChild("Teleports") 
+        or workspace:FindFirstChild("Teleport")
+
+    if teleportsFolder then
+        for _, teleportObj in ipairs(teleportsFolder:GetChildren()) do
+            local hitbox = teleportObj:FindFirstChild("HitBox") 
+                or (teleportObj:IsA("BasePart") and teleportObj) 
+                or teleportObj:FindFirstChildWhichIsA("BasePart")
+
+            if hitbox and not usedTeleports[hitbox] then
+                table.insert(teleportParts, hitbox)
+            end
+        end
+    end
+
+    if #teleportParts == 0 then
+        return nil, math.huge
+    end
+
+    local closestHitbox = nil
+    local minDistance = math.huge
+
+    for _, hitbox in ipairs(teleportParts) do
+        local dist = (root.Position - hitbox.Position).Magnitude
+        if dist < minDistance then
+            minDistance = dist
+            closestHitbox = hitbox
+        end
+    end
+
+    return closestHitbox, minDistance
+end
+
+-- ====================================================================
+-- 8. CONTROLES DE INTERFACE (START, ENGAGE, PLAY AGAIN)
+-- ====================================================================
 local function checkAndClickEngageButton()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef then return false end
@@ -306,7 +480,7 @@ local function handleDungeonStart()
         local startBtn = dungeonFrame:FindFirstChild("Start") or dungeonFrame:FindFirstChild("Play")
         if startBtn and startBtn:IsA("GuiObject") and startBtn.Visible then
             triggerGuiButton(startBtn)
-            task.wait(2.5)
+            task.wait(Settings.StartWaitTime) -- Espera 3.0s cravados
             dungeonReady = true
             return true
         end
@@ -314,118 +488,9 @@ local function handleDungeonStart()
     return false
 end
 
--- Scanner de Inimigos Dinâmico
-local function getDynamicClosestEnemy()
-    local _, root = getCharacter()
-    if not root then return nil, nil end
-
-    local candidates = {}
-    local gameFolder = workspace:FindFirstChild("Game")
-    local enemiesFolder = (gameFolder and gameFolder:FindFirstChild("Enemies")) or workspace:FindFirstChild("Enemies")
-    
-    if enemiesFolder then
-        for _, enemy in ipairs(enemiesFolder:GetChildren()) do
-            table.insert(candidates, enemy)
-        end
-    end
-
-    if #candidates == 0 then
-        for _, obj in ipairs(workspace:GetChildren()) do
-            if obj:IsA("Model") and obj ~= player.Character and not Players:GetPlayerFromCharacter(obj) then
-                if obj:FindFirstChildOfClass("Humanoid") then
-                    table.insert(candidates, obj)
-                end
-            end
-        end
-    end
-
-    local closestEnemy, closestRoot = nil, nil
-    local minDistance = math.huge
-
-    for _, enemy in ipairs(candidates) do
-        local hum = enemy:FindFirstChildOfClass("Humanoid")
-        if not hum or hum.Health > 0 then
-            local targetPart = enemy:FindFirstChild("HumanoidRootPart")
-                or enemy:FindFirstChild("Bot")
-                or enemy:FindFirstChild("Hitbox")
-                or enemy:FindFirstChild("Torso")
-                or enemy:FindFirstChild("Head")
-                or (enemy:IsA("Model") and enemy.PrimaryPart)
-                or (enemy:IsA("BasePart") and enemy)
-                or enemy:FindFirstChildWhichIsA("BasePart")
-
-            if targetPart and targetPart:IsA("BasePart") then
-                local dist = (root.Position - targetPart.Position).Magnitude
-                if dist < minDistance then
-                    minDistance = dist
-                    closestEnemy = enemy
-                    closestRoot = targetPart
-                end
-            end
-        end
-    end
-
-    return closestEnemy, closestRoot
-end
-
--- Scanner de Portais
-local function getPhaseTeleport()
-    if tick() < teleportCooldown then
-        return nil, math.huge
-    end
-
-    local _, root = getCharacter()
-    if not root then return nil, math.huge end
-
-    local teleportParts = {}
-    local gameFolder = workspace:FindFirstChild("Game")
-    
-    local teleportsFolder = (gameFolder and (gameFolder:FindFirstChild("Teleports") or gameFolder:FindFirstChild("Teleport"))) 
-        or workspace:FindFirstChild("Teleports") 
-        or workspace:FindFirstChild("Teleport")
-
-    if teleportsFolder then
-        for _, teleportObj in ipairs(teleportsFolder:GetChildren()) do
-            local hitbox = teleportObj:FindFirstChild("HitBox") 
-                or (teleportObj:IsA("BasePart") and teleportObj) 
-                or teleportObj:FindFirstChildWhichIsA("BasePart")
-
-            if hitbox and not usedTeleports[hitbox] then
-                table.insert(teleportParts, hitbox)
-            end
-        end
-    end
-
-    if #teleportParts == 0 then
-        return nil, math.huge
-    end
-
-    local closestHitbox = nil
-    local minDistance = math.huge
-
-    for _, hitbox in ipairs(teleportParts) do
-        local dist = (root.Position - hitbox.Position).Magnitude
-        if dist < minDistance then
-            minDistance = dist
-            closestHitbox = hitbox
-        end
-    end
-
-    return closestHitbox, minDistance
-end
-
-local function getDynamicHotbar()
-    local pguiRef = player:FindFirstChild("PlayerGui")
-    if not pguiRef then return nil end
-
-    local mainGui = pguiRef:FindFirstChild("Main")
-    if mainGui and mainGui:FindFirstChild("FrontFrame") and mainGui.FrontFrame:FindFirstChild("Hotbar") then
-        return mainGui.FrontFrame.Hotbar:FindFirstChild("List") or mainGui.FrontFrame.Hotbar
-    end
-    return nil
-end
-
--- Disparo Nativo de M1 com Nome Real da Arma
+-- ====================================================================
+-- 9. MOTORES PARALELOS DE COMBATE (M1 & SKILLS)
+-- ====================================================================
 local function executeNativeAttack()
     if isDungeonEnded then return end
     comboIndex = (comboIndex % 4) + 1
@@ -447,7 +512,7 @@ local function executeNativeAttack()
     end
 end
 
--- Loop M1
+-- Loop de Ataque M1
 task.spawn(function()
     while true do
         if Settings.AutoAttack and not isDungeonEnded then
@@ -460,29 +525,36 @@ task.spawn(function()
     end
 end)
 
--- Loop Skills Inteligente (Só atinge com monstro perto)
+-- Loop de Skills: Spell1 (Z), Spell2 (X) e Ultimate (C)
 task.spawn(function()
     while true do
         if Settings.AutoSkills and not isDungeonEnded then
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 if (tick() - lastSkillUse) >= Settings.SkillCooldown then
-                    local _, enemyRoot = getDynamicClosestEnemy()
-                    if enemyRoot and enemyRoot.Parent then
-                        local distance = (root.Position - enemyRoot.Position).Magnitude
+                    local _, enemyPart = getClosestLivingEnemy()
+                    if enemyPart and enemyPart.Parent then
+                        local distance = (root.Position - enemyPart.Position).Magnitude
                         if distance <= Settings.SkillMaxDistance then
                             lastSkillUse = tick()
                             local hotbarList = getDynamicHotbar()
                             if hotbarList then
                                 local spell1 = hotbarList:FindFirstChild("Spell1", true) or hotbarList:FindFirstChild("Z", true)
                                 local spell2 = hotbarList:FindFirstChild("Spell2", true) or hotbarList:FindFirstChild("X", true)
-                                local spell3 = hotbarList:FindFirstChild("Spell3", true) or hotbarList:FindFirstChild("C", true)
+                                local ultimateBtn = hotbarList:FindFirstChild("Ultimate", true) or hotbarList:FindFirstChild("Spell3", true) or hotbarList:FindFirstChild("C", true)
 
-                                if spell1 then triggerGuiButton(spell1) end
+                                if spell1 then triggerGuiButton(spell1) else pressKey(Enum.KeyCode.Z) end
                                 task.wait(0.06)
-                                if spell2 then triggerGuiButton(spell2) end
+                                if spell2 then triggerGuiButton(spell2) else pressKey(Enum.KeyCode.X) end
                                 task.wait(0.06)
-                                if spell3 then triggerGuiButton(spell3) end
+                                if ultimateBtn then triggerGuiButton(ultimateBtn) end
+                                pressKey(Enum.KeyCode.C)
+                            else
+                                pressKey(Enum.KeyCode.Z)
+                                task.wait(0.06)
+                                pressKey(Enum.KeyCode.X)
+                                task.wait(0.06)
+                                pressKey(Enum.KeyCode.C)
                             end
                         end
                     end
@@ -493,17 +565,21 @@ task.spawn(function()
     end
 end)
 
--- Loop Principal Adaptável
+-- ====================================================================
+-- 10. MÁQUINA DE ESTADOS PRINCIPAL (DECISÃO DETERMINÍSTICA)
+-- ====================================================================
 task.spawn(function()
     while true do
         if Settings.AutoFarm then
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 
+                -- Checagem contínua do Confirm no VirusFrame (Engage)
                 if Settings.AutoEngage then
                     checkAndClickEngageButton()
                 end
 
+                -- Checagem de Fim de Partida
                 local ended, playAgainBtn = checkDungeonEnd()
                 if ended then
                     isDungeonEnded = true
@@ -521,7 +597,7 @@ task.spawn(function()
                 else
                     isDungeonEnded = false
 
-                    -- 1. Warm-Up Gate: Garante o clique no Start antes de voar
+                    -- Warm-Up Gate: Garante o clique no Start antes de iniciar movimentação
                     if not dungeonReady then
                         if Settings.AutoStart and handleDungeonStart() then
                             stopMovement()
@@ -534,25 +610,26 @@ task.spawn(function()
                         end
                         task.wait(0.2)
                     else
-                        local enemy, enemyRoot = getDynamicClosestEnemy()
+                        local enemyCount = getEnemiesLeftCount()
 
-                        -- 2. Combate prioritário: Voa até o inimigo
-                        if enemy and enemyRoot then
-                            while Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyRoot.Parent do
-                                local enemyHum = enemy:FindFirstChildOfClass("Humanoid")
-                                if enemyHum and enemyHum.Health <= 0 then break end
+                        -- ESTADO 1: HÁ INIMIGOS VIVOS (COMBATE TOTAL - PORTAL É IGNORADO)
+                        if enemyCount > 0 then
+                            local enemy, enemyPart = getClosestLivingEnemy()
+                            if enemy and enemyPart then
+                                while Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) do
+                                    local _, currentRoot = getCharacter()
+                                    if not currentRoot then break end
 
-                                local _, currentRoot = getCharacter()
-                                if not currentRoot then break end
-
-                                local abovePos = enemyRoot.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
-                                local targetCFrame = CFrame.new(abovePos, enemyRoot.Position)
-                                smoothFlyTo(targetCFrame)
-                                task.wait(0.05)
+                                    local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
+                                    local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
+                                    smoothFlyTo(targetCFrame)
+                                    task.wait(0.05)
+                                end
                             end
-                        -- 3. Sem inimigos: Se a fase tiver portal, entra nele. Se não tiver, aguarda o spawn/boss.
+
+                        -- ESTADO 2: SALA LIMPA (0 INIMIGOS - BUSCA PORTAL OU AGUARDA ONDA)
                         else
-                            local teleportHitbox, teleportDist = getPhaseTeleport()
+                            local teleportHitbox, teleportDist = getActiveUnusedPortal()
                             if teleportHitbox then
                                 smoothFlyTo(teleportHitbox.CFrame)
                                 
@@ -564,7 +641,7 @@ task.spawn(function()
                                     task.wait(0.8)
                                 end
                             else
-                                stopMovement()
+                                stopMovement() -- Fase de arena sem portal: aguarda a próxima onda no ar
                             end
                         end
                     end
@@ -581,6 +658,9 @@ end)
 
 toggleNoclip(Settings.AutoFarm)
 
+-- ====================================================================
+-- 11. INTERFACE GRÁFICA FLUENT & BOTÃO FLUTUANTE
+-- ====================================================================
 local Window = Fluent:CreateWindow({
     Title = "Hub dos Rapazes",
     SubTitle = "Anime Dungeons",
@@ -690,7 +770,7 @@ FarmSection:AddToggle("AutoPlayAgainToggle", {
 
 FarmSection:AddToggle("AutoStartToggle", {
     Title = "Auto Start Dungeon",
-    Description = "Aguarda a fase carregar e inicia sozinho",
+    Description = "Aguarda a fase carregar e inicia sozinho (espera 3s)",
     Default = true,
     Callback = function(Value)
         Settings.AutoStart = Value
@@ -707,7 +787,7 @@ FarmSection:AddToggle("AutoAttackToggle", {
 })
 
 FarmSection:AddToggle("AutoSkillsToggle", {
-    Title = "Auto Skills (Spell 1, 2 e C)",
+    Title = "Auto Skills (Z, X e Ultimate)",
     Description = "Dispara skills apenas perto de inimigos",
     Default = true,
     Callback = function(Value)
