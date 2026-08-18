@@ -76,7 +76,7 @@ if not inDungeon then
 end
 
 -- ====================================================================
--- 4. SISTEMA DE SALVAMENTO DE CONFIGURAÇÃO / PRESET (Persistência)
+-- 4. SISTEMA DE SALVAMENTO DE CONFIGURAÇÃO / PRESET
 -- ====================================================================
 local HttpService = game:GetService("HttpService")
 local CONFIG_FILE = "HubRapazes_Config.json"
@@ -131,7 +131,7 @@ end
 loadConfig()
 
 -- ====================================================================
--- 5. SERVIÇOS E ESTADOS
+-- 5. SERVIÇOS E ESTADOS GLOBAIS
 -- ====================================================================
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
 local TweenService = game:GetService("TweenService")
@@ -312,7 +312,7 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 7. SCANNERS DE COMBATE E PORTAIS (BLEACH)
+-- 7. SCANNERS ESPECÍFICOS DA FASE 4 (BLEACH)
 -- ====================================================================
 local function getEntityTargetPart(obj)
     if not obj or not obj.Parent then return nil end
@@ -395,6 +395,7 @@ local function getClosestLivingEnemy()
     return closestEnemy, closestPart
 end
 
+-- Busca os portais da Fase 4 (Teleport1 e Teleport2 dentro de Game.Teleports)
 local function getBleachPortal()
     if tick() < teleportCooldown then
         return nil, math.huge
@@ -435,13 +436,12 @@ local function getBleachPortal()
 end
 
 -- ====================================================================
--- 8. EVENTOS DE UI (ENGAGE / VIRUS EM QUALQUER FASE, START, REPLAY)
+-- 8. CONTROLES DE INTERFACE (ENGAGE, START, REPLAY)
 -- ====================================================================
 local function checkAndClickEngageButton()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef or not isScriptRunning then return false end
 
-    -- 1. Detecção no VirusFrame específico
     local main = pguiRef:FindFirstChild("Main")
     local virusFrame = main and main:FindFirstChild("VirusFrame")
     if virusFrame and virusFrame.Visible then
@@ -452,7 +452,6 @@ local function checkAndClickEngageButton()
         end
     end
 
-    -- 2. Detecção Universal de Engage em qualquer pop-up de Boss
     for _, desc in ipairs(pguiRef:GetDescendants()) do
         if (desc:IsA("TextButton") or desc:IsA("ImageButton")) and desc.Visible then
             local txt = desc:IsA("TextButton") and desc.Text:lower() or desc.Name:lower()
@@ -503,7 +502,7 @@ local function handleDungeonStart()
 end
 
 -- ====================================================================
--- 9. THREADS DE COMBATE
+-- 9. MOTORES DE COMBATE (M1 & SKILLS)
 -- ====================================================================
 local function executeNativeAttack()
     if isDungeonEnded or not isScriptRunning then return end
@@ -578,12 +577,12 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINA DE ESTADOS DA FASE BLEACH
+-- 10. MÁQUINA DE ESTADOS ESPECÍFICA (BLEACH - FASE 4)
 -- ====================================================================
 local function runBleachPhaseFlow()
     local living = getLivingEnemies()
 
-    -- 1. Monstros vivos (Ondas 1-7, 8-11 e Boss): Combate contínuo
+    -- 1. Combate contínuo enquanto houver monstros vivos na sala
     if #living > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
@@ -598,7 +597,7 @@ local function runBleachPhaseFlow()
             end
         end
 
-    -- 2. Sala limpa (0 monstros): Entra no portal (pós-onda 7 ou pós-onda 11)
+    -- 2. Sala limpa (0 monstros vivos): Voa direto para o portal liberado
     else
         local teleportHitbox, teleportDist = getBleachPortal()
         if teleportHitbox then
@@ -625,19 +624,18 @@ local function runBleachPhaseFlow()
                 task.wait(1.0)
             end
         else
-            stopMovement()
+            stopMovement() -- Flutua aguardando o spawn da próxima onda
         end
     end
 end
 
--- Loop Principal
+-- Loop Principal de Execução
 task.spawn(function()
     while isScriptRunning do
         if Settings.AutoFarm then
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 
-                -- Checagem contínua do Engage / Virus em qualquer fase
                 if Settings.AutoEngage then
                     checkAndClickEngageButton()
                 end
@@ -689,7 +687,7 @@ end)
 toggleNoclip(Settings.AutoFarm)
 
 -- ====================================================================
--- 11. INTERFACE FLUENT COM PERSISTÊNCIA AUTOMÁTICA
+-- 11. INTERFACE FLUENT LIMPA E BOTÃO FLUTUANTE
 -- ====================================================================
 local Window = Fluent:CreateWindow({
     Title = "Hub dos Rapazes",
@@ -803,25 +801,27 @@ task.spawn(function()
     end
 end)
 
-local FarmSection = Tabs.Farm:AddSection("Seleção de Fase")
+-- SEÇÃO 1: CONFIGURAÇÃO DE FASE
+local PhaseSection = Tabs.Farm:AddSection("Fase Ativa")
 
-FarmSection:AddDropdown("PhaseSelector", {
+PhaseSection:AddDropdown("PhaseSelector", {
     Title = "Selecionar Fase",
     Values = { "Bleach (Fase 4)" },
     Default = Settings.SelectedPhase,
     Callback = function(Value)
         Settings.SelectedPhase = Value
-        saveConfig() -- Salva no arquivo local
+        saveConfig()
         table.clear(usedTeleports)
         table.clear(portalHistory)
     end
 })
 
-local CombatSection = Tabs.Farm:AddSection("Auto Farm & Combate")
+-- SEÇÃO 2: CONTROLES DE FARM
+local CombatSection = Tabs.Farm:AddSection("Controles de Farm")
 
-CombatSection:AddToggle("AutoFarmEnemies", {
-    Title = "Auto Farm Universal",
-    Description = "Start -> Farm -> Portais Mapeados -> Auto Replay",
+CombatSection:AddToggle("AutoFarmToggle", {
+    Title = "Iniciar Auto Farm",
+    Description = "Executa a rota mapeada da fase selecionada",
     Default = true,
     Callback = function(Value)
         Settings.AutoFarm = Value
@@ -843,7 +843,7 @@ CombatSection:AddToggle("AutoEngageToggle", {
 
 CombatSection:AddToggle("AutoPlayAgainToggle", {
     Title = "Auto Play Again",
-    Description = "Clica em Jogar Novamente e persiste entre partidas",
+    Description = "Reinicia a partida automaticamente ao vencer/perder",
     Default = true,
     Callback = function(Value)
         Settings.AutoPlayAgain = Value
@@ -852,7 +852,7 @@ CombatSection:AddToggle("AutoPlayAgainToggle", {
 
 CombatSection:AddToggle("AutoStartToggle", {
     Title = "Auto Start Dungeon",
-    Description = "Aguarda a fase carregar e inicia sozinho (espera 3s)",
+    Description = "Inicia a fase sozinho (espera 3s)",
     Default = true,
     Callback = function(Value)
         Settings.AutoStart = Value
@@ -860,8 +860,8 @@ CombatSection:AddToggle("AutoStartToggle", {
 })
 
 CombatSection:AddToggle("AutoAttackToggle", {
-    Title = "Auto Attack (Remote Nativo)",
-    Description = "Dispara os ataques M1 continuamente",
+    Title = "Auto Attack (M1)",
+    Description = "Dispara os ataques básicos continuamente",
     Default = true,
     Callback = function(Value)
         Settings.AutoAttack = Value
