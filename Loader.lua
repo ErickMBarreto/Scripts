@@ -13,7 +13,6 @@ local singletonTag = Instance.new("Folder")
 singletonTag.Name = UNIQUE_ID
 pcall(function() singletonTag.Parent = CoreGui end)
 
--- Limpeza preventiva de interfaces antigas
 for _, gui in ipairs({CoreGui, Players.LocalPlayer and Players.LocalPlayer:FindFirstChild("PlayerGui")}) do
     if gui then
         for _, child in ipairs(gui:GetChildren()) do
@@ -102,7 +101,7 @@ local Settings = {
     HeightAboveEnemy = 9.0,
     TweenSpeed = 90,
     AttackSpeed = 0.15,
-    MaxEnemyDistance = 75,
+    LocalRoomRadius = 80, -- Raio prioritário para limpar a sala atual
     PortalTriggerDistance = 35
 }
 
@@ -274,17 +273,17 @@ local function checkAndClickStartButton()
     return false
 end
 
-local function getClosestEnemyInCurrentRoom()
+-- Busca flexível por raio de distância
+local function getClosestEnemyInRadius(maxDistance)
     local _, root = getCharacter()
     if not root then return nil, nil end
 
     local gameFolder = workspace:FindFirstChild("Game")
     local enemiesFolder = (gameFolder and gameFolder:FindFirstChild("Enemies")) or workspace:FindFirstChild("Enemies")
-
     if not enemiesFolder then return nil, nil end
 
     local closestEnemy, closestRoot = nil, nil
-    local minDistance = Settings.MaxEnemyDistance
+    local minDistance = maxDistance or math.huge
 
     for _, enemy in ipairs(enemiesFolder:GetChildren()) do
         if enemy:IsA("Model") or enemy:IsA("Folder") or enemy:IsA("BasePart") then
@@ -379,6 +378,22 @@ local function executeNativeAttack()
     end
 end
 
+-- Rotina de Farm no Alvo
+local function farmTarget(enemy, enemyRoot)
+    while Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyRoot.Parent do
+        local enemyHum = enemy:FindFirstChildOfClass("Humanoid")
+        if enemyHum and enemyHum.Health <= 0 then break end
+
+        local _, currentRoot = getCharacter()
+        if not currentRoot then break end
+
+        local abovePos = enemyRoot.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
+        local targetCFrame = CFrame.new(abovePos, enemyRoot.Position)
+        smoothFlyTo(targetCFrame)
+        task.wait(0.05)
+    end
+end
+
 task.spawn(function()
     while true do
         if Settings.AutoAttack and not isDungeonEnded then
@@ -414,13 +429,13 @@ task.spawn(function()
     end
 end)
 
+-- Loop Principal com Busca Híbrida Inteligente e Espera de 2s no Engage
 task.spawn(function()
     while true do
         if Settings.AutoFarm then
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 
-                -- Checagem contínua padrão do Engage
                 if Settings.AutoEngage then
                     checkAndClickEngageButton()
                 end
@@ -443,7 +458,7 @@ task.spawn(function()
                         end
                     end
                     
-                    -- Se após os 2 segundos o Engage não apareceu, clica no Play Again
+                    -- Se o Engage não apareceu após os 2 segundos, clica em Play Again
                     if not engaged then
                         isDungeonEnded = true
                         table.clear(usedTeleports)
@@ -464,22 +479,13 @@ task.spawn(function()
                         task.wait(3.0)
                     end
 
-                    local enemy, enemyRoot = getClosestEnemyInCurrentRoom()
+                    -- ETAPA 1: Procura primeiro inimigos dentro da sala atual (raio de 80 studs)
+                    local localEnemy, localRoot = getClosestEnemyInRadius(Settings.LocalRoomRadius)
 
-                    if enemy and enemyRoot then
-                        while Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyRoot.Parent do
-                            local enemyHum = enemy:FindFirstChildOfClass("Humanoid")
-                            if enemyHum and enemyHum.Health <= 0 then break end
-
-                            local _, currentRoot = getCharacter()
-                            if not currentRoot then break end
-
-                            local abovePos = enemyRoot.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
-                            local targetCFrame = CFrame.new(abovePos, enemyRoot.Position)
-                            smoothFlyTo(targetCFrame)
-                            task.wait(0.05)
-                        end
+                    if localEnemy and localRoot then
+                        farmTarget(localEnemy, localRoot)
                     else
+                        -- ETAPA 2: Sem monstros locais, procura se há portal aberto no mapa
                         local teleportHitbox, teleportDist = getActiveTeleport()
                         if teleportHitbox then
                             smoothFlyTo(teleportHitbox.CFrame)
@@ -491,7 +497,13 @@ task.spawn(function()
                                 task.wait(1.2)
                             end
                         else
-                            stopMovement()
+                            -- ETAPA 3: Sem portais (fase contínua/aberta), expande a busca para qualquer distância
+                            local distantEnemy, distantRoot = getClosestEnemyInRadius(math.huge)
+                            if distantEnemy and distantRoot then
+                                farmTarget(distantEnemy, distantRoot)
+                            else
+                                stopMovement()
+                            end
                         end
                     end
                 end
