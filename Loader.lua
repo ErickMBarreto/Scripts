@@ -94,7 +94,8 @@ local Settings = {
     SkillMaxDistance = 20,
     HeightAboveEnemy = 9.0,
     TweenSpeed = 90,
-    AttackSpeed = 0.15
+    AttackSpeed = 0.15,
+    LocalFightRadius = 160 -- Raio máximo para aceitar monstros da sala atual
 }
 
 local function saveConfig()
@@ -144,7 +145,7 @@ local currentTween = nil
 local noclipConnection = nil
 local charConnection = nil
 
--- Estados de Checkpoints Mandatórios da Fase 4
+-- Estados de Progressão Rígida (Fase 4)
 local passedPortal1 = false
 local passedPortal2 = false
 local needsBossReturn = false
@@ -177,7 +178,6 @@ local function stopMovement()
     end
 end
 
--- TRATAMENTO DE RESPAWN / MORTE
 charConnection = player.CharacterAdded:Connect(function()
     stopMovement()
     teleportCooldown = 0
@@ -185,7 +185,7 @@ charConnection = player.CharacterAdded:Connect(function()
 
     if passedPortal2 then
         passedPortal2 = false
-        needsBossReturn = true -- Força retorno prioritário pelo Teleport2
+        needsBossReturn = true
     end
 end)
 
@@ -313,7 +313,7 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 7. DETECÇÃO DE INIMIGOS E LEITURA DE WAVE
+-- 7. SCANNERS DE COMBATE LOCAL E PORTAIS
 -- ====================================================================
 local function getCurrentWaveNumber()
     local pguiRef = player:FindFirstChild("PlayerGui")
@@ -364,16 +364,22 @@ local function isEntityAlive(obj)
     return getEntityTargetPart(obj) ~= nil
 end
 
-local function getLivingEnemies()
+-- Retorna APENAS os inimigos vivos da área local do jogador
+local function getLocalLivingEnemies()
     local list = {}
-    local char = player.Character
+    local char, root = getCharacter()
+    if not root then return list end
+
     local gameFolder = workspace:FindFirstChild("Game")
     local enemiesFolder = (gameFolder and gameFolder:FindFirstChild("Enemies")) or workspace:FindFirstChild("Enemies")
 
     if enemiesFolder then
         for _, enemy in ipairs(enemiesFolder:GetChildren()) do
             if isEntityAlive(enemy) then
-                table.insert(list, enemy)
+                local part = getEntityTargetPart(enemy)
+                if part and (root.Position - part.Position).Magnitude <= Settings.LocalFightRadius then
+                    table.insert(list, enemy)
+                end
             end
         end
     end
@@ -383,7 +389,10 @@ local function getLivingEnemies()
             if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
                 if obj.Name:lower():find("enemy") or obj.Name:lower():find("mob") or obj.Name:lower():find("boss") or obj:FindFirstChildOfClass("Humanoid") then
                     if isEntityAlive(obj) then
-                        table.insert(list, obj)
+                        local part = getEntityTargetPart(obj)
+                        if part and (root.Position - part.Position).Magnitude <= Settings.LocalFightRadius then
+                            table.insert(list, obj)
+                        end
                     end
                 end
             end
@@ -393,11 +402,11 @@ local function getLivingEnemies()
     return list
 end
 
-local function getClosestLivingEnemy()
+local function getClosestLocalEnemy()
     local _, root = getCharacter()
     if not root then return nil, nil end
 
-    local enemies = getLivingEnemies()
+    local enemies = getLocalLivingEnemies()
     local closestEnemy, closestPart = nil, nil
     local minDistance = math.huge
 
@@ -416,15 +425,15 @@ local function getClosestLivingEnemy()
     return closestEnemy, closestPart
 end
 
--- Busca a Hitbox do Teleport1 ou Teleport2 dentro de Game.Teleports
-local function getSpecificPortalHitbox(portalName)
+-- Busca a HitBox física de um portal pelo nome (Teleport1 ou Teleport2)
+local function getPortalHitBox(portalName)
     local gameFolder = workspace:FindFirstChild("Game")
     local teleportsFolder = (gameFolder and gameFolder:FindFirstChild("Teleports")) or workspace:FindFirstChild("Teleports")
     
     if teleportsFolder then
-        local pObj = teleportsFolder:FindFirstChild(portalName)
-        if pObj then
-            return pObj:FindFirstChild("HitBox") or pObj:FindFirstChild("Hitbox") or (pObj:IsA("BasePart") and pObj) or pObj:FindFirstChildWhichIsA("BasePart")
+        local p = teleportsFolder:FindFirstChild(portalName)
+        if p then
+            return p:FindFirstChild("HitBox") or p:FindFirstChild("Hitbox") or (p:IsA("BasePart") and p) or p:FindFirstChildWhichIsA("BasePart")
         end
     end
 
@@ -504,18 +513,20 @@ local function handleDungeonStart()
 end
 
 -- ====================================================================
--- 9. TRAVA DE COMBATE (Desativa ataque durante transição de checkpoint)
+-- 9. TRAVA E EXECUÇÃO DE COMBATE
 -- ====================================================================
-local function isPortalTransitionPending()
+local function isPortalTransitionActive()
     local wave = getCurrentWaveNumber()
+    local localEnemies = getLocalLivingEnemies()
+
     if needsBossReturn then return true end
-    if not passedPortal1 and wave >= 8 then return true end
-    if not passedPortal2 and wave >= 12 then return true end
+    if not passedPortal1 and (wave >= 8 or #localEnemies == 0) then return true end
+    if passedPortal1 and not passedPortal2 and (wave >= 12 or #localEnemies == 0) then return true end
     return false
 end
 
 local function executeNativeAttack()
-    if isDungeonEnded or not isScriptRunning or isPortalTransitionPending() then return end
+    if isDungeonEnded or not isScriptRunning or isPortalTransitionActive() then return end
     comboIndex = (comboIndex % 4) + 1
     local weapon = getDynamicEquippedWeapon()
 
@@ -537,7 +548,7 @@ end
 
 task.spawn(function()
     while isScriptRunning do
-        if Settings.AutoAttack and not isDungeonEnded and not isPortalTransitionPending() then
+        if Settings.AutoAttack and not isDungeonEnded and not isPortalTransitionActive() then
             local char, _, hum = getCharacter()
             if char and hum and hum.Health > 0 then
                 executeNativeAttack()
@@ -549,11 +560,11 @@ end)
 
 task.spawn(function()
     while isScriptRunning do
-        if Settings.AutoSkills and not isDungeonEnded and not isPortalTransitionPending() then
+        if Settings.AutoSkills and not isDungeonEnded and not isPortalTransitionActive() then
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 if (tick() - lastSkillUse) >= Settings.SkillCooldown then
-                    local _, enemyPart = getClosestLivingEnemy()
+                    local _, enemyPart = getClosestLocalEnemy()
                     if enemyPart and enemyPart.Parent then
                         local distance = (root.Position - enemyPart.Position).Magnitude
                         if distance <= Settings.SkillMaxDistance then
@@ -587,9 +598,9 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINA DE ESTADOS COM CHECKPOINT MANDATÓRIO (FASE 4)
+-- 10. MÁQUINA DE ESTADOS DA FASE BLEACH
 -- ====================================================================
-local function forceEnterHitbox(hitbox)
+local function forceTeleportThrough(hitbox)
     local char, root = getCharacter()
     if not root or not hitbox then return false end
 
@@ -610,23 +621,24 @@ local function forceEnterHitbox(hitbox)
             end)
         end
         
-        task.wait(0.35)
-        if (root.Position - initialPos).Magnitude > 30 then
-            return true
+        task.wait(0.4)
+        local postDist = (root.Position - initialPos).Magnitude
+        if postDist > 30 then
+            return true -- Confirmou mudança de área
         end
     end
     return false
 end
 
 local function runBleachPhaseFlow()
-    local living = getLivingEnemies()
+    local localEnemies = getLocalLivingEnemies()
     local wave = getCurrentWaveNumber()
 
-    -- 1. MORTE NO BOSS: Força retorno imediato ao Teleport2 antes de qualquer ação
+    -- 1. MORTE NO BOSS: Força retorno pelo Teleport2
     if needsBossReturn then
-        local p2Hitbox = getSpecificPortalHitbox("Teleport2")
-        if p2Hitbox then
-            if forceEnterHitbox(p2Hitbox) then
+        local p2 = getPortalHitBox("Teleport2")
+        if p2 then
+            if forceTeleportThrough(p2) then
                 passedPortal2 = true
                 needsBossReturn = false
                 teleportCooldown = tick() + 2.0
@@ -637,11 +649,11 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 2. BLOQUEIO OBRIGATÓRIO: Passar pelo Portal 1 assim que a Wave 7 terminar (Wave >= 8)
-    if not passedPortal1 and wave >= 8 then
-        local p1Hitbox = getSpecificPortalHitbox("Teleport1")
-        if p1Hitbox then
-            if forceEnterHitbox(p1Hitbox) then
+    -- 2. BLOQUEIO OBRIGATÓRIO SALA 1 -> ENTRA NO TELEPORT 1
+    if not passedPortal1 and (wave >= 8 or #localEnemies == 0) then
+        local p1 = getPortalHitBox("Teleport1")
+        if p1 then
+            if forceTeleportThrough(p1) then
                 passedPortal1 = true
                 teleportCooldown = tick() + 2.0
             end
@@ -651,11 +663,11 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 3. BLOQUEIO OBRIGATÓRIO: Passar pelo Portal 2 assim que a Wave 11 terminar (Wave >= 12)
-    if not passedPortal2 and wave >= 12 then
-        local p2Hitbox = getSpecificPortalHitbox("Teleport2")
-        if p2Hitbox then
-            if forceEnterHitbox(p2Hitbox) then
+    -- 3. BLOQUEIO OBRIGATÓRIO SALA 2 -> ENTRA NO TELEPORT 2
+    if passedPortal1 and not passedPortal2 and (wave >= 12 or #localEnemies == 0) then
+        local p2 = getPortalHitBox("Teleport2")
+        if p2 then
+            if forceTeleportThrough(p2) then
                 passedPortal2 = true
                 teleportCooldown = tick() + 2.0
             end
@@ -666,10 +678,10 @@ local function runBleachPhaseFlow()
     end
 
     -- 4. COMBATE NORMAL NA ÁREA ATUAL
-    if #living > 0 then
-        local enemy, enemyPart = getClosestLivingEnemy()
+    if #localEnemies > 0 then
+        local enemy, enemyPart = getClosestLocalEnemy()
         if enemy and enemyPart then
-            while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) and not isPortalTransitionPending() do
+            while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) and not isPortalTransitionActive() do
                 local _, currentRoot = getCharacter()
                 if not currentRoot then break end
 
@@ -684,7 +696,7 @@ local function runBleachPhaseFlow()
     end
 end
 
--- Loop Principal
+-- Loop Principal de Decisão
 task.spawn(function()
     while isScriptRunning do
         if Settings.AutoFarm then
