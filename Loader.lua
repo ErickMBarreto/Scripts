@@ -96,10 +96,10 @@ local Settings = {
     SkillMaxDistance = 20,
     HeightAboveEnemy = 9.0,
     TweenSpeed = 90,
-    AttackSpeed = 0.15
+    AttackSpeed = 0.15,
+    LocalRoomRadius = 220 -- Raio máximo para considerar inimigos da mesma sala
 }
 
--- Estado do Script e Killswitch
 local isScriptRunning = true
 local currentTween = nil
 local noclipConnection = nil
@@ -273,7 +273,7 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 6. SCANNERS DE INIMIGOS E PORTAIS
+-- 6. SCANNERS DE INIMIGOS LOCAIS & PORTAIS
 -- ====================================================================
 local function getEntityTargetPart(obj)
     if not obj or not obj.Parent then return nil end
@@ -310,16 +310,22 @@ local function isEntityAlive(obj)
     return getEntityTargetPart(obj) ~= nil
 end
 
-local function getLivingEnemies()
+-- Retorna apenas inimigos que pertencem à sala atual (dentro do raio configurado)
+local function getLivingLocalEnemies()
     local list = {}
-    local char = player.Character
+    local char, root = getCharacter()
+    if not root then return list end
+
     local gameFolder = workspace:FindFirstChild("Game")
     local enemiesFolder = (gameFolder and gameFolder:FindFirstChild("Enemies")) or workspace:FindFirstChild("Enemies")
 
     if enemiesFolder then
         for _, enemy in ipairs(enemiesFolder:GetChildren()) do
             if isEntityAlive(enemy) then
-                table.insert(list, enemy)
+                local part = getEntityTargetPart(enemy)
+                if part and (root.Position - part.Position).Magnitude <= Settings.LocalRoomRadius then
+                    table.insert(list, enemy)
+                end
             end
         end
     end
@@ -329,7 +335,10 @@ local function getLivingEnemies()
             if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
                 if obj.Name:lower():find("enemy") or obj.Name:lower():find("mob") or obj.Name:lower():find("boss") or obj:FindFirstChildOfClass("Humanoid") then
                     if isEntityAlive(obj) then
-                        table.insert(list, obj)
+                        local part = getEntityTargetPart(obj)
+                        if part and (root.Position - part.Position).Magnitude <= Settings.LocalRoomRadius then
+                            table.insert(list, obj)
+                        end
                     end
                 end
             end
@@ -343,7 +352,7 @@ local function getClosestLivingEnemy()
     local _, root = getCharacter()
     if not root then return nil, nil end
 
-    local enemies = getLivingEnemies()
+    local enemies = getLivingLocalEnemies()
     local closestEnemy, closestPart = nil, nil
     local minDistance = math.huge
 
@@ -362,6 +371,7 @@ local function getClosestLivingEnemy()
     return closestEnemy, closestPart
 end
 
+-- Scanner de Portais
 local function getActiveUnusedPortal()
     if tick() < teleportCooldown then
         return nil, math.huge
@@ -591,10 +601,10 @@ task.spawn(function()
                         end
                         task.wait(0.2)
                     else
-                        local livingEnemies = getLivingEnemies()
+                        local livingLocalEnemies = getLivingLocalEnemies()
 
-                        -- ESTADO 1: EXISTEM INIMIGOS NO MAPA (COMBATE ABSOLUTO)
-                        if #livingEnemies > 0 then
+                        -- ESTADO 1: HÁ INIMIGOS NA SALA (< 220 STUDS)
+                        if #livingLocalEnemies > 0 then
                             local enemy, enemyPart = getClosestLivingEnemy()
                             if enemy and enemyPart then
                                 while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) do
@@ -608,7 +618,7 @@ task.spawn(function()
                                 end
                             end
 
-                        -- ESTADO 2: 0 INIMIGOS NO MAPA (ENTRA NO PORTAL)
+                        -- ESTADO 2: SALA LIMPA (SEM INIMIGOS POR PERTO -> ENTRA NO PORTAL)
                         else
                             local teleportHitbox, teleportDist = getActiveUnusedPortal()
                             if teleportHitbox then
@@ -713,7 +723,6 @@ floatBtn.MouseButton1Click:Connect(function()
     toggleUI(true)
 end)
 
--- FUNÇÃO DE ENCERRAMENTO TOTAL (KILLSWITCH)
 local function destroyScript()
     isScriptRunning = false
     Settings.AutoFarm = false
@@ -728,14 +737,12 @@ local function destroyScript()
         charConnection = nil
     end
 
-    -- Remove a tag singleton para liberar nova injeção imediatamente
     if singletonTag and singletonTag.Parent then
         singletonTag:Destroy()
     end
     local st = CoreGui:FindFirstChild(UNIQUE_ID)
     if st then st:Destroy() end
 
-    -- Destrói a interface e o botão flutuante
     if toggleGui and toggleGui.Parent then
         toggleGui:Destroy()
     end
@@ -748,7 +755,6 @@ local function destroyScript()
     end
 end
 
--- Escuta os botões de fechar (X) nativos da janela do Fluent
 task.spawn(function()
     task.wait(0.8)
     for _, gui in ipairs({CoreGui, player.PlayerGui}) do
