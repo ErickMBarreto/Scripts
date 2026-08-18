@@ -90,10 +90,8 @@ task.spawn(function()
     end
 end)
 
--- Arma equipada identificada pelo slot Weapon
 local activeWeaponName = "SnowKatana"
 
--- Interceptador Dinâmico: atualiza caso você troque de arma via UI ou ataque
 pcall(function()
     local oldNamecall
     oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
@@ -118,7 +116,7 @@ local Settings = {
     AutoPlayAgain = true,
     AutoEngage = true,
     SkillCooldown = 0.8,
-    HeightAboveEnemy = 4.0, -- Altura ajustada para o alcance da lâmina
+    HeightAboveEnemy = 9.0,
     TweenSpeed = 90,
     AttackSpeed = 0.18,
     LocalRoomRadius = 80,
@@ -157,7 +155,6 @@ local function stopMovement()
     end
 end
 
--- DISPARO COM VETOR DE MIRA DIRECIONADO AO INIMIGO
 local function executeNativeAttack()
     if isDungeonEnded then return end
     local _, root = getCharacter()
@@ -165,7 +162,6 @@ local function executeNativeAttack()
 
     comboIndex = (comboIndex % 3) + 1
     
-    -- Calcula vetor de direção apontando para o inimigo alvo
     local aimDirection = root.CFrame.LookVector
     if currentTargetPart and currentTargetPart.Parent then
         local dir = (currentTargetPart.Position - root.Position).Unit
@@ -252,7 +248,6 @@ local function smoothFlyTo(targetCFrame)
     currentTween:Play()
 end
 
--- Detecção do Botão Engage (Main.VirusFrame.Warning.Buttons.Confirm)
 local function checkAndClickEngageButton()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef then return false end
@@ -405,7 +400,6 @@ local function farmTarget(enemy, enemyRoot)
     currentTargetPart = nil
 end
 
--- Loop de Ataque Automático Contínuo
 task.spawn(function()
     while true do
         if Settings.AutoAttack and not isDungeonEnded then
@@ -418,7 +412,6 @@ task.spawn(function()
     end
 end)
 
--- Loop de Skills (Spell1 & Spell2)
 task.spawn(function()
     while true do
         if Settings.AutoSkills and not isDungeonEnded then
@@ -442,7 +435,6 @@ task.spawn(function()
     end
 end)
 
--- Loop Principal do Farm
 task.spawn(function()
     while true do
         if Settings.AutoFarm then
@@ -696,7 +688,7 @@ FarmSection:AddSlider("SkillCooldownSlider", {
 
 FarmSection:AddSlider("HeightAboveEnemy", {
     Title = "Altura acima do Inimigo",
-    Default = 4.0,
+    Default = 9.0,
     Min = 1,
     Max = 20,
     Rounding = 1,
