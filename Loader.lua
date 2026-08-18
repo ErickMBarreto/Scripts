@@ -95,7 +95,7 @@ local Settings = {
     HeightAboveEnemy = 9.0,
     TweenSpeed = 90,
     AttackSpeed = 0.15,
-    LocalFightRadius = 160 -- Raio máximo para aceitar monstros da sala atual
+    LocalFightRadius = 160
 }
 
 local function saveConfig()
@@ -145,7 +145,6 @@ local currentTween = nil
 local noclipConnection = nil
 local charConnection = nil
 
--- Estados de Progressão Rígida (Fase 4)
 local passedPortal1 = false
 local passedPortal2 = false
 local needsBossReturn = false
@@ -313,7 +312,7 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 7. SCANNERS DE COMBATE LOCAL E PORTAIS
+-- 7. DETECÇÃO DE INIMIGOS E LEITURA DE WAVE
 -- ====================================================================
 local function getCurrentWaveNumber()
     local pguiRef = player:FindFirstChild("PlayerGui")
@@ -364,7 +363,6 @@ local function isEntityAlive(obj)
     return getEntityTargetPart(obj) ~= nil
 end
 
--- Retorna APENAS os inimigos vivos da área local do jogador
 local function getLocalLivingEnemies()
     local list = {}
     local char, root = getCharacter()
@@ -425,15 +423,15 @@ local function getClosestLocalEnemy()
     return closestEnemy, closestPart
 end
 
--- Busca a HitBox física de um portal pelo nome (Teleport1 ou Teleport2)
-local function getPortalHitBox(portalName)
+-- Pega o Portal (Teleport1 ou Teleport2)
+local function getPortalPart(portalName)
     local gameFolder = workspace:FindFirstChild("Game")
     local teleportsFolder = (gameFolder and gameFolder:FindFirstChild("Teleports")) or workspace:FindFirstChild("Teleports")
     
     if teleportsFolder then
         local p = teleportsFolder:FindFirstChild(portalName)
         if p then
-            return p:FindFirstChild("HitBox") or p:FindFirstChild("Hitbox") or (p:IsA("BasePart") and p) or p:FindFirstChildWhichIsA("BasePart")
+            return p:FindFirstChild("HitBox") or p:FindFirstChild("Hitbox") or (p:IsA("BasePart") and p) or p:FindFirstChildWhichIsA("BasePart") or (p:IsA("Model") and p.PrimaryPart)
         end
     end
 
@@ -598,33 +596,23 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINA DE ESTADOS DA FASE BLEACH
+-- 10. MÁQUINA DE ESTADOS DA FASE BLEACH (VOO DIRETO AO PORTAL)
 -- ====================================================================
-local function forceTeleportThrough(hitbox)
+local function flyToPortalLocation(portalPart)
     local char, root = getCharacter()
-    if not root or not hitbox then return false end
+    if not root or not portalPart then return false end
 
     local initialPos = root.Position
-    local dist = (root.Position - hitbox.Position).Magnitude
+    local dist = (root.Position - portalPart.Position).Magnitude
 
-    if dist > 8 then
-        smoothFlyTo(hitbox.CFrame)
-    else
-        stopMovement()
-        root.CFrame = hitbox.CFrame
-        
-        if firetouchinterest then
-            pcall(function()
-                firetouchinterest(root, hitbox, 0)
-                task.wait(0.05)
-                firetouchinterest(root, hitbox, 1)
-            end)
-        end
-        
-        task.wait(0.4)
-        local postDist = (root.Position - initialPos).Magnitude
-        if postDist > 30 then
-            return true -- Confirmou mudança de área
+    -- Voa em direção ao portal
+    smoothFlyTo(portalPart.CFrame)
+
+    -- Ao chegar a menos de 15 studs, o jogo já aciona o TP por proximidade
+    if dist <= 15 then
+        task.wait(0.3)
+        if (root.Position - initialPos).Magnitude > 30 then
+            return true -- Confirmou o teleporte
         end
     end
     return false
@@ -634,11 +622,11 @@ local function runBleachPhaseFlow()
     local localEnemies = getLocalLivingEnemies()
     local wave = getCurrentWaveNumber()
 
-    -- 1. MORTE NO BOSS: Força retorno pelo Teleport2
+    -- 1. MORTE NO BOSS: Voa direto até o Teleport2 para voltar à sala
     if needsBossReturn then
-        local p2 = getPortalHitBox("Teleport2")
+        local p2 = getPortalPart("Teleport2")
         if p2 then
-            if forceTeleportThrough(p2) then
+            if flyToPortalLocation(p2) then
                 passedPortal2 = true
                 needsBossReturn = false
                 teleportCooldown = tick() + 2.0
@@ -649,11 +637,11 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 2. BLOQUEIO OBRIGATÓRIO SALA 1 -> ENTRA NO TELEPORT 1
+    -- 2. BLOQUEIO SALA 1: Voa até onde o Teleport1 está
     if not passedPortal1 and (wave >= 8 or #localEnemies == 0) then
-        local p1 = getPortalHitBox("Teleport1")
+        local p1 = getPortalPart("Teleport1")
         if p1 then
-            if forceTeleportThrough(p1) then
+            if flyToPortalLocation(p1) then
                 passedPortal1 = true
                 teleportCooldown = tick() + 2.0
             end
@@ -663,11 +651,11 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 3. BLOQUEIO OBRIGATÓRIO SALA 2 -> ENTRA NO TELEPORT 2
+    -- 3. BLOQUEIO SALA 2: Voa até onde o Teleport2 está
     if passedPortal1 and not passedPortal2 and (wave >= 12 or #localEnemies == 0) then
-        local p2 = getPortalHitBox("Teleport2")
+        local p2 = getPortalPart("Teleport2")
         if p2 then
-            if forceTeleportThrough(p2) then
+            if flyToPortalLocation(p2) then
                 passedPortal2 = true
                 teleportCooldown = tick() + 2.0
             end
@@ -677,7 +665,7 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 4. COMBATE NORMAL NA ÁREA ATUAL
+    -- 4. COMBATE NORMAL NA SALA ATUAL
     if #localEnemies > 0 then
         local enemy, enemyPart = getClosestLocalEnemy()
         if enemy and enemyPart then
@@ -696,7 +684,7 @@ local function runBleachPhaseFlow()
     end
 end
 
--- Loop Principal de Decisão
+-- Loop Principal
 task.spawn(function()
     while isScriptRunning do
         if Settings.AutoFarm then
