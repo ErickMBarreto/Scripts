@@ -143,8 +143,9 @@ local isScriptRunning = true
 local currentTween = nil
 local noclipConnection = nil
 local charConnection = nil
-local usedTeleports = {}
-local portalHistory = {}
+local passedPortal1 = false
+local passedPortal2 = false
+local needsBossReturn = false
 local teleportCooldown = 0
 local lastSkillUse = 0
 local comboIndex = 1
@@ -173,18 +174,15 @@ local function stopMovement()
     end
 end
 
+-- TRATAMENTO DE MORTE / RESPAWN: Se morreu no Boss, desmarca Portal 2 e ativa prioridade de retorno
 charConnection = player.CharacterAdded:Connect(function()
     stopMovement()
     teleportCooldown = 0
-    dungeonReady = false
     attackRemote = nil
 
-    if #portalHistory > 0 then
-        local lastPortal = table.remove(portalHistory)
-        if lastPortal then
-            usedTeleports[lastPortal] = nil
-            if lastPortal.Parent then usedTeleports[lastPortal.Parent] = nil end
-        end
+    if passedPortal2 then
+        passedPortal2 = false
+        needsBossReturn = true -- Prioridade de entrada no portal 2 antes de qualquer ataque
     end
 end)
 
@@ -312,8 +310,23 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 7. SCANNERS ESPECÍFICOS DA FASE 4 (BLEACH)
+-- 7. DETECÇÃO DA FASE 4 (BLEACH)
 -- ====================================================================
+local function getCurrentWaveNumber()
+    local pguiRef = player:FindFirstChild("PlayerGui")
+    if pguiRef then
+        for _, desc in ipairs(pguiRef:GetDescendants()) do
+            if desc:IsA("TextLabel") and desc.Visible and desc.Text ~= "" then
+                local current, total = desc.Text:match("(%d+)%s*/%s*(%d+)")
+                if current then
+                    return tonumber(current)
+                end
+            end
+        end
+    end
+    return 1
+end
+
 local function getEntityTargetPart(obj)
     if not obj or not obj.Parent then return nil end
     return obj:FindFirstChild("HumanoidRootPart")
@@ -332,7 +345,12 @@ local function isEntityAlive(obj)
     if not obj or not obj.Parent then return false end
     
     local hum = obj:FindFirstChildOfClass("Humanoid")
-    if hum then return hum.Health > 0 end
+    if hum then 
+        if hum.Health <= 0 or hum:GetState() == Enum.HumanoidStateType.Dead then
+            return false
+        end
+        return true
+    end
 
     local hpAttr = obj:GetAttribute("Health") or obj:GetAttribute("HP")
     if hpAttr then return tonumber(hpAttr) > 0 end
@@ -395,44 +413,53 @@ local function getClosestLivingEnemy()
     return closestEnemy, closestPart
 end
 
--- Busca os portais da Fase 4 (Teleport1 e Teleport2 dentro de Game.Teleports)
-local function getBleachPortal()
-    if tick() < teleportCooldown then
-        return nil, math.huge
-    end
-
-    local _, root = getCharacter()
-    if not root then return nil, math.huge end
-
-    local candidates = {}
+-- Busca a HitBox do Teleporte Alvo específico (Teleport1 ou Teleport2)
+local function getSpecificPortalHitbox(portalName)
     local gameFolder = workspace:FindFirstChild("Game")
     local teleportsFolder = (gameFolder and gameFolder:FindFirstChild("Teleports")) or workspace:FindFirstChild("Teleports")
-
+    
     if teleportsFolder then
-        for _, obj in ipairs(teleportsFolder:GetChildren()) do
-            local hitbox = obj:FindFirstChild("HitBox") or obj:FindFirstChild("Hitbox") or (obj:IsA("BasePart") and obj) or obj:FindFirstChildWhichIsA("BasePart")
-            if hitbox and not usedTeleports[hitbox] and not usedTeleports[obj] then
-                table.insert(candidates, hitbox)
-            end
+        local portalObj = teleportsFolder:FindFirstChild(portalName)
+        if portalObj then
+            return portalObj:FindFirstChild("HitBox") or portalObj:FindFirstChild("Hitbox") or (portalObj:IsA("BasePart") and portalObj) or portalObj:FindFirstChildWhichIsA("BasePart")
         end
     end
 
-    if #candidates == 0 then
-        return nil, math.huge
-    end
-
-    local closestHitbox = nil
-    local minDistance = math.huge
-
-    for _, hitbox in ipairs(candidates) do
-        local dist = (root.Position - hitbox.Position).Magnitude
-        if dist < minDistance then
-            minDistance = dist
-            closestHitbox = hitbox
+    for _, desc in ipairs(workspace:GetDescendants()) do
+        if desc.Name == portalName and desc:IsA("Model") then
+            return desc:FindFirstChild("HitBox") or desc:FindFirstChild("Hitbox") or desc:FindFirstChildWhichIsA("BasePart")
         end
     end
 
-    return closestHitbox, minDistance
+    return nil
+end
+
+-- Força a travessia no portal
+local function enterPortal(hitbox)
+    if not hitbox then return false end
+    local _, root = getCharacter()
+    if not root then return false end
+
+    local dist = (root.Position - hitbox.Position).Magnitude
+    if dist > 10 then
+        smoothFlyTo(hitbox.CFrame)
+    else
+        stopMovement()
+        root.CFrame = hitbox.CFrame
+        if firetouchinterest then
+            pcall(function()
+                firetouchinterest(root, hitbox, 0)
+                task.wait(0.05)
+                firetouchinterest(root, hitbox, 1)
+            end)
+        end
+        task.wait(0.4)
+        local newDist = (root.Position - hitbox.Position).Magnitude
+        if newDist > 35 then
+            return true -- Teleportado com sucesso
+        end
+    end
+    return false
 end
 
 -- ====================================================================
@@ -505,7 +532,7 @@ end
 -- 9. MOTORES DE COMBATE (M1 & SKILLS)
 -- ====================================================================
 local function executeNativeAttack()
-    if isDungeonEnded or not isScriptRunning then return end
+    if isDungeonEnded or not isScriptRunning or needsBossReturn then return end
     comboIndex = (comboIndex % 4) + 1
     local weapon = getDynamicEquippedWeapon()
 
@@ -527,7 +554,7 @@ end
 
 task.spawn(function()
     while isScriptRunning do
-        if Settings.AutoAttack and not isDungeonEnded then
+        if Settings.AutoAttack and not isDungeonEnded and not needsBossReturn then
             local char, _, hum = getCharacter()
             if char and hum and hum.Health > 0 then
                 executeNativeAttack()
@@ -539,7 +566,7 @@ end)
 
 task.spawn(function()
     while isScriptRunning do
-        if Settings.AutoSkills and not isDungeonEnded then
+        if Settings.AutoSkills and not isDungeonEnded and not needsBossReturn then
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 if (tick() - lastSkillUse) >= Settings.SkillCooldown then
@@ -577,12 +604,52 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINA DE ESTADOS ESPECÍFICA (BLEACH - FASE 4)
+-- 10. MÁQUINA DE ESTADOS ESPECÍFICA (BLEACH - FASE 4 DETERMINÍSTICA)
 -- ====================================================================
 local function runBleachPhaseFlow()
     local living = getLivingEnemies()
+    local wave = getCurrentWaveNumber()
 
-    -- 1. Combate contínuo enquanto houver monstros vivos na sala
+    -- PRIORIDADE 0: RECUPERAÇÃO DE MORTE NO BOSS (Voltar direto pelo Teleport2)
+    if needsBossReturn then
+        local p2Hitbox = getSpecificPortalHitbox("Teleport2")
+        if p2Hitbox then
+            if enterPortal(p2Hitbox) then
+                passedPortal2 = true
+                needsBossReturn = false
+                teleportCooldown = tick() + 2.0
+            end
+            return
+        else
+            needsBossReturn = false
+        end
+    end
+
+    -- TRANSIÇÃO 1: FIM DA WAVE 7 -> ENTRA NO TELEPORT 1
+    if not passedPortal1 and wave >= 7 and #living == 0 then
+        local p1Hitbox = getSpecificPortalHitbox("Teleport1")
+        if p1Hitbox then
+            if enterPortal(p1Hitbox) then
+                passedPortal1 = true
+                teleportCooldown = tick() + 2.5
+            end
+            return
+        end
+    end
+
+    -- TRANSIÇÃO 2: FIM DA WAVE 11 -> ENTRA NO TELEPORT 2
+    if passedPortal1 and not passedPortal2 and wave >= 11 and #living == 0 then
+        local p2Hitbox = getSpecificPortalHitbox("Teleport2")
+        if p2Hitbox then
+            if enterPortal(p2Hitbox) then
+                passedPortal2 = true
+                teleportCooldown = tick() + 2.5
+            end
+            return
+        end
+    end
+
+    -- COMBATE REGULAR (WAVES 1-7, 8-11 OU BOSS 12)
     if #living > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
@@ -596,36 +663,8 @@ local function runBleachPhaseFlow()
                 task.wait(0.05)
             end
         end
-
-    -- 2. Sala limpa (0 monstros vivos): Voa direto para o portal liberado
     else
-        local teleportHitbox, teleportDist = getBleachPortal()
-        if teleportHitbox then
-            smoothFlyTo(teleportHitbox.CFrame)
-            
-            if teleportDist <= 14 then
-                local _, root = getCharacter()
-                if root then
-                    root.CFrame = teleportHitbox.CFrame
-                end
-                
-                if firetouchinterest and root then
-                    pcall(function()
-                        firetouchinterest(root, teleportHitbox, 0)
-                        task.wait(0.05)
-                        firetouchinterest(root, teleportHitbox, 1)
-                    end)
-                end
-
-                usedTeleports[teleportHitbox] = true
-                if teleportHitbox.Parent then usedTeleports[teleportHitbox.Parent] = true end
-                table.insert(portalHistory, teleportHitbox)
-                teleportCooldown = tick() + 2.5
-                task.wait(1.0)
-            end
-        else
-            stopMovement() -- Flutua aguardando o spawn da próxima onda
-        end
+        stopMovement() -- Flutua aguardando o spawn da próxima onda
     end
 end
 
@@ -644,8 +683,9 @@ task.spawn(function()
                 if ended then
                     isDungeonEnded = true
                     dungeonReady = false
-                    table.clear(usedTeleports)
-                    table.clear(portalHistory)
+                    passedPortal1 = false
+                    passedPortal2 = false
+                    needsBossReturn = false
                     stopMovement()
                     
                     if Settings.AutoPlayAgain and playAgainBtn then
@@ -801,7 +841,6 @@ task.spawn(function()
     end
 end)
 
--- SEÇÃO 1: CONFIGURAÇÃO DE FASE
 local PhaseSection = Tabs.Farm:AddSection("Fase Ativa")
 
 PhaseSection:AddDropdown("PhaseSelector", {
@@ -811,12 +850,12 @@ PhaseSection:AddDropdown("PhaseSelector", {
     Callback = function(Value)
         Settings.SelectedPhase = Value
         saveConfig()
-        table.clear(usedTeleports)
-        table.clear(portalHistory)
+        passedPortal1 = false
+        passedPortal2 = false
+        needsBossReturn = false
     end
 })
 
--- SEÇÃO 2: CONTROLES DE FARM
 local CombatSection = Tabs.Farm:AddSection("Controles de Farm")
 
 CombatSection:AddToggle("AutoFarmToggle", {
