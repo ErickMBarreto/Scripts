@@ -138,6 +138,7 @@ local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local VirtualUser = game:GetService("VirtualUser")
 
 local isScriptRunning = true
 local currentTween = nil
@@ -152,7 +153,7 @@ local teleportCooldown = 0
 local lastSkillUse = 0
 local comboIndex = 1
 local isDungeonEnded = false
-local attackRemote = nil
+local cachedAttackRemotes = {}
 local cachedWeaponName = "VoidRods"
 
 local function getCharacter()
@@ -178,7 +179,7 @@ end
 charConnection = player.CharacterAdded:Connect(function()
     stopMovement()
     teleportCooldown = 0
-    attackRemote = nil
+    table.clear(cachedAttackRemotes)
 
     if Settings.SelectedPhase == "Bleach (Fase 4)" and passedPortal2 then
         passedPortal2 = false
@@ -252,23 +253,31 @@ local function pressKey(keyCode)
 end
 
 -- ====================================================================
--- 6. COMBATE NATIVO & INVENTÁRIO
+-- 6. MOTOR DE COMBATE DIRETO (SEM VERIFICAÇÃO DE BACKPACK)
 -- ====================================================================
-local function findAttackRemote()
-    if attackRemote and attackRemote.Parent then return attackRemote end
-    for _, container in ipairs({ReplicatedStorage, ReplicatedStorage:FindFirstChild("Remotes"), ReplicatedStorage:FindFirstChild("Events")}) do
-        if container then
-            local rem = container:FindFirstChild("Attack") or container:FindFirstChild("M1") or container:FindFirstChild("Combat")
-            if rem and rem:IsA("RemoteEvent") then
-                attackRemote = rem
-                return attackRemote
+local function findAttackRemotes()
+    if #cachedAttackRemotes > 0 then return cachedAttackRemotes end
+    for _, desc in ipairs(ReplicatedStorage:GetDescendants()) do
+        if desc:IsA("RemoteEvent") then
+            local name = desc.Name:lower()
+            if name == "attack" or name == "m1" or name == "combat" or name:find("hit") or name:find("damage") then
+                table.insert(cachedAttackRemotes, desc)
             end
         end
     end
-    return nil
+    return cachedAttackRemotes
 end
 
 local function getDynamicEquippedWeapon()
+    local char = player.Character
+    if char then
+        local tool = char:FindFirstChildOfClass("Tool")
+        if tool then
+            cachedWeaponName = tool.Name
+            return cachedWeaponName
+        end
+    end
+
     local pguiRef = player:FindFirstChild("PlayerGui")
     if pguiRef then
         local scroll = pguiRef:FindFirstChild("Scroll", true)
@@ -283,15 +292,6 @@ local function getDynamicEquippedWeapon()
                     end
                 end
             end
-        end
-    end
-
-    local char = player.Character
-    if char then
-        local tool = char:FindFirstChildOfClass("Tool")
-        if tool then
-            cachedWeaponName = tool.Name
-            return cachedWeaponName
         end
     end
 
@@ -509,16 +509,20 @@ end
 
 local function executeNativeAttack()
     if isDungeonEnded or not isScriptRunning or isPortalTransitionActive() then return end
+    
     comboIndex = (comboIndex % 4) + 1
     local weapon = getDynamicEquippedWeapon()
 
-    local rem = findAttackRemote()
-    if rem then
+    -- 1. Disparo de RemoteEvents
+    local remotes = findAttackRemotes()
+    for _, rem in ipairs(remotes) do
         pcall(function()
             rem:FireServer("M1", weapon, comboIndex, 0, 0, 2)
+            rem:FireServer("Attack", comboIndex)
         end)
     end
 
+    -- 2. Ativação direta da Tool na mão
     local char = player.Character
     if char then
         local tool = char:FindFirstChildOfClass("Tool")
@@ -526,6 +530,12 @@ local function executeNativeAttack()
             pcall(function() tool:Activate() end) 
         end
     end
+
+    -- 3. Disparo Virtual Nativo (VirtualUser M1)
+    pcall(function()
+        VirtualUser:CaptureController()
+        VirtualUser:Button1Down(Vector2.zero)
+    end)
 end
 
 task.spawn(function()
@@ -699,18 +709,15 @@ task.spawn(function()
                     checkDungeonStartButton()
                 end
 
-                -- 1. PRIORIDADE MÁXIMA: CHECAGEM DO ENGAGE (VIRUS BOSS)
                 local engaged = false
                 if Settings.AutoEngage then
                     engaged = checkAndClickEngageButton()
                 end
 
-                -- Se clicou em Engage, espera o Boss nascer e não reinicia a partida
                 if engaged then
                     isDungeonEnded = false
                     task.wait(2.0)
                 else
-                    -- 2. CHECAGEM DO FIM DE PARTIDA (PLAY AGAIN)
                     local ended, playAgainBtn = checkDungeonEnd()
                     if ended then
                         isDungeonEnded = true
@@ -719,7 +726,6 @@ task.spawn(function()
                         needsBossReturn = false
                         stopMovement()
                         
-                        -- Faz uma última checagem de Engage antes de apertar em Replay
                         if Settings.AutoEngage and checkAndClickEngageButton() then
                             isDungeonEnded = false
                             task.wait(2.0)
