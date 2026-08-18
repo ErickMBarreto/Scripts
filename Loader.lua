@@ -138,7 +138,6 @@ local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local VirtualInputManager = game:GetService("VirtualInputManager")
-local VirtualUser = game:GetService("VirtualUser")
 
 local isScriptRunning = true
 local currentTween = nil
@@ -153,7 +152,7 @@ local teleportCooldown = 0
 local lastSkillUse = 0
 local comboIndex = 1
 local isDungeonEnded = false
-local cachedAttackRemotes = {}
+local attackRemote = nil
 local cachedWeaponName = "VoidRods"
 
 local function getCharacter()
@@ -179,7 +178,7 @@ end
 charConnection = player.CharacterAdded:Connect(function()
     stopMovement()
     teleportCooldown = 0
-    table.clear(cachedAttackRemotes)
+    attackRemote = nil
 
     if Settings.SelectedPhase == "Bleach (Fase 4)" and passedPortal2 then
         passedPortal2 = false
@@ -253,19 +252,20 @@ local function pressKey(keyCode)
 end
 
 -- ====================================================================
--- 6. MOTOR DE COMBATE DIRETO (SEM VERIFICAÇÃO DE BACKPACK)
+-- 6. MOTOR DE COMBATE ORIGINAL (RESTAURADO E SEGURO)
 -- ====================================================================
-local function findAttackRemotes()
-    if #cachedAttackRemotes > 0 then return cachedAttackRemotes end
-    for _, desc in ipairs(ReplicatedStorage:GetDescendants()) do
-        if desc:IsA("RemoteEvent") then
-            local name = desc.Name:lower()
-            if name == "attack" or name == "m1" or name == "combat" or name:find("hit") or name:find("damage") then
-                table.insert(cachedAttackRemotes, desc)
+local function findAttackRemote()
+    if attackRemote and attackRemote.Parent then return attackRemote end
+    for _, container in ipairs({ReplicatedStorage, ReplicatedStorage:FindFirstChild("Remotes"), ReplicatedStorage:FindFirstChild("Events")}) do
+        if container then
+            local rem = container:FindFirstChild("Attack") or container:FindFirstChild("M1") or container:FindFirstChild("Combat")
+            if rem and rem:IsA("RemoteEvent") then
+                attackRemote = rem
+                return attackRemote
             end
         end
     end
-    return cachedAttackRemotes
+    return nil
 end
 
 local function getDynamicEquippedWeapon()
@@ -495,7 +495,7 @@ local function checkDungeonEnd()
 end
 
 -- ====================================================================
--- 9. TRAVA E EXECUÇÃO DE COMBATE
+-- 9. TRAVA E EXECUÇÃO DE COMBATE (100% LIMPO E CONFIÁVEL)
 -- ====================================================================
 local function isPortalTransitionActive()
     if Settings.SelectedPhase == "Bleach (Fase 4)" then
@@ -513,16 +513,15 @@ local function executeNativeAttack()
     comboIndex = (comboIndex % 4) + 1
     local weapon = getDynamicEquippedWeapon()
 
-    -- 1. Disparo de RemoteEvents
-    local remotes = findAttackRemotes()
-    for _, rem in ipairs(remotes) do
+    -- Disparo exato do Remote nativo
+    local rem = findAttackRemote()
+    if rem then
         pcall(function()
             rem:FireServer("M1", weapon, comboIndex, 0, 0, 2)
-            rem:FireServer("Attack", comboIndex)
         end)
     end
 
-    -- 2. Ativação direta da Tool na mão
+    -- Ativação nativa da Tool na mão
     local char = player.Character
     if char then
         local tool = char:FindFirstChildOfClass("Tool")
@@ -530,12 +529,6 @@ local function executeNativeAttack()
             pcall(function() tool:Activate() end) 
         end
     end
-
-    -- 3. Disparo Virtual Nativo (VirtualUser M1)
-    pcall(function()
-        VirtualUser:CaptureController()
-        VirtualUser:Button1Down(Vector2.zero)
-    end)
 end
 
 task.spawn(function()
