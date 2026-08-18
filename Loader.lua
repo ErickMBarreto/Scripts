@@ -83,13 +83,22 @@ local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+-- Localizador de Remote de Ataque
 local attackRemote = nil
-task.spawn(function()
-    local remotesFolder = ReplicatedStorage:WaitForChild("Remotes", 10)
-    if remotesFolder then
-        attackRemote = remotesFolder:WaitForChild("Attack", 10)
+local function findAttackRemote()
+    if attackRemote then return attackRemote end
+    for _, container in ipairs({ReplicatedStorage, ReplicatedStorage:FindFirstChild("Remotes"), ReplicatedStorage:FindFirstChild("Events")}) do
+        if container then
+            local rem = container:FindFirstChild("Attack") or container:FindFirstChild("M1") or container:FindFirstChild("Combat")
+            if rem and rem:IsA("RemoteEvent") then
+                attackRemote = rem
+                return attackRemote
+            end
+        end
     end
-end)
+    return nil
+end
+findAttackRemote()
 
 local Settings = {
     AutoFarm = true,
@@ -115,6 +124,7 @@ local lastSkillUse = 0
 local comboIndex = 1
 local isDungeonEnded = false
 local dungeonReady = false
+local cachedWeaponName = "VoidRods"
 
 local function getCharacter()
     local char = player.Character
@@ -150,18 +160,45 @@ player.CharacterAdded:Connect(function()
     end
 end)
 
-local function getWeaponName()
-    local char = player.Character
-    if char then
-        local tool = char:FindFirstChildOfClass("Tool")
-        if tool then return tool.Name end
-        for _, child in ipairs(char:GetChildren()) do
-            if child:IsA("Model") and (child.Name:lower():find("katana") or child.Name:lower():find("sword") or child.Name:lower():find("weapon")) then
-                return child.Name
+-- Detector Dinâmico da Arma Equipada direto da UI e do Personagem
+local function getDynamicEquippedWeapon()
+    local pguiRef = player:FindFirstChild("PlayerGui")
+    if pguiRef then
+        local main = pguiRef:FindFirstChild("Main")
+        local mainFrame = main and main:FindFirstChild("MainFrame")
+        local items = mainFrame and mainFrame:FindFirstChild("Items")
+        local scroll = items and items:FindFirstChild("Scroll")
+        
+        if scroll then
+            for _, slot in ipairs(scroll:GetChildren()) do
+                if slot:IsA("GuiObject") then
+                    -- Checa se o slot tem tag/valor de item
+                    local itemVal = slot:FindFirstChild("Item")
+                    local isItem = slot:GetAttribute("Item") or (itemVal and itemVal.Value)
+                    
+                    -- Checa se possui o botão/texto "Equip" ou "Unequip"
+                    for _, desc in ipairs(slot:GetDescendants()) do
+                        if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text:lower():find("unequip") then
+                            cachedWeaponName = slot.Name
+                            return cachedWeaponName
+                        end
+                    end
+                end
             end
         end
     end
-    return "Katana"
+
+    -- Fallback: checa ferramentas no personagem
+    local char = player.Character
+    if char then
+        local tool = char:FindFirstChildOfClass("Tool")
+        if tool then 
+            cachedWeaponName = tool.Name
+            return cachedWeaponName
+        end
+    end
+
+    return cachedWeaponName
 end
 
 -- Noclip e Flutuação Anti-Gravidade
@@ -331,7 +368,7 @@ local function getDynamicClosestEnemy()
     return closestEnemy, closestRoot
 end
 
--- Scanner Exclusivo para Fases com Portal (Detecta 'Teleports' ou 'Teleport')
+-- Scanner de Portais
 local function getPhaseTeleport()
     if tick() < teleportCooldown then
         return nil, math.huge
@@ -343,7 +380,6 @@ local function getPhaseTeleport()
     local teleportParts = {}
     local gameFolder = workspace:FindFirstChild("Game")
     
-    -- Busca direta nas pastas mapeadas
     local teleportsFolder = (gameFolder and (gameFolder:FindFirstChild("Teleports") or gameFolder:FindFirstChild("Teleport"))) 
         or workspace:FindFirstChild("Teleports") 
         or workspace:FindFirstChild("Teleport")
@@ -360,7 +396,6 @@ local function getPhaseTeleport()
         end
     end
 
-    -- Se esta fase não tem pasta de portais, encerra sem mover
     if #teleportParts == 0 then
         return nil, math.huge
     end
@@ -390,32 +425,32 @@ local function getDynamicHotbar()
     return nil
 end
 
+-- Disparo Nativo de M1 com Nome Real da Arma
 local function executeNativeAttack()
-    if isDungeonEnded or not dungeonReady then return end
+    if isDungeonEnded then return end
     comboIndex = (comboIndex % 4) + 1
-    local weapon = getWeaponName()
+    local weapon = getDynamicEquippedWeapon()
 
-    if not attackRemote then
-        attackRemote = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Attack")
-    end
-
-    if attackRemote then
+    local rem = findAttackRemote()
+    if rem then
         pcall(function()
-            attackRemote:FireServer("M1", weapon, comboIndex, 0, 0, 2)
+            rem:FireServer("M1", weapon, comboIndex, 0, 0, 2)
         end)
     end
 
     local char = player.Character
     if char then
         local tool = char:FindFirstChildOfClass("Tool")
-        if tool then tool:Activate() end
+        if tool then 
+            pcall(function() tool:Activate() end) 
+        end
     end
 end
 
 -- Loop M1
 task.spawn(function()
     while true do
-        if Settings.AutoAttack and not isDungeonEnded and dungeonReady then
+        if Settings.AutoAttack and not isDungeonEnded then
             local char, _, hum = getCharacter()
             if char and hum and hum.Health > 0 then
                 executeNativeAttack()
@@ -428,7 +463,7 @@ end)
 -- Loop Skills Inteligente (Só atinge com monstro perto)
 task.spawn(function()
     while true do
-        if Settings.AutoSkills and not isDungeonEnded and dungeonReady then
+        if Settings.AutoSkills and not isDungeonEnded then
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 if (tick() - lastSkillUse) >= Settings.SkillCooldown then
