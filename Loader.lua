@@ -99,8 +99,11 @@ local Settings = {
     AttackSpeed = 0.15
 }
 
+-- Estado do Script e Killswitch
+local isScriptRunning = true
 local currentTween = nil
 local noclipConnection = nil
+local charConnection = nil
 local usedTeleports = {}
 local portalHistory = {}
 local teleportCooldown = 0
@@ -131,7 +134,7 @@ local function stopMovement()
     end
 end
 
-player.CharacterAdded:Connect(function()
+charConnection = player.CharacterAdded:Connect(function()
     stopMovement()
     teleportCooldown = 0
     dungeonReady = false
@@ -141,16 +144,17 @@ player.CharacterAdded:Connect(function()
         local lastPortal = table.remove(portalHistory)
         if lastPortal then
             usedTeleports[lastPortal] = nil
+            if lastPortal.Parent then usedTeleports[lastPortal.Parent] = nil end
         end
     end
 end)
 
 local function toggleNoclip(enable)
-    if enable then
+    if enable and isScriptRunning then
         if not noclipConnection then
             noclipConnection = RunService.Stepped:Connect(function()
                 local char, root = getCharacter()
-                if char and root and Settings.AutoFarm and not isDungeonEnded then
+                if char and root and Settings.AutoFarm and not isDungeonEnded and isScriptRunning then
                     for _, part in ipairs(char:GetDescendants()) do
                         if part:IsA("BasePart") and part.CanCollide then
                             part.CanCollide = false
@@ -169,7 +173,7 @@ local function toggleNoclip(enable)
 end
 
 local function smoothFlyTo(targetCFrame)
-    if isDungeonEnded then return end
+    if isDungeonEnded or not isScriptRunning then return end
     local _, root = getCharacter()
     if not root or not root.Parent then return end
     
@@ -186,7 +190,7 @@ local function smoothFlyTo(targetCFrame)
 end
 
 local function triggerGuiButton(btn)
-    if not btn or not btn.Parent then return end
+    if not btn or not btn.Parent or not isScriptRunning then return end
     if firesignal then
         pcall(function() firesignal(btn.Activated) end)
         pcall(function() firesignal(btn.MouseButton1Click) end)
@@ -202,6 +206,7 @@ local function triggerGuiButton(btn)
 end
 
 local function pressKey(keyCode)
+    if not isScriptRunning then return end
     pcall(function()
         VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
         task.wait(0.02)
@@ -268,15 +273,16 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 6. SCANNERS DE INIMIGOS E PORTAIS PROFUNDOS
+-- 6. SCANNERS DE INIMIGOS E PORTAIS
 -- ====================================================================
 local function getEntityTargetPart(obj)
-    if not obj then return nil end
+    if not obj or not obj.Parent then return nil end
     return obj:FindFirstChild("HumanoidRootPart")
         or obj:FindFirstChild("Bot")
         or obj:FindFirstChild("Hitbox")
         or obj:FindFirstChild("HitBox")
         or obj:FindFirstChild("Torso")
+        or obj:FindFirstChild("UpperTorso")
         or obj:FindFirstChild("Head")
         or (obj:IsA("Model") and obj.PrimaryPart)
         or (obj:IsA("BasePart") and obj)
@@ -287,19 +293,26 @@ local function isEntityAlive(obj)
     if not obj or not obj.Parent then return false end
     
     local hum = obj:FindFirstChildOfClass("Humanoid")
-    if hum then return hum.Health > 0 end
+    if hum then 
+        return hum.Health > 0 
+    end
 
     local hpAttr = obj:GetAttribute("Health") or obj:GetAttribute("HP")
-    if hpAttr then return tonumber(hpAttr) > 0 end
+    if hpAttr then 
+        return tonumber(hpAttr) > 0 
+    end
 
     local hpVal = obj:FindFirstChild("Health") or obj:FindFirstChild("HP")
-    if hpVal and hpVal:IsA("ValueBase") then return tonumber(hpVal.Value) > 0 end
+    if hpVal and hpVal:IsA("ValueBase") then 
+        return tonumber(hpVal.Value) > 0 
+    end
 
     return getEntityTargetPart(obj) ~= nil
 end
 
 local function getLivingEnemies()
     local list = {}
+    local char = player.Character
     local gameFolder = workspace:FindFirstChild("Game")
     local enemiesFolder = (gameFolder and gameFolder:FindFirstChild("Enemies")) or workspace:FindFirstChild("Enemies")
 
@@ -312,33 +325,18 @@ local function getLivingEnemies()
     end
 
     if #list == 0 then
-        local char = player.Character
         for _, obj in ipairs(workspace:GetChildren()) do
             if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
-                if isEntityAlive(obj) then
-                    table.insert(list, obj)
+                if obj.Name:lower():find("enemy") or obj.Name:lower():find("mob") or obj.Name:lower():find("boss") or obj:FindFirstChildOfClass("Humanoid") then
+                    if isEntityAlive(obj) then
+                        table.insert(list, obj)
+                    end
                 end
             end
         end
     end
 
     return list
-end
-
-local function getEnemiesLeftCount()
-    local pguiRef = player:FindFirstChild("PlayerGui")
-    if pguiRef then
-        for _, desc in ipairs(pguiRef:GetDescendants()) do
-            if desc:IsA("TextLabel") and desc.Visible then
-                local text = desc.Text:lower()
-                if text:find("enemie") or text:find("monster") or text:find("left") then
-                    local count = text:match("%d+")
-                    if count then return tonumber(count) end
-                end
-            end
-        end
-    end
-    return #getLivingEnemies()
 end
 
 local function getClosestLivingEnemy()
@@ -364,7 +362,6 @@ local function getClosestLivingEnemy()
     return closestEnemy, closestPart
 end
 
--- Scanner Profundo de Portais (Varre Teleport1, Teleport2, HitBox aninhadas e TouchTransmitter)
 local function getActiveUnusedPortal()
     if tick() < teleportCooldown then
         return nil, math.huge
@@ -389,7 +386,6 @@ local function getActiveUnusedPortal()
         end
     end
 
-    -- Varredura de emergência no Workspace por HitBox com Touch
     if #portalParts == 0 then
         for _, desc in ipairs(workspace:GetDescendants()) do
             if desc:IsA("BasePart") and desc:FindFirstChildWhichIsA("TouchTransmitter") then
@@ -426,7 +422,7 @@ end
 -- ====================================================================
 local function checkAndClickEngageButton()
     local pguiRef = player:FindFirstChild("PlayerGui")
-    if not pguiRef then return false end
+    if not pguiRef or not isScriptRunning then return false end
 
     local main = pguiRef:FindFirstChild("Main")
     local virusFrame = main and main:FindFirstChild("VirusFrame")
@@ -444,7 +440,7 @@ end
 
 local function checkDungeonEnd()
     local pguiRef = player:FindFirstChild("PlayerGui")
-    if not pguiRef then return false end
+    if not pguiRef or not isScriptRunning then return false end
 
     local main = pguiRef:FindFirstChild("Main")
     local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
@@ -461,7 +457,7 @@ end
 
 local function handleDungeonStart()
     local pguiRef = player:FindFirstChild("PlayerGui")
-    if not pguiRef then return false end
+    if not pguiRef or not isScriptRunning then return false end
 
     local main = pguiRef:FindFirstChild("Main")
     local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
@@ -482,7 +478,7 @@ end
 -- 8. THREADS DE COMBATE
 -- ====================================================================
 local function executeNativeAttack()
-    if isDungeonEnded then return end
+    if isDungeonEnded or not isScriptRunning then return end
     comboIndex = (comboIndex % 4) + 1
     local weapon = getDynamicEquippedWeapon()
 
@@ -503,7 +499,7 @@ local function executeNativeAttack()
 end
 
 task.spawn(function()
-    while true do
+    while isScriptRunning do
         if Settings.AutoAttack and not isDungeonEnded then
             local char, _, hum = getCharacter()
             if char and hum and hum.Health > 0 then
@@ -515,7 +511,7 @@ task.spawn(function()
 end)
 
 task.spawn(function()
-    while true do
+    while isScriptRunning do
         if Settings.AutoSkills and not isDungeonEnded then
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
@@ -557,7 +553,7 @@ end)
 -- 9. MÁQUINA DE ESTADOS PRINCIPAL
 -- ====================================================================
 task.spawn(function()
-    while true do
+    while isScriptRunning do
         if Settings.AutoFarm then
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
@@ -595,13 +591,13 @@ task.spawn(function()
                         end
                         task.wait(0.2)
                     else
-                        local enemyCount = getEnemiesLeftCount()
+                        local livingEnemies = getLivingEnemies()
 
-                        -- ESTADO 1: INIMIGOS VIVOS (COMBATE TOTAL)
-                        if enemyCount > 0 then
+                        -- ESTADO 1: EXISTEM INIMIGOS NO MAPA (COMBATE ABSOLUTO)
+                        if #livingEnemies > 0 then
                             local enemy, enemyPart = getClosestLivingEnemy()
                             if enemy and enemyPart then
-                                while Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) do
+                                while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) do
                                     local _, currentRoot = getCharacter()
                                     if not currentRoot then break end
 
@@ -612,7 +608,7 @@ task.spawn(function()
                                 end
                             end
 
-                        -- ESTADO 2: SALA LIMPA (0 INIMIGOS -> ENTRA NO PORTAL)
+                        -- ESTADO 2: 0 INIMIGOS NO MAPA (ENTRA NO PORTAL)
                         else
                             local teleportHitbox, teleportDist = getActiveUnusedPortal()
                             if teleportHitbox then
@@ -621,7 +617,6 @@ task.spawn(function()
                                 if teleportDist <= 14 then
                                     root.CFrame = teleportHitbox.CFrame
                                     
-                                    -- Dispara o gatilho de toque nativo (TouchInterest)
                                     if firetouchinterest then
                                         pcall(function()
                                             firetouchinterest(root, teleportHitbox, 0)
@@ -655,7 +650,7 @@ end)
 toggleNoclip(Settings.AutoFarm)
 
 -- ====================================================================
--- 10. INTERFACE FLUENT
+-- 10. INTERFACE FLUENT & KILLSWITCH TOTAL
 -- ====================================================================
 local Window = Fluent:CreateWindow({
     Title = "Hub dos Rapazes",
@@ -718,14 +713,56 @@ floatBtn.MouseButton1Click:Connect(function()
     toggleUI(true)
 end)
 
+-- FUNÇÃO DE ENCERRAMENTO TOTAL (KILLSWITCH)
+local function destroyScript()
+    isScriptRunning = false
+    Settings.AutoFarm = false
+    Settings.AutoAttack = false
+    Settings.AutoSkills = false
+    
+    stopMovement()
+    toggleNoclip(false)
+    
+    if charConnection then
+        charConnection:Disconnect()
+        charConnection = nil
+    end
+
+    -- Remove a tag singleton para liberar nova injeção imediatamente
+    if singletonTag and singletonTag.Parent then
+        singletonTag:Destroy()
+    end
+    local st = CoreGui:FindFirstChild(UNIQUE_ID)
+    if st then st:Destroy() end
+
+    -- Destrói a interface e o botão flutuante
+    if toggleGui and toggleGui.Parent then
+        toggleGui:Destroy()
+    end
+    for _, gui in ipairs({CoreGui, player.PlayerGui}) do
+        for _, child in ipairs(gui:GetChildren()) do
+            if child.Name:find("Fluent") or child.Name == "IBdihP_PersistentToggle" then
+                pcall(function() child:Destroy() end)
+            end
+        end
+    end
+end
+
+-- Escuta os botões de fechar (X) nativos da janela do Fluent
 task.spawn(function()
     task.wait(0.8)
     for _, gui in ipairs({CoreGui, player.PlayerGui}) do
         for _, btn in ipairs(gui:GetDescendants()) do
-            if (btn:IsA("ImageButton") or btn:IsA("TextButton")) and (btn.Name:lower():find("min") or btn.Name:lower():find("close")) then
-                btn.MouseButton1Click:Connect(function()
-                    toggleUI(false)
-                end)
+            if (btn:IsA("ImageButton") or btn:IsA("TextButton")) then
+                if btn.Name:lower():find("close") then
+                    btn.MouseButton1Click:Connect(function()
+                        destroyScript()
+                    end)
+                elseif btn.Name:lower():find("min") then
+                    btn.MouseButton1Click:Connect(function()
+                        toggleUI(false)
+                    end)
+                end
             end
         end
     end
@@ -843,6 +880,16 @@ FarmSection:AddSlider("TweenSpeed", {
     Rounding = 0,
     Callback = function(Value)
         Settings.TweenSpeed = Value
+    end
+})
+
+local SettingsSection = Tabs.Settings:AddSection("Gerenciamento do Script")
+
+SettingsSection:AddButton({
+    Title = "Encerrar Script por Completo",
+    Description = "Para todos os loops e libera o carregamento de uma nova versão",
+    Callback = function()
+        destroyScript()
     end
 })
 
