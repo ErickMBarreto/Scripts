@@ -34,7 +34,7 @@ local function queueNextExecution()
         pcall(function()
             queueFunc(string.format([[
                 repeat task.wait(0.5) until game:IsLoaded() and game.Players.LocalPlayer
-                task.wait(1)
+                task.wait(1.5)
                 loadstring(game:HttpGet("%s"))()
             ]], scriptURL))
         end)
@@ -51,17 +51,18 @@ if not game:IsLoaded() then
 end
 
 local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
-local pgui = player:WaitForChild("PlayerGui", 15)
+local pgui = player:WaitForChild("PlayerGui", 20)
 
 local function isInsideDungeon()
     local main = pgui and pgui:FindFirstChild("Main")
     if main and (main:FindFirstChild("DungeonFrame") or main:FindFirstChild("VirusFrame")) then return true end
-    if workspace:FindFirstChild("Game") and workspace.Game:FindFirstChild("Enemies") then return true end
+    if workspace:FindFirstChild("Game") and (workspace.Game:FindFirstChild("Enemies") or workspace.Game:FindFirstChild("Teleports")) then return true end
+    if workspace:FindFirstChild("Enemies") then return true end
     return false
 end
 
 local inDungeon = false
-for i = 1, 10 do
+for i = 1, 15 do
     if isInsideDungeon() then
         inDungeon = true
         break
@@ -98,12 +99,10 @@ local Settings = {
     AutoPlayAgain = true,
     AutoEngage = true,
     SkillCooldown = 0.8,
-    SkillMaxDistance = 18, -- Distância máxima para soltar as skills
+    SkillMaxDistance = 20,
     HeightAboveEnemy = 9.0,
     TweenSpeed = 90,
-    AttackSpeed = 0.15,
-    MaxEnemyDistance = 75,
-    PortalTriggerDistance = 80
+    AttackSpeed = 0.15
 }
 
 local currentTween = nil
@@ -115,7 +114,7 @@ local teleportCooldown = 0
 local lastSkillUse = 0
 local comboIndex = 1
 local isDungeonEnded = false
-local startClicked = false
+local dungeonReady = false
 
 local function getCharacter()
     local char = player.Character
@@ -141,6 +140,7 @@ end
 player.CharacterAdded:Connect(function()
     stopMovement()
     teleportCooldown = 0
+    dungeonReady = false
 
     if #portalHistory > 0 then
         local lastPortal = table.remove(portalHistory)
@@ -222,7 +222,7 @@ local function triggerGuiButton(btn)
     end
 end
 
--- Detecção Direta do Botão Confirm (Engage)
+-- Detecção Direta do Botão Confirm (VirusFrame/Engage)
 local function checkAndClickEngageButton()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef then return false end
@@ -258,58 +258,71 @@ local function checkDungeonEnd()
     return false, nil
 end
 
-local function checkAndClickStartButton()
-    if startClicked then return false end
-
+local function handleDungeonStart()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef then return false end
 
     local main = pguiRef:FindFirstChild("Main")
     local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
-    local startBtn = dungeonFrame and dungeonFrame:FindFirstChild("Start")
-
-    if startBtn and startBtn:IsA("GuiObject") and startBtn.Visible and dungeonFrame.Visible then
-        triggerGuiButton(startBtn)
-        startClicked = true
-        table.clear(usedTeleports)
-        table.clear(portalHistory)
-        return true
+    
+    if dungeonFrame and dungeonFrame.Visible then
+        local startBtn = dungeonFrame:FindFirstChild("Start") or dungeonFrame:FindFirstChild("Play")
+        if startBtn and startBtn:IsA("GuiObject") and startBtn.Visible then
+            triggerGuiButton(startBtn)
+            task.wait(2.5)
+            dungeonReady = true
+            return true
+        end
     end
-
     return false
 end
 
-local function getClosestEnemyInCurrentRoom()
+-- Scanner de Inimigos Dinâmico
+local function getDynamicClosestEnemy()
     local _, root = getCharacter()
     if not root then return nil, nil end
 
+    local candidates = {}
     local gameFolder = workspace:FindFirstChild("Game")
     local enemiesFolder = (gameFolder and gameFolder:FindFirstChild("Enemies")) or workspace:FindFirstChild("Enemies")
+    
+    if enemiesFolder then
+        for _, enemy in ipairs(enemiesFolder:GetChildren()) do
+            table.insert(candidates, enemy)
+        end
+    end
 
-    if not enemiesFolder then return nil, nil end
+    if #candidates == 0 then
+        for _, obj in ipairs(workspace:GetChildren()) do
+            if obj:IsA("Model") and obj ~= player.Character and not Players:GetPlayerFromCharacter(obj) then
+                if obj:FindFirstChildOfClass("Humanoid") then
+                    table.insert(candidates, obj)
+                end
+            end
+        end
+    end
 
     local closestEnemy, closestRoot = nil, nil
-    local minDistance = Settings.MaxEnemyDistance
+    local minDistance = math.huge
 
-    for _, enemy in ipairs(enemiesFolder:GetChildren()) do
-        if enemy:IsA("Model") or enemy:IsA("Folder") or enemy:IsA("BasePart") then
-            local hum = enemy:FindFirstChildOfClass("Humanoid")
-            if not hum or hum.Health > 0 then
-                local targetPart = enemy:FindFirstChild("Bot") 
-                    or enemy:FindFirstChild("HumanoidRootPart") 
-                    or enemy:FindFirstChild("Hitbox") 
-                    or enemy:FindFirstChild("Torso")
-                    or (enemy:IsA("Model") and enemy.PrimaryPart)
-                    or (enemy:IsA("BasePart") and enemy)
-                    or enemy:FindFirstChildWhichIsA("BasePart")
+    for _, enemy in ipairs(candidates) do
+        local hum = enemy:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health > 0 then
+            local targetPart = enemy:FindFirstChild("HumanoidRootPart")
+                or enemy:FindFirstChild("Bot")
+                or enemy:FindFirstChild("Hitbox")
+                or enemy:FindFirstChild("Torso")
+                or enemy:FindFirstChild("Head")
+                or (enemy:IsA("Model") and enemy.PrimaryPart)
+                or (enemy:IsA("BasePart") and enemy)
+                or enemy:FindFirstChildWhichIsA("BasePart")
 
-                if targetPart and targetPart:IsA("BasePart") then
-                    local dist = (root.Position - targetPart.Position).Magnitude
-                    if dist < minDistance then
-                        minDistance = dist
-                        closestEnemy = enemy
-                        closestRoot = targetPart
-                    end
+            if targetPart and targetPart:IsA("BasePart") then
+                local dist = (root.Position - targetPart.Position).Magnitude
+                if dist < minDistance then
+                    minDistance = dist
+                    closestEnemy = enemy
+                    closestRoot = targetPart
                 end
             end
         end
@@ -318,8 +331,8 @@ local function getClosestEnemyInCurrentRoom()
     return closestEnemy, closestRoot
 end
 
--- Busca de portal contínua
-local function getActiveTeleport()
+-- Scanner Exclusivo para Fases com Portal (Detecta 'Teleports' ou 'Teleport')
+local function getPhaseTeleport()
     if tick() < teleportCooldown then
         return nil, math.huge
     end
@@ -327,29 +340,43 @@ local function getActiveTeleport()
     local _, root = getCharacter()
     if not root then return nil, math.huge end
 
+    local teleportParts = {}
     local gameFolder = workspace:FindFirstChild("Game")
-    local teleportsFolder = gameFolder and gameFolder:FindFirstChild("Teleports")
+    
+    -- Busca direta nas pastas mapeadas
+    local teleportsFolder = (gameFolder and (gameFolder:FindFirstChild("Teleports") or gameFolder:FindFirstChild("Teleport"))) 
+        or workspace:FindFirstChild("Teleports") 
+        or workspace:FindFirstChild("Teleport")
 
     if teleportsFolder then
-        local closestHitbox = nil
-        local minDistance = math.huge
-
         for _, teleportObj in ipairs(teleportsFolder:GetChildren()) do
-            local hitbox = teleportObj:FindFirstChild("HitBox") or (teleportObj:IsA("BasePart") and teleportObj.Name == "HitBox" and teleportObj) or teleportObj:FindFirstChildWhichIsA("BasePart")
-            
-            if hitbox and hitbox:IsA("BasePart") and not usedTeleports[hitbox] then
-                local dist = (root.Position - hitbox.Position).Magnitude
-                if dist < minDistance then
-                    minDistance = dist
-                    closestHitbox = hitbox
-                end
+            local hitbox = teleportObj:FindFirstChild("HitBox") 
+                or (teleportObj:IsA("BasePart") and teleportObj) 
+                or teleportObj:FindFirstChildWhichIsA("BasePart")
+
+            if hitbox and not usedTeleports[hitbox] then
+                table.insert(teleportParts, hitbox)
             end
         end
-
-        return closestHitbox, minDistance
     end
 
-    return nil, math.huge
+    -- Se esta fase não tem pasta de portais, encerra sem mover
+    if #teleportParts == 0 then
+        return nil, math.huge
+    end
+
+    local closestHitbox = nil
+    local minDistance = math.huge
+
+    for _, hitbox in ipairs(teleportParts) do
+        local dist = (root.Position - hitbox.Position).Magnitude
+        if dist < minDistance then
+            minDistance = dist
+            closestHitbox = hitbox
+        end
+    end
+
+    return closestHitbox, minDistance
 end
 
 local function getDynamicHotbar()
@@ -364,7 +391,7 @@ local function getDynamicHotbar()
 end
 
 local function executeNativeAttack()
-    if isDungeonEnded then return end
+    if isDungeonEnded or not dungeonReady then return end
     comboIndex = (comboIndex % 4) + 1
     local weapon = getWeaponName()
 
@@ -385,10 +412,10 @@ local function executeNativeAttack()
     end
 end
 
--- Loop de Ataque Básico M1
+-- Loop M1
 task.spawn(function()
     while true do
-        if Settings.AutoAttack and not isDungeonEnded then
+        if Settings.AutoAttack and not isDungeonEnded and dungeonReady then
             local char, _, hum = getCharacter()
             if char and hum and hum.Health > 0 then
                 executeNativeAttack()
@@ -398,21 +425,16 @@ task.spawn(function()
     end
 end)
 
--- Loop de Skills Inteligente (Só aperta perto do inimigo: Z, X, C / Spell1, Spell2, Spell3)
+-- Loop Skills Inteligente (Só atinge com monstro perto)
 task.spawn(function()
     while true do
-        if Settings.AutoSkills and not isDungeonEnded then
+        if Settings.AutoSkills and not isDungeonEnded and dungeonReady then
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
-                
-                -- Só verifica as skills se houver tempo de cooldown
                 if (tick() - lastSkillUse) >= Settings.SkillCooldown then
-                    local _, enemyRoot = getClosestEnemyInCurrentRoom()
-                    
-                    -- Verifica se tem inimigo perto (menos de 18 studs)
+                    local _, enemyRoot = getDynamicClosestEnemy()
                     if enemyRoot and enemyRoot.Parent then
                         local distance = (root.Position - enemyRoot.Position).Magnitude
-                        
                         if distance <= Settings.SkillMaxDistance then
                             lastSkillUse = tick()
                             local hotbarList = getDynamicHotbar()
@@ -421,7 +443,6 @@ task.spawn(function()
                                 local spell2 = hotbarList:FindFirstChild("Spell2", true) or hotbarList:FindFirstChild("X", true)
                                 local spell3 = hotbarList:FindFirstChild("Spell3", true) or hotbarList:FindFirstChild("C", true)
 
-                                -- Disparo das skills em sequência
                                 if spell1 then triggerGuiButton(spell1) end
                                 task.wait(0.06)
                                 if spell2 then triggerGuiButton(spell2) end
@@ -437,7 +458,7 @@ task.spawn(function()
     end
 end)
 
--- Loop Principal de Combate e Navegação
+-- Loop Principal Adaptável
 task.spawn(function()
     while true do
         if Settings.AutoFarm then
@@ -451,7 +472,7 @@ task.spawn(function()
                 local ended, playAgainBtn = checkDungeonEnd()
                 if ended then
                     isDungeonEnded = true
-                    startClicked = false
+                    dungeonReady = false
                     table.clear(usedTeleports)
                     table.clear(portalHistory)
                     stopMovement()
@@ -465,39 +486,50 @@ task.spawn(function()
                 else
                     isDungeonEnded = false
 
-                    if Settings.AutoStart and checkAndClickStartButton() then
-                        stopMovement()
-                        task.wait(3.0)
-                    end
-
-                    local enemy, enemyRoot = getClosestEnemyInCurrentRoom()
-
-                    -- 1. Combate contra inimigos
-                    if enemy and enemyRoot then
-                        while Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyRoot.Parent do
-                            local enemyHum = enemy:FindFirstChildOfClass("Humanoid")
-                            if enemyHum and enemyHum.Health <= 0 then break end
-
-                            local _, currentRoot = getCharacter()
-                            if not currentRoot then break end
-
-                            local abovePos = enemyRoot.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
-                            local targetCFrame = CFrame.new(abovePos, enemyRoot.Position)
-                            smoothFlyTo(targetCFrame)
-                            task.wait(0.05)
+                    -- 1. Warm-Up Gate: Garante o clique no Start antes de voar
+                    if not dungeonReady then
+                        if Settings.AutoStart and handleDungeonStart() then
+                            stopMovement()
+                        else
+                            local pguiRef = player:FindFirstChild("PlayerGui")
+                            local df = pguiRef and pguiRef:FindFirstChild("Main") and pguiRef.Main:FindFirstChild("DungeonFrame")
+                            if not df or not df.Visible or not df:FindFirstChild("Start") or not df.Start.Visible then
+                                dungeonReady = true
+                            end
                         end
-                    -- 2. Entrar no Portal
+                        task.wait(0.2)
                     else
-                        local teleportHitbox, teleportDist = getActiveTeleport()
-                        if teleportHitbox then
-                            smoothFlyTo(teleportHitbox.CFrame)
-                            
-                            if teleportDist <= 12 then
-                                root.CFrame = teleportHitbox.CFrame
-                                usedTeleports[teleportHitbox] = true
-                                table.insert(portalHistory, teleportHitbox)
-                                teleportCooldown = tick() + 2.0
-                                task.wait(0.8)
+                        local enemy, enemyRoot = getDynamicClosestEnemy()
+
+                        -- 2. Combate prioritário: Voa até o inimigo
+                        if enemy and enemyRoot then
+                            while Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyRoot.Parent do
+                                local enemyHum = enemy:FindFirstChildOfClass("Humanoid")
+                                if enemyHum and enemyHum.Health <= 0 then break end
+
+                                local _, currentRoot = getCharacter()
+                                if not currentRoot then break end
+
+                                local abovePos = enemyRoot.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
+                                local targetCFrame = CFrame.new(abovePos, enemyRoot.Position)
+                                smoothFlyTo(targetCFrame)
+                                task.wait(0.05)
+                            end
+                        -- 3. Sem inimigos: Se a fase tiver portal, entra nele. Se não tiver, aguarda o spawn/boss.
+                        else
+                            local teleportHitbox, teleportDist = getPhaseTeleport()
+                            if teleportHitbox then
+                                smoothFlyTo(teleportHitbox.CFrame)
+                                
+                                if teleportDist <= 14 then
+                                    root.CFrame = teleportHitbox.CFrame
+                                    usedTeleports[teleportHitbox] = true
+                                    table.insert(portalHistory, teleportHitbox)
+                                    teleportCooldown = tick() + 2.0
+                                    task.wait(0.8)
+                                end
+                            else
+                                stopMovement()
                             end
                         end
                     end
@@ -591,8 +623,8 @@ end)
 local FarmSection = Tabs.Farm:AddSection("Auto Farm & Combate")
 
 FarmSection:AddToggle("AutoFarmEnemies", {
-    Title = "Auto Farm Enemies",
-    Description = "Start -> Farm -> Portal -> Auto Replay",
+    Title = "Auto Farm Universal",
+    Description = "Start -> Farm -> Portal/Spawn -> Auto Replay",
     Default = true,
     Callback = function(Value)
         Settings.AutoFarm = Value
@@ -623,7 +655,7 @@ FarmSection:AddToggle("AutoPlayAgainToggle", {
 
 FarmSection:AddToggle("AutoStartToggle", {
     Title = "Auto Start Dungeon",
-    Description = "Aperta 'Start' e aguarda 3s automaticamente",
+    Description = "Aguarda a fase carregar e inicia sozinho",
     Default = true,
     Callback = function(Value)
         Settings.AutoStart = Value
@@ -650,9 +682,9 @@ FarmSection:AddToggle("AutoSkillsToggle", {
 
 FarmSection:AddSlider("SkillMaxDistSlider", {
     Title = "Distância das Skills (studs)",
-    Default = 18,
+    Default = 20,
     Min = 8,
-    Max = 35,
+    Max = 40,
     Rounding = 0,
     Callback = function(Value)
         Settings.SkillMaxDistance = Value
