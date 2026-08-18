@@ -329,21 +329,46 @@ local function getEnemyCountFromUI()
     return nil
 end
 
--- EXTRAI A PARTE DE MIRA DO INIMIGO
+-- VERIFICADOR DE VIDA REAL (NumberValue Health / HasDied BoolValue)
+local function isEnemyAlive(enemy)
+    if not enemy or not enemy.Parent then return false end
+
+    local hasDied = enemy:FindFirstChild("HasDied")
+    if hasDied and hasDied:IsA("BoolValue") and hasDied.Value == true then
+        return false
+    end
+
+    local healthVal = enemy:FindFirstChild("Health")
+    if healthVal and healthVal:IsA("NumberValue") then
+        return healthVal.Value > 0
+    end
+
+    local hum = enemy:FindFirstChildOfClass("Humanoid")
+    if hum then
+        return hum.Health > 0
+    end
+
+    local hpAttr = enemy:GetAttribute("Health") or enemy:GetAttribute("Hp")
+    if hpAttr and hpAttr <= 0 then
+        return false
+    end
+
+    return true
+end
+
+-- PARTE DE CONTATO FÍSICO DO INIMIGO (Prioriza 'Bot')
 local function getTargetPartFromModel(model)
     if not model then return nil end
-    return model:FindFirstChild("HumanoidRootPart")
-        or model:FindFirstChild("Bot")
+    return model:FindFirstChild("Bot")
+        or model:FindFirstChild("HumanoidRootPart")
         or model:FindFirstChild("HitBox")
         or model:FindFirstChild("Hitbox")
         or model:FindFirstChild("Torso")
-        or model:FindFirstChild("UpperTorso")
-        or model:FindFirstChild("Head")
         or (model:IsA("Model") and model.PrimaryPart)
         or model:FindFirstChildWhichIsA("BasePart")
 end
 
--- BUSCA UNIVERSAL DO INIMIGO MAIS PRÓXIMO
+-- BUSCA DO INIMIGO MAIS PRÓXIMO
 local function getClosestEnemy()
     local _, root = getCharacter()
     if not root then return nil, nil end
@@ -360,11 +385,9 @@ local function getClosestEnemy()
     if workspace:FindFirstChild("Enemies") then table.insert(foldersToScan, workspace.Enemies) end
 
     for _, container in ipairs(foldersToScan) do
-        -- 1. Varre filhos diretos primeiro
         for _, enemy in ipairs(container:GetChildren()) do
             if (enemy:IsA("Model") or enemy:IsA("Folder")) and enemy ~= player.Character and not Players:GetPlayerFromCharacter(enemy) then
-                local hum = enemy:FindFirstChildOfClass("Humanoid")
-                if not hum or hum.Health > 0 then
+                if isEnemyAlive(enemy) then
                     local targetPart = getTargetPartFromModel(enemy)
                     if targetPart and targetPart:IsA("BasePart") then
                         local dist = (root.Position - targetPart.Position).Magnitude
@@ -378,12 +401,10 @@ local function getClosestEnemy()
             end
         end
 
-        -- 2. Varre descendentes caso estejam aninhados
         if not closestEnemy then
             for _, desc in ipairs(container:GetDescendants()) do
                 if desc:IsA("Model") and desc ~= player.Character and not Players:GetPlayerFromCharacter(desc) and desc.Parent ~= player.Character then
-                    local hum = desc:FindFirstChildOfClass("Humanoid")
-                    if not hum or hum.Health > 0 then
+                    if isEnemyAlive(desc) then
                         local targetPart = getTargetPartFromModel(desc)
                         if targetPart and targetPart:IsA("BasePart") then
                             local dist = (root.Position - targetPart.Position).Magnitude
@@ -470,10 +491,7 @@ end
 
 local function farmTarget(enemy, enemyRoot)
     currentTargetPart = enemyRoot
-    while Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyRoot.Parent do
-        local enemyHum = enemy:FindFirstChildOfClass("Humanoid")
-        if enemyHum and enemyHum.Health <= 0 then break end
-
+    while Settings.AutoFarm and not isDungeonEnded and isEnemyAlive(enemy) and enemyRoot and enemyRoot.Parent do
         local _, currentRoot = getCharacter()
         if not currentRoot then break end
 
@@ -520,7 +538,7 @@ task.spawn(function()
     end
 end)
 
--- LOOP PRINCIPAL: PRIORIDADE TOTAL AO COMBATE
+-- LOOP PRINCIPAL
 task.spawn(function()
     while true do
         if Settings.AutoFarm then
@@ -571,14 +589,14 @@ task.spawn(function()
                     local uiCount = getEnemyCountFromUI()
                     local enemy, enemyRoot = getClosestEnemy()
 
-                    -- SE HOUVER INIMIGO NO MAPA OU NO CONTADOR DA UI: SÓ COMBATE
+                    -- Prioridade 1: Ataca o inimigo vivo mais próximo
                     if enemy and enemyRoot then
                         farmTarget(enemy, enemyRoot)
+                    -- Prioridade 2: Aguarda spawn se o contador da UI indicar inimigos restantes
                     elseif uiCount and uiCount > 0 then
-                        -- Se o contador diz que ainda há inimigos, espera o spawn sem ir pro portal
                         stopMovement()
+                    -- Prioridade 3: Sala limpa -> voa para a porta/portal
                     else
-                        -- SALA TOTALMENTE LIMPA (0 INIMIGOS): AVANÇA PRO PORTAL/PORTA
                         local teleportHitbox, teleportDist = getActiveTeleport()
                         if teleportHitbox then
                             smoothFlyTo(teleportHitbox.CFrame)
