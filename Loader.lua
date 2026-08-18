@@ -98,6 +98,7 @@ local Settings = {
     AutoPlayAgain = true,
     AutoEngage = true,
     SkillCooldown = 0.8,
+    SkillMaxDistance = 18, -- Distância máxima para soltar as skills
     HeightAboveEnemy = 9.0,
     TweenSpeed = 90,
     AttackSpeed = 0.15,
@@ -384,6 +385,7 @@ local function executeNativeAttack()
     end
 end
 
+-- Loop de Ataque Básico M1
 task.spawn(function()
     while true do
         if Settings.AutoAttack and not isDungeonEnded then
@@ -396,21 +398,37 @@ task.spawn(function()
     end
 end)
 
+-- Loop de Skills Inteligente (Só aperta perto do inimigo: Z, X, C / Spell1, Spell2, Spell3)
 task.spawn(function()
     while true do
         if Settings.AutoSkills and not isDungeonEnded then
-            local char, _, hum = getCharacter()
-            if char and hum and hum.Health > 0 then
+            local char, root, hum = getCharacter()
+            if char and root and hum and hum.Health > 0 then
+                
+                -- Só verifica as skills se houver tempo de cooldown
                 if (tick() - lastSkillUse) >= Settings.SkillCooldown then
-                    lastSkillUse = tick()
-                    local hotbarList = getDynamicHotbar()
-                    if hotbarList then
-                        local spell1 = hotbarList:FindFirstChild("Spell1", true)
-                        local spell2 = hotbarList:FindFirstChild("Spell2", true)
+                    local _, enemyRoot = getClosestEnemyInCurrentRoom()
+                    
+                    -- Verifica se tem inimigo perto (menos de 18 studs)
+                    if enemyRoot and enemyRoot.Parent then
+                        local distance = (root.Position - enemyRoot.Position).Magnitude
+                        
+                        if distance <= Settings.SkillMaxDistance then
+                            lastSkillUse = tick()
+                            local hotbarList = getDynamicHotbar()
+                            if hotbarList then
+                                local spell1 = hotbarList:FindFirstChild("Spell1", true) or hotbarList:FindFirstChild("Z", true)
+                                local spell2 = hotbarList:FindFirstChild("Spell2", true) or hotbarList:FindFirstChild("X", true)
+                                local spell3 = hotbarList:FindFirstChild("Spell3", true) or hotbarList:FindFirstChild("C", true)
 
-                        if spell1 then triggerGuiButton(spell1) end
-                        task.wait(0.08)
-                        if spell2 then triggerGuiButton(spell2) end
+                                -- Disparo das skills em sequência
+                                if spell1 then triggerGuiButton(spell1) end
+                                task.wait(0.06)
+                                if spell2 then triggerGuiButton(spell2) end
+                                task.wait(0.06)
+                                if spell3 then triggerGuiButton(spell3) end
+                            end
+                        end
                     end
                 end
             end
@@ -447,7 +465,6 @@ task.spawn(function()
                 else
                     isDungeonEnded = false
 
-                    -- Se o Start estiver na tela, aperta e aguarda 3s
                     if Settings.AutoStart and checkAndClickStartButton() then
                         stopMovement()
                         task.wait(3.0)
@@ -455,7 +472,7 @@ task.spawn(function()
 
                     local enemy, enemyRoot = getClosestEnemyInCurrentRoom()
 
-                    -- 1. Se tem inimigo na sala: combate aéreo
+                    -- 1. Combate contra inimigos
                     if enemy and enemyRoot then
                         while Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyRoot.Parent do
                             local enemyHum = enemy:FindFirstChildOfClass("Humanoid")
@@ -469,13 +486,12 @@ task.spawn(function()
                             smoothFlyTo(targetCFrame)
                             task.wait(0.05)
                         end
-                    -- 2. Sala limpa: localiza o portal mais próximo e entra diretamente
+                    -- 2. Entrar no Portal
                     else
                         local teleportHitbox, teleportDist = getActiveTeleport()
                         if teleportHitbox then
                             smoothFlyTo(teleportHitbox.CFrame)
                             
-                            -- Ao alcançar a área do portal, posiciona no centro exato para acionar
                             if teleportDist <= 12 then
                                 root.CFrame = teleportHitbox.CFrame
                                 usedTeleports[teleportHitbox] = true
@@ -624,11 +640,22 @@ FarmSection:AddToggle("AutoAttackToggle", {
 })
 
 FarmSection:AddToggle("AutoSkillsToggle", {
-    Title = "Auto Skills (Spell1 & Spell2)",
-    Description = "Dispara automaticamente Spell1 e Spell2",
+    Title = "Auto Skills (Spell 1, 2 e C)",
+    Description = "Dispara skills apenas perto de inimigos",
     Default = true,
     Callback = function(Value)
         Settings.AutoSkills = Value
+    end
+})
+
+FarmSection:AddSlider("SkillMaxDistSlider", {
+    Title = "Distância das Skills (studs)",
+    Default = 18,
+    Min = 8,
+    Max = 35,
+    Rounding = 0,
+    Callback = function(Value)
+        Settings.SkillMaxDistance = Value
     end
 })
 
