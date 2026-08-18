@@ -117,13 +117,12 @@ local Settings = {
     AutoEngage = true,
     SkillCooldown = 0.8,
     HeightAboveEnemy = 9.0,
-    TweenSpeed = 90,
-    AttackSpeed = 0.18,
-    LocalRoomRadius = 80,
-    PortalTriggerDistance = 35
+    TweenSpeed = 95,
+    AttackSpeed = 0.18
 }
 
 local currentTween = nil
+local lastTargetPos = nil
 local noclipConnection = nil
 local isMoving = false
 local usedTeleports = {}
@@ -144,6 +143,7 @@ end
 
 local function stopMovement()
     isMoving = false
+    lastTargetPos = nil
     if currentTween then
         currentTween:Cancel()
         currentTween = nil
@@ -153,6 +153,31 @@ local function stopMovement()
         root.AssemblyLinearVelocity = Vector3.zero
         root.AssemblyAngularVelocity = Vector3.zero
     end
+end
+
+-- VOO LINEAR CONTÍNUO E FLUIDO
+local function smoothFlyTo(targetCFrame)
+    if isDungeonEnded then return end
+    local _, root = getCharacter()
+    if not root or not root.Parent then return end
+    
+    local targetPos = targetCFrame.Position
+    if lastTargetPos and (lastTargetPos - targetPos).Magnitude < 1.5 and currentTween then
+        return
+    end
+
+    lastTargetPos = targetPos
+    isMoving = true
+    local distance = (root.Position - targetPos).Magnitude
+    local duration = distance / math.max(Settings.TweenSpeed, 10)
+
+    if currentTween then
+        currentTween:Cancel()
+    end
+
+    local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut)
+    currentTween = TweenService:Create(root, tweenInfo, {CFrame = targetCFrame})
+    currentTween:Play()
 end
 
 local function executeNativeAttack()
@@ -230,24 +255,6 @@ local function toggleNoclip(enable)
     end
 end
 
-local function smoothFlyTo(targetCFrame)
-    if isDungeonEnded then return end
-    local _, root = getCharacter()
-    if not root or not root.Parent then return end
-    
-    isMoving = true
-    local distance = (root.Position - targetCFrame.Position).Magnitude
-    local duration = distance / math.max(Settings.TweenSpeed, 5)
-
-    if currentTween then
-        currentTween:Cancel()
-    end
-
-    local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
-    currentTween = TweenService:Create(root, tweenInfo, {CFrame = targetCFrame})
-    currentTween:Play()
-end
-
 local function checkAndClickEngageButton()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef then return false end
@@ -301,45 +308,51 @@ local function checkAndClickStartButton()
     return false
 end
 
-local function getClosestEnemyInRadius(maxDistance)
+-- BUSCA DO INIMIGO MAIS PRÓXIMO COM RETORNO DE DISTÂNCIA
+local function getClosestEnemy()
     local _, root = getCharacter()
-    if not root then return nil, nil end
-
-    local gameFolder = workspace:FindFirstChild("Game")
-    local enemiesFolder = (gameFolder and gameFolder:FindFirstChild("Enemies")) or workspace:FindFirstChild("Enemies")
-    if not enemiesFolder then return nil, nil end
+    if not root then return nil, nil, math.huge end
 
     local closestEnemy, closestRoot = nil, nil
-    local minDistance = maxDistance or math.huge
+    local minDistance = math.huge
 
-    for _, enemy in ipairs(enemiesFolder:GetChildren()) do
-        if enemy:IsA("Model") or enemy:IsA("Folder") or enemy:IsA("BasePart") then
-            local hum = enemy:FindFirstChildOfClass("Humanoid")
-            if not hum or hum.Health > 0 then
-                local targetPart = enemy:FindFirstChild("Bot") 
-                    or enemy:FindFirstChild("HumanoidRootPart") 
-                    or enemy:FindFirstChild("Hitbox") 
-                    or enemy:FindFirstChild("Torso")
-                    or (enemy:IsA("Model") and enemy.PrimaryPart)
-                    or (enemy:IsA("BasePart") and enemy)
-                    or enemy:FindFirstChildWhichIsA("BasePart")
+    local foldersToScan = {}
+    local gameFolder = workspace:FindFirstChild("Game")
+    if gameFolder then
+        if gameFolder:FindFirstChild("Enemies") then table.insert(foldersToScan, gameFolder.Enemies) end
+        if gameFolder:FindFirstChild("Stages") then table.insert(foldersToScan, gameFolder.Stages) end
+    end
+    if workspace:FindFirstChild("Enemies") then table.insert(foldersToScan, workspace.Enemies) end
 
-                if targetPart and targetPart:IsA("BasePart") then
-                    local dist = (root.Position - targetPart.Position).Magnitude
-                    if dist < minDistance then
-                        minDistance = dist
-                        closestEnemy = enemy
-                        closestRoot = targetPart
+    for _, container in ipairs(foldersToScan) do
+        for _, enemy in ipairs(container:GetDescendants()) do
+            if enemy:IsA("Model") and enemy ~= player.Character and not Players:GetPlayerFromCharacter(enemy) then
+                local hum = enemy:FindFirstChildOfClass("Humanoid")
+                if hum and hum.Health > 0 then
+                    local targetPart = enemy:FindFirstChild("Bot") 
+                        or enemy:FindFirstChild("HumanoidRootPart") 
+                        or enemy:FindFirstChild("Hitbox") 
+                        or enemy:FindFirstChild("Torso")
+                        or enemy.PrimaryPart 
+                        or enemy:FindFirstChildWhichIsA("BasePart")
+
+                    if targetPart and targetPart:IsA("BasePart") then
+                        local dist = (root.Position - targetPart.Position).Magnitude
+                        if dist < minDistance then
+                            minDistance = dist
+                            closestEnemy = enemy
+                            closestRoot = targetPart
+                        end
                     end
                 end
             end
         end
     end
 
-    return closestEnemy, closestRoot
+    return closestEnemy, closestRoot, minDistance
 end
 
--- SÓ RETORNA PORTAL SE ESTIVER LIBERADO E NÃO MARCADO COMO USADO
+-- BUSCA DE PORTAIS / DOORBORDERS
 local function getActiveTeleport()
     if tick() < teleportCooldown then
         return nil, math.huge
@@ -354,7 +367,7 @@ local function getActiveTeleport()
     local closestHitbox = nil
     local minDistance = math.huge
 
-    -- 1. Portais normais (Workspace.Game.Teleports)
+    -- 1. Workspace.Game.Teleports
     local teleportsFolder = gameFolder:FindFirstChild("Teleports")
     if teleportsFolder then
         for _, teleportObj in ipairs(teleportsFolder:GetChildren()) do
@@ -372,7 +385,7 @@ local function getActiveTeleport()
         end
     end
 
-    -- 2. Portas de Estágio (Workspace.Game.Stages)
+    -- 2. Workspace.Game.Stages (DoorBorders)
     local stagesFolder = gameFolder:FindFirstChild("Stages")
     if stagesFolder then
         for _, stage in ipairs(stagesFolder:GetChildren()) do
@@ -409,7 +422,7 @@ local function farmTarget(enemy, enemyRoot)
     currentTargetPart = enemyRoot
     while Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyRoot.Parent do
         local enemyHum = enemy:FindFirstChildOfClass("Humanoid")
-        if enemyHum and enemyHum.Health <= 0 then break end
+        if not enemyHum or enemyHum.Health <= 0 then break end
 
         local _, currentRoot = getCharacter()
         if not currentRoot then break end
@@ -417,7 +430,7 @@ local function farmTarget(enemy, enemyRoot)
         local abovePos = enemyRoot.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
         local targetCFrame = CFrame.new(abovePos, enemyRoot.Position)
         smoothFlyTo(targetCFrame)
-        task.wait(0.05)
+        task.wait(0.04)
     end
     currentTargetPart = nil
 end
@@ -457,7 +470,7 @@ task.spawn(function()
     end
 end)
 
--- LOOP COM PRIORIDADE TOTAL DE INIMIGOS
+-- LOOP PRINCIPAL: DECISÃO INTELIGENTE ENTRE HORDA E PORTAL
 task.spawn(function()
     while true do
         if Settings.AutoFarm then
@@ -505,33 +518,37 @@ task.spawn(function()
                         task.wait(3.0)
                     end
 
-                    -- 1. Primeiro verifica se tem inimigos na sala atual
-                    local localEnemy, localRoot = getClosestEnemyInRadius(Settings.LocalRoomRadius)
+                    -- Busca tanto o inimigo quanto o portal mais próximo
+                    local enemy, enemyRoot, enemyDist = getClosestEnemy()
+                    local teleportHitbox, teleportDist = getActiveTeleport()
 
-                    if localEnemy and localRoot then
-                        farmTarget(localEnemy, localRoot)
-                    else
-                        -- 2. Se não tem na sala, verifica se tem QUALQUER inimigo vivo no mapa
-                        local distantEnemy, distantRoot = getClosestEnemyInRadius(math.huge)
-                        
-                        if distantEnemy and distantRoot then
-                            farmTarget(distantEnemy, distantRoot)
+                    if enemy and enemyRoot then
+                        -- Se houver inimigos, mata eles primeiro (ou se o inimigo estiver mais próximo que o portal)
+                        if not teleportHitbox or enemyDist <= teleportDist or enemyDist < 120 then
+                            farmTarget(enemy, enemyRoot)
                         else
-                            -- 3. Só vai para o portal se ZERO inimigos estiverem vivos
-                            local teleportHitbox, teleportDist = getActiveTeleport()
-                            if teleportHitbox then
-                                smoothFlyTo(teleportHitbox.CFrame)
-                                if teleportDist <= 6 then
-                                    usedTeleports[teleportHitbox] = true
-                                    table.insert(portalHistory, teleportHitbox)
-                                    teleportCooldown = tick() + 3.0
-                                    stopMovement()
-                                    task.wait(1.2)
-                                end
-                            else
+                            -- Caso o portal esteja imediatamente na sua frente e os inimigos em outra sala distante
+                            smoothFlyTo(teleportHitbox.CFrame)
+                            if teleportDist <= 6 then
+                                usedTeleports[teleportHitbox] = true
+                                table.insert(portalHistory, teleportHitbox)
+                                teleportCooldown = tick() + 3.0
                                 stopMovement()
+                                task.wait(1.0)
                             end
                         end
+                    elseif teleportHitbox then
+                        -- Se não há nenhum inimigo no mapa, vai direto para o portal/porta
+                        smoothFlyTo(teleportHitbox.CFrame)
+                        if teleportDist <= 6 then
+                            usedTeleports[teleportHitbox] = true
+                            table.insert(portalHistory, teleportHitbox)
+                            teleportCooldown = tick() + 3.0
+                            stopMovement()
+                            task.wait(1.0)
+                        end
+                    else
+                        stopMovement()
                     end
                 end
             else
@@ -540,7 +557,7 @@ task.spawn(function()
         else
             stopMovement()
         end
-        task.wait(0.05)
+        task.wait(0.02)
     end
 end)
 
@@ -675,7 +692,7 @@ FarmSection:AddToggle("AutoStartToggle", {
 
 FarmSection:AddToggle("AutoAttackToggle", {
     Title = "Auto Attack (Remote Nativo)",
-    Description = "Dispara os ataques M1 com a SnowKatana",
+    Description = "Dispara os ataques M1 continuamente",
     Default = true,
     Callback = function(Value)
         Settings.AutoAttack = Value
@@ -726,7 +743,7 @@ FarmSection:AddSlider("HeightAboveEnemy", {
 
 FarmSection:AddSlider("TweenSpeed", {
     Title = "Velocidade do Voo",
-    Default = 90,
+    Default = 95,
     Min = 20,
     Max = 160,
     Rounding = 0,
