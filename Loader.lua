@@ -66,6 +66,7 @@ local teleportCooldown = 0
 local lastSkillUse = 0
 local comboIndex = 1
 local isDungeonEnded = false
+local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Loader.lua"
 
 local function getCharacter()
     local char = player.Character
@@ -167,19 +168,28 @@ local function triggerGuiButton(btn)
         for _, c in ipairs(getconnections(btn.Activated)) do pcall(function() c:Fire() end) end
         for _, c in ipairs(getconnections(btn.MouseButton1Click)) do pcall(function() c:Fire() end) end
         for _, c in ipairs(getconnections(btn.MouseButton1Down)) do pcall(function() c:Fire() end) end
+        for _, c in ipairs(getconnections(btn.MouseButton1Up)) do pcall(function() c:Fire() end) end
     end
 end
 
+-- Detecção e Clique Agressivo do Botão Engage!
 local function checkAndClickEngageButton()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef then return false end
 
     for _, obj in ipairs(pguiRef:GetDescendants()) do
-        if obj:IsA("GuiObject") and (obj:IsA("TextButton") or obj:IsA("ImageButton")) and obj.Visible then
+        if obj:IsA("GuiObject") and (obj:IsA("TextButton") or obj:IsA("ImageButton")) then
             local name = obj.Name:lower()
             local text = (obj:IsA("TextButton") and obj.Text:lower()) or ""
             
-            if name == "engage" or name:find("engage") or text == "engage" or text:find("engage") then
+            -- Checa também labels filhos caso o botão use imagem com texto por cima
+            local childText = ""
+            local labelChild = obj:FindFirstChildOfClass("TextLabel")
+            if labelChild then
+                childText = labelChild.Text:lower()
+            end
+
+            if name:find("engage") or text:find("engage") or childText:find("engage") then
                 triggerGuiButton(obj)
                 return true
             end
@@ -368,6 +378,12 @@ task.spawn(function()
         if Settings.AutoFarm then
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
+                
+                -- Checagem contínua do botão Engage!
+                if Settings.AutoEngage then
+                    checkAndClickEngageButton()
+                end
+
                 local ended, playAgainBtn = checkDungeonEnd()
                 if ended then
                     isDungeonEnded = true
@@ -376,16 +392,20 @@ task.spawn(function()
                     stopMovement()
                     
                     if Settings.AutoPlayAgain and playAgainBtn then
+                        local queue = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or queueonteleport
+                        if queue then
+                            queue(string.format([[
+                                repeat task.wait(0.5) until game:IsLoaded() and game.Players.LocalPlayer
+                                task.wait(2)
+                                loadstring(game:HttpGet("%s"))()
+                            ]], scriptURL))
+                        end
                         task.wait(0.8)
                         triggerGuiButton(playAgainBtn)
                         task.wait(3.0)
                     end
                 else
                     isDungeonEnded = false
-
-                    if Settings.AutoEngage and checkAndClickEngageButton() then
-                        task.wait(1.0)
-                    end
 
                     if Settings.AutoStart and checkAndClickStartButton() then
                         stopMovement()
@@ -526,7 +546,7 @@ FarmSection:AddToggle("AutoFarmEnemies", {
 
 FarmSection:AddToggle("AutoEngageToggle", {
     Title = "Auto Engage (Boss Secreto)",
-    Description = "Clica automaticamente no botão Engage",
+    Description = "Clica automaticamente no botão Engage!",
     Default = true,
     Callback = function(Value)
         Settings.AutoEngage = Value
