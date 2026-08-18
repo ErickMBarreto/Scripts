@@ -118,7 +118,8 @@ local Settings = {
     SkillCooldown = 0.8,
     HeightAboveEnemy = 9.0,
     TweenSpeed = 95,
-    AttackSpeed = 0.18
+    AttackSpeed = 0.18,
+    ImmediatePortalRadius = 45 -- Se houver portal até essa distância, entra antes de voar longe
 }
 
 local currentTween = nil
@@ -155,7 +156,7 @@ local function stopMovement()
     end
 end
 
--- VOO LINEAR CONTÍNUO E FLUIDO
+-- VOO LINEAR CONTÍNUO
 local function smoothFlyTo(targetCFrame)
     if isDungeonEnded then return end
     local _, root = getCharacter()
@@ -308,7 +309,7 @@ local function checkAndClickStartButton()
     return false
 end
 
--- BUSCA DO INIMIGO MAIS PRÓXIMO COM RETORNO DE DISTÂNCIA
+-- BUSCA DO INIMIGO MAIS PRÓXIMO
 local function getClosestEnemy()
     local _, root = getCharacter()
     if not root then return nil, nil, math.huge end
@@ -470,7 +471,7 @@ task.spawn(function()
     end
 end)
 
--- LOOP PRINCIPAL: DECISÃO INTELIGENTE ENTRE HORDA E PORTAL
+-- LOOP PRINCIPAL: DECISÃO CORRIGIDA
 task.spawn(function()
     while true do
         if Settings.AutoFarm then
@@ -518,27 +519,24 @@ task.spawn(function()
                         task.wait(3.0)
                     end
 
-                    -- Busca tanto o inimigo quanto o portal mais próximo
                     local enemy, enemyRoot, enemyDist = getClosestEnemy()
                     local teleportHitbox, teleportDist = getActiveTeleport()
 
-                    if enemy and enemyRoot then
-                        -- Se houver inimigos, mata eles primeiro (ou se o inimigo estiver mais próximo que o portal)
-                        if not teleportHitbox or enemyDist <= teleportDist or enemyDist < 120 then
-                            farmTarget(enemy, enemyRoot)
-                        else
-                            -- Caso o portal esteja imediatamente na sua frente e os inimigos em outra sala distante
-                            smoothFlyTo(teleportHitbox.CFrame)
-                            if teleportDist <= 6 then
-                                usedTeleports[teleportHitbox] = true
-                                table.insert(portalHistory, teleportHitbox)
-                                teleportCooldown = tick() + 3.0
-                                stopMovement()
-                                task.wait(1.0)
-                            end
+                    -- 1. Se há um portal/porta bem próximo (até 45 studs), entra nele imediatamente
+                    if teleportHitbox and teleportDist <= Settings.ImmediatePortalRadius then
+                        smoothFlyTo(teleportHitbox.CFrame)
+                        if teleportDist <= 6 then
+                            usedTeleports[teleportHitbox] = true
+                            table.insert(portalHistory, teleportHitbox)
+                            teleportCooldown = tick() + 3.0
+                            stopMovement()
+                            task.wait(1.0)
                         end
+                    -- 2. Senão, se existirem inimigos vivos, ataca o mais próximo
+                    elseif enemy and enemyRoot then
+                        farmTarget(enemy, enemyRoot)
+                    -- 3. Se não há inimigos na sala, procura qualquer portal no mapa
                     elseif teleportHitbox then
-                        -- Se não há nenhum inimigo no mapa, vai direto para o portal/porta
                         smoothFlyTo(teleportHitbox.CFrame)
                         if teleportDist <= 6 then
                             usedTeleports[teleportHitbox] = true
