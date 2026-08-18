@@ -1,5 +1,5 @@
 -- ====================================================================
--- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA (Impede duplicatas na tela)
+-- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA
 -- ====================================================================
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
@@ -13,7 +13,7 @@ local singletonTag = Instance.new("Folder")
 singletonTag.Name = UNIQUE_ID
 pcall(function() singletonTag.Parent = CoreGui end)
 
--- Limpeza preventiva de interfaces antigas
+-- Limpeza preventiva de interfaces duplicadas
 for _, gui in ipairs({CoreGui, Players.LocalPlayer and Players.LocalPlayer:FindFirstChild("PlayerGui")}) do
     if gui then
         for _, child in ipairs(gui:GetChildren()) do
@@ -82,6 +82,7 @@ local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local attackRemote = nil
 task.spawn(function()
@@ -115,6 +116,7 @@ local teleportCooldown = 0
 local lastSkillUse = 0
 local comboIndex = 1
 local isDungeonEnded = false
+local lastEngageClick = 0
 
 local function getCharacter()
     local char = player.Character
@@ -204,36 +206,67 @@ local function smoothFlyTo(targetCFrame)
     currentTween:Play()
 end
 
+-- Disparo Forçado de Botões (Firesignal + VirtualInputManager + Connections)
 local function triggerGuiButton(btn)
     if not btn or not btn.Parent then return end
+    
+    -- 1. Disparo de Sinais
     if firesignal then
         pcall(function() firesignal(btn.Activated) end)
         pcall(function() firesignal(btn.MouseButton1Click) end)
         pcall(function() firesignal(btn.MouseButton1Down) end)
         pcall(function() firesignal(btn.MouseButton1Up) end)
     end
+    
+    -- 2. Conexões diretas
     if getconnections then
         for _, c in ipairs(getconnections(btn.Activated)) do pcall(function() c:Fire() end) end
         for _, c in ipairs(getconnections(btn.MouseButton1Click)) do pcall(function() c:Fire() end) end
         for _, c in ipairs(getconnections(btn.MouseButton1Down)) do pcall(function() c:Fire() end) end
         for _, c in ipairs(getconnections(btn.MouseButton1Up)) do pcall(function() c:Fire() end) end
     end
+
+    -- 3. Clique Físico Simulado por Coordenadas (Virtual Input)
+    pcall(function()
+        if VirtualInputManager and btn.AbsolutePosition and btn.AbsoluteSize then
+            local posX = btn.AbsolutePosition.X + (btn.AbsoluteSize.X / 2)
+            local posY = btn.AbsolutePosition.Y + (btn.AbsoluteSize.Y / 2) + 36 -- Offset seguro da topbar
+            VirtualInputManager:SendMouseButtonEvent(posX, posY, 0, true, game, 1)
+            task.wait(0.04)
+            VirtualInputManager:SendMouseButtonEvent(posX, posY, 0, false, game, 1)
+        end
+    end)
 end
 
--- Detecção Direta do Botão Engage (Main.VirusFrame.Warning.Buttons.Confirm)
+-- Detecção e Clique no Botão Engage (Vírus Boss)
 local function checkAndClickEngageButton()
+    if (tick() - lastEngageClick) < 1.0 then return false end
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef then return false end
 
+    -- Método 1: Busca direta pelo caminho oficial capturado
     local main = pguiRef:FindFirstChild("Main")
     local virusFrame = main and main:FindFirstChild("VirusFrame")
     local warning = virusFrame and virusFrame:FindFirstChild("Warning")
     local buttons = warning and warning:FindFirstChild("Buttons")
     local confirmBtn = buttons and buttons:FindFirstChild("Confirm")
 
-    if confirmBtn and confirmBtn:IsA("GuiObject") and confirmBtn.Visible and virusFrame.Visible then
-        triggerGuiButton(confirmBtn)
-        return true
+    if confirmBtn and (confirmBtn:IsA("GuiButton") or confirmBtn:IsA("GuiObject")) then
+        -- Não trava na verificação de visible do pai para garantir o clique
+        if confirmBtn.Visible or (virusFrame and virusFrame.Position.Y.Scale >= 0) or confirmBtn.AbsoluteSize.X > 0 then
+            triggerGuiButton(confirmBtn)
+            lastEngageClick = tick()
+            return true
+        end
+    end
+
+    -- Método 2: Fallback por varredura caso o caminho mude de posição
+    for _, obj in ipairs(pguiRef:GetDescendants()) do
+        if obj:IsA("GuiButton") and obj.Parent and obj.Parent.Name == "Buttons" and obj.Name == "Confirm" then
+            triggerGuiButton(obj)
+            lastEngageClick = tick()
+            return true
+        end
     end
 
     return false
@@ -420,7 +453,7 @@ task.spawn(function()
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 
-                -- Checagem contínua do Confirm do VirusFrame (Engage)
+                -- Checagem permanente e agressiva do Confirm (Engage)
                 if Settings.AutoEngage then
                     checkAndClickEngageButton()
                 end
@@ -450,6 +483,11 @@ task.spawn(function()
 
                     if enemy and enemyRoot then
                         while Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyRoot.Parent do
+                            -- Mantém a checagem do engage ativa mesmo durante lutas
+                            if Settings.AutoEngage then
+                                checkAndClickEngageButton()
+                            end
+
                             local enemyHum = enemy:FindFirstChildOfClass("Humanoid")
                             if enemyHum and enemyHum.Health <= 0 then break end
 
