@@ -90,17 +90,20 @@ task.spawn(function()
     end
 end)
 
--- Captura Dinâmica da Arma Ativa via Spy Interno Transparente
-local currentActiveWeapon = "SnowKatana"
+-- Arma equipada identificada pelo slot Weapon
+local activeWeaponName = "SnowKatana"
 
+-- Interceptador Dinâmico: atualiza caso você troque de arma via UI ou ataque
 pcall(function()
     local oldNamecall
     oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         local method = getnamecallmethod()
         local args = {...}
-        if (method == "FireServer" or method == "fireServer") and tostring(self.Name):lower() == "attack" then
-            if args[1] == "M1" and args[2] and typeof(args[2]) == "string" and args[2] ~= "" then
-                currentActiveWeapon = args[2]
+        if (method == "FireServer" or method == "fireServer") then
+            if tostring(self.Name):lower() == "equip" and args[1] == "Weapon" and args[2] then
+                activeWeaponName = tostring(args[2])
+            elseif tostring(self.Name):lower() == "attack" and args[1] == "M1" and args[2] then
+                activeWeaponName = tostring(args[2])
             end
         end
         return oldNamecall(self, ...)
@@ -115,7 +118,7 @@ local Settings = {
     AutoPlayAgain = true,
     AutoEngage = true,
     SkillCooldown = 0.8,
-    HeightAboveEnemy = 9.0,
+    HeightAboveEnemy = 4.0, -- Altura ajustada para o alcance da lâmina
     TweenSpeed = 90,
     AttackSpeed = 0.18,
     LocalRoomRadius = 80,
@@ -131,6 +134,7 @@ local teleportCooldown = 0
 local lastSkillUse = 0
 local comboIndex = 1
 local isDungeonEnded = false
+local currentTargetPart = nil
 
 local function getCharacter()
     local char = player.Character
@@ -153,57 +157,20 @@ local function stopMovement()
     end
 end
 
--- Detecção da arma no Inventário / Modelos
-local function getWeapon()
-    local pguiRef = player:FindFirstChild("PlayerGui")
-    local main = pguiRef and pguiRef:FindFirstChild("Main")
-    local ignored = {
-        ["bearclaw"] = true, ["slashrotation"] = true, ["deadcalm"] = true,
-        ["soulwarrior"] = true, ["soundheadband"] = true, ["sworddancerarmor"] = true,
-        ["iceelfwarriorarmor"] = true
-    }
-
-    if main then
-        local scroll = main:FindFirstChild("Scroll", true)
-        if scroll then
-            for _, itemCard in ipairs(scroll:GetChildren()) do
-                local mark = itemCard:FindFirstChild("EquippedSelection")
-                if mark and mark:IsA("GuiObject") and mark.Visible then
-                    local n = itemCard.Name:lower()
-                    if not ignored[n] and not n:find("armor") and not n:find("headband") and not n:find("soul") then
-                        currentActiveWeapon = itemCard.Name
-                        return itemCard.Name
-                    end
-                end
-            end
-        end
-    end
-
-    local char = player.Character
-    if char then
-        for _, child in ipairs(char:GetChildren()) do
-            if child:IsA("Model") and child.Name ~= "Animate" and not Players:GetPlayerFromCharacter(child) then
-                local n = child.Name:lower()
-                if not ignored[n] and not n:find("armor") and not n:find("headband") and not n:find("warrior") then
-                    currentActiveWeapon = child.Name
-                    return child.Name
-                end
-            end
-        end
-    end
-
-    return currentActiveWeapon or "SnowKatana"
-end
-
--- DISPARO COM OS 4 ARGUMENTOS EXATOS
+-- DISPARO COM VETOR DE MIRA DIRECIONADO AO INIMIGO
 local function executeNativeAttack()
     if isDungeonEnded then return end
     local _, root = getCharacter()
     if not root then return end
 
     comboIndex = (comboIndex % 3) + 1
-    local weapon = getWeapon()
-    local lookDirection = root.CFrame.LookVector
+    
+    -- Calcula vetor de direção apontando para o inimigo alvo
+    local aimDirection = root.CFrame.LookVector
+    if currentTargetPart and currentTargetPart.Parent then
+        local dir = (currentTargetPart.Position - root.Position).Unit
+        aimDirection = Vector3.new(dir.X, 0, dir.Z).Unit
+    end
 
     if not attackRemote then
         attackRemote = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Attack")
@@ -211,7 +178,7 @@ local function executeNativeAttack()
 
     if attackRemote then
         pcall(function()
-            attackRemote:FireServer("M1", weapon, lookDirection, comboIndex)
+            attackRemote:FireServer("M1", activeWeaponName, aimDirection, comboIndex)
         end)
     end
 end
@@ -422,6 +389,7 @@ local function getDynamicHotbar()
 end
 
 local function farmTarget(enemy, enemyRoot)
+    currentTargetPart = enemyRoot
     while Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyRoot.Parent do
         local enemyHum = enemy:FindFirstChildOfClass("Humanoid")
         if enemyHum and enemyHum.Health <= 0 then break end
@@ -434,6 +402,7 @@ local function farmTarget(enemy, enemyRoot)
         smoothFlyTo(targetCFrame)
         task.wait(0.05)
     end
+    currentTargetPart = nil
 end
 
 -- Loop de Ataque Automático Contínuo
@@ -647,6 +616,17 @@ FarmSection:AddToggle("AutoFarmEnemies", {
     end
 })
 
+FarmSection:AddInput("WeaponInput", {
+    Title = "Arma Equipada (Remote)",
+    Default = "SnowKatana",
+    Placeholder = "SnowKatana, GiantFrozenBeast, etc.",
+    Callback = function(Value)
+        if Value and Value ~= "" then
+            activeWeaponName = Value
+        end
+    end
+})
+
 FarmSection:AddToggle("AutoEngageToggle", {
     Title = "Auto Engage (Virus Boss)",
     Description = "Clica automaticamente em Confirm no VirusFrame",
@@ -676,7 +656,7 @@ FarmSection:AddToggle("AutoStartToggle", {
 
 FarmSection:AddToggle("AutoAttackToggle", {
     Title = "Auto Attack (Remote Nativo)",
-    Description = "Dispara os ataques M1 continuamente",
+    Description = "Dispara os ataques M1 com a SnowKatana",
     Default = true,
     Callback = function(Value)
         Settings.AutoAttack = Value
@@ -716,7 +696,7 @@ FarmSection:AddSlider("SkillCooldownSlider", {
 
 FarmSection:AddSlider("HeightAboveEnemy", {
     Title = "Altura acima do Inimigo",
-    Default = 9.0,
+    Default = 4.0,
     Min = 1,
     Max = 20,
     Rounding = 1,
