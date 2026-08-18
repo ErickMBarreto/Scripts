@@ -83,6 +83,7 @@ local CONFIG_FILE = "HubRapazes_Config.json"
 
 local Settings = {
     SelectedPhase = "Bleach (Fase 4)",
+    CustomWeaponName = "VoidRods",
     AutoFarm = true,
     AutoAttack = true,
     AutoSkills = true,
@@ -102,6 +103,7 @@ local function saveConfig()
         if writefile then
             local data = HttpService:JSONEncode({
                 SelectedPhase = Settings.SelectedPhase,
+                CustomWeaponName = Settings.CustomWeaponName,
                 HeightAboveEnemy = Settings.HeightAboveEnemy,
                 TweenSpeed = Settings.TweenSpeed,
                 AttackSpeed = Settings.AttackSpeed,
@@ -119,6 +121,7 @@ local function loadConfig()
             local data = HttpService:JSONDecode(raw)
             if data then
                 if data.SelectedPhase then Settings.SelectedPhase = data.SelectedPhase end
+                if data.CustomWeaponName then Settings.CustomWeaponName = data.CustomWeaponName end
                 if data.HeightAboveEnemy then Settings.HeightAboveEnemy = data.HeightAboveEnemy end
                 if data.TweenSpeed then Settings.TweenSpeed = data.TweenSpeed end
                 if data.AttackSpeed then Settings.AttackSpeed = data.AttackSpeed end
@@ -153,7 +156,6 @@ local lastSkillUse = 0
 local comboIndex = 1
 local isDungeonEnded = false
 local attackRemote = nil
-local cachedWeaponName = "VoidRods"
 
 local function getCharacter()
     local char = player.Character
@@ -252,7 +254,7 @@ local function pressKey(keyCode)
 end
 
 -- ====================================================================
--- 6. MOTOR DE COMBATE ORIGINAL (RESTAURADO E SEGURO)
+-- 6. MOTOR DE COMBATE DIRETO E IDENTIFICAÇÃO DE ARMA
 -- ====================================================================
 local function findAttackRemote()
     if attackRemote and attackRemote.Parent then return attackRemote end
@@ -268,34 +270,20 @@ local function findAttackRemote()
     return nil
 end
 
-local function getDynamicEquippedWeapon()
+local function getEffectiveWeaponName()
+    if Settings.CustomWeaponName and Settings.CustomWeaponName ~= "" then
+        return Settings.CustomWeaponName
+    end
+
     local char = player.Character
     if char then
         local tool = char:FindFirstChildOfClass("Tool")
         if tool then
-            cachedWeaponName = tool.Name
-            return cachedWeaponName
+            return tool.Name
         end
     end
 
-    local pguiRef = player:FindFirstChild("PlayerGui")
-    if pguiRef then
-        local scroll = pguiRef:FindFirstChild("Scroll", true)
-        if scroll and scroll.Parent and scroll.Parent.Name == "Items" then
-            for _, slot in ipairs(scroll:GetChildren()) do
-                if slot:IsA("GuiObject") then
-                    for _, desc in ipairs(slot:GetDescendants()) do
-                        if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text:lower():find("unequip") then
-                            cachedWeaponName = slot.Name
-                            return cachedWeaponName
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    return cachedWeaponName
+    return "VoidRods"
 end
 
 local function getDynamicHotbar()
@@ -495,7 +483,7 @@ local function checkDungeonEnd()
 end
 
 -- ====================================================================
--- 9. TRAVA E EXECUÇÃO DE COMBATE (100% LIMPO E CONFIÁVEL)
+-- 9. TRAVA E EXECUÇÃO DE COMBATE
 -- ====================================================================
 local function isPortalTransitionActive()
     if Settings.SelectedPhase == "Bleach (Fase 4)" then
@@ -511,9 +499,8 @@ local function executeNativeAttack()
     if isDungeonEnded or not isScriptRunning or isPortalTransitionActive() then return end
     
     comboIndex = (comboIndex % 4) + 1
-    local weapon = getDynamicEquippedWeapon()
+    local weapon = getEffectiveWeaponName()
 
-    -- Disparo exato do Remote nativo
     local rem = findAttackRemote()
     if rem then
         pcall(function()
@@ -521,7 +508,6 @@ local function executeNativeAttack()
         end)
     end
 
-    -- Ativação nativa da Tool na mão
     local char = player.Character
     if char then
         local tool = char:FindFirstChildOfClass("Tool")
@@ -751,13 +737,13 @@ end)
 toggleNoclip(Settings.AutoFarm)
 
 -- ====================================================================
--- 11. INTERFACE FLUENT LIMPA E BOTÃO FLUTUANTE
+-- 11. INTERFACE FLUENT LIMPA COM DETECÇÃO DE ARMA
 -- ====================================================================
 local Window = Fluent:CreateWindow({
     Title = "Hub dos Rapazes",
     SubTitle = "Anime Dungeons",
     TabWidth = 140,
-    Size = UDim2.fromOffset(520, 380),
+    Size = UDim2.fromOffset(520, 420),
     Acrylic = false,
     Theme = "Dark",
     MinimizeKey = Enum.KeyCode.RightControl
@@ -877,6 +863,34 @@ PhaseSection:AddDropdown("PhaseSelector", {
         passedPortal1 = false
         passedPortal2 = false
         needsBossReturn = false
+    end
+})
+
+local WeaponSection = Tabs.Farm:AddSection("Configuração de Arma")
+
+local WeaponInput = WeaponSection:AddInput("WeaponInputBox", {
+    Title = "Arma Equipada / Nome",
+    Default = Settings.CustomWeaponName,
+    Placeholder = "Ex: VoidRods, Katana...",
+    Numeric = false,
+    Finished = true,
+    Callback = function(Value)
+        Settings.CustomWeaponName = Value
+        saveConfig()
+    end
+})
+
+WeaponSection:AddButton({
+    Title = "🔍 Detectar Arma da Mão",
+    Description = "Lê a arma atualmente equipada no seu personagem",
+    Callback = function()
+        local char = player.Character
+        local tool = char and char:FindFirstChildOfClass("Tool")
+        if tool then
+            Settings.CustomWeaponName = tool.Name
+            WeaponInput:SetValue(tool.Name)
+            saveConfig()
+        end
     end
 })
 
