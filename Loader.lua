@@ -339,7 +339,7 @@ local function getClosestEnemyInRadius(maxDistance)
     return closestEnemy, closestRoot
 end
 
--- DETECTA PORTAIS TRADICIONAIS E PORTAS DE ESTÁGIOS (DoorBorders / Teleports)
+-- SÓ RETORNA PORTAL SE ESTIVER LIBERADO E NÃO MARCADO COMO USADO
 local function getActiveTeleport()
     if tick() < teleportCooldown then
         return nil, math.huge
@@ -354,7 +354,7 @@ local function getActiveTeleport()
     local closestHitbox = nil
     local minDistance = math.huge
 
-    -- 1. Varre Workspace.Game.Teleports
+    -- 1. Portais normais (Workspace.Game.Teleports)
     local teleportsFolder = gameFolder:FindFirstChild("Teleports")
     if teleportsFolder then
         for _, teleportObj in ipairs(teleportsFolder:GetChildren()) do
@@ -372,14 +372,14 @@ local function getActiveTeleport()
         end
     end
 
-    -- 2. Varre Workspace.Game.Stages (DoorBorders / Doors / Portais)
+    -- 2. Portas de Estágio (Workspace.Game.Stages)
     local stagesFolder = gameFolder:FindFirstChild("Stages")
     if stagesFolder then
         for _, stage in ipairs(stagesFolder:GetChildren()) do
             for _, desc in ipairs(stage:GetDescendants()) do
                 if desc:IsA("BasePart") and not usedTeleports[desc] then
                     local n = desc.Name:lower()
-                    if n:find("doorborder") or n:find("door") or n:find("portal") or n:find("teleport") or n:find("hitbox") then
+                    if n:find("doorborder") or n:find("door") or n:find("portal") or n:find("teleport") then
                         local dist = (root.Position - desc.Position).Magnitude
                         if dist < minDistance then
                             minDistance = dist
@@ -457,6 +457,7 @@ task.spawn(function()
     end
 end)
 
+-- LOOP COM PRIORIDADE TOTAL DE INIMIGOS
 task.spawn(function()
     while true do
         if Settings.AutoFarm then
@@ -504,25 +505,29 @@ task.spawn(function()
                         task.wait(3.0)
                     end
 
+                    -- 1. Primeiro verifica se tem inimigos na sala atual
                     local localEnemy, localRoot = getClosestEnemyInRadius(Settings.LocalRoomRadius)
 
                     if localEnemy and localRoot then
                         farmTarget(localEnemy, localRoot)
                     else
-                        local teleportHitbox, teleportDist = getActiveTeleport()
-                        if teleportHitbox then
-                            smoothFlyTo(teleportHitbox.CFrame)
-                            if teleportDist <= 6 then
-                                usedTeleports[teleportHitbox] = true
-                                table.insert(portalHistory, teleportHitbox)
-                                teleportCooldown = tick() + 3.0
-                                stopMovement()
-                                task.wait(1.2)
-                            end
+                        -- 2. Se não tem na sala, verifica se tem QUALQUER inimigo vivo no mapa
+                        local distantEnemy, distantRoot = getClosestEnemyInRadius(math.huge)
+                        
+                        if distantEnemy and distantRoot then
+                            farmTarget(distantEnemy, distantRoot)
                         else
-                            local distantEnemy, distantRoot = getClosestEnemyInRadius(math.huge)
-                            if distantEnemy and distantRoot then
-                                farmTarget(distantEnemy, distantRoot)
+                            -- 3. Só vai para o portal se ZERO inimigos estiverem vivos
+                            local teleportHitbox, teleportDist = getActiveTeleport()
+                            if teleportHitbox then
+                                smoothFlyTo(teleportHitbox.CFrame)
+                                if teleportDist <= 6 then
+                                    usedTeleports[teleportHitbox] = true
+                                    table.insert(portalHistory, teleportHitbox)
+                                    teleportCooldown = tick() + 3.0
+                                    stopMovement()
+                                    task.wait(1.2)
+                                end
                             else
                                 stopMovement()
                             end
@@ -670,7 +675,7 @@ FarmSection:AddToggle("AutoStartToggle", {
 
 FarmSection:AddToggle("AutoAttackToggle", {
     Title = "Auto Attack (Remote Nativo)",
-    Description = "Dispara os ataques M1 continuamente",
+    Description = "Dispara os ataques M1 com a SnowKatana",
     Default = true,
     Callback = function(Value)
         Settings.AutoAttack = Value
