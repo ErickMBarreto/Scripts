@@ -254,7 +254,7 @@ local function pressKey(keyCode)
 end
 
 -- ====================================================================
--- 6. MOTOR DE COMBATE DIRETO E IDENTIFICAÇÃO DE ARMA
+-- 6. MOTOR DE COMBATE DIRETO E SCANNER INTELIGENTE DE ARMA
 -- ====================================================================
 local function findAttackRemote()
     if attackRemote and attackRemote.Parent then return attackRemote end
@@ -270,20 +270,63 @@ local function findAttackRemote()
     return nil
 end
 
+local function detectCurrentWeaponDetailed()
+    -- 1. Varredura no Inventário UI
+    local pguiRef = player:FindFirstChild("PlayerGui")
+    if pguiRef then
+        for _, desc in ipairs(pguiRef:GetDescendants()) do
+            if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Visible then
+                local txt = desc.Text:lower()
+                if txt:find("unequip") or txt:find("desequipar") or txt:find("equipped") then
+                    local parentSlot = desc:FindFirstAncestorWhichIsA("Frame") or desc:FindFirstAncestorWhichIsA("ImageLabel") or desc.Parent
+                    if parentSlot and parentSlot.Name ~= "Items" and parentSlot.Name ~= "Scroll" then
+                        return parentSlot.Name
+                    end
+                end
+            end
+        end
+    end
+
+    -- 2. Tool na mão ou na mochila
+    local char = player.Character
+    if char then
+        local tool = char:FindFirstChildOfClass("Tool")
+        if tool then return tool.Name end
+    end
+    local bp = player:FindFirstChild("Backpack")
+    if bp then
+        local tool = bp:FindFirstChildOfClass("Tool")
+        if tool then return tool.Name end
+    end
+
+    -- 3. Models soldados no braço/mão (R6 e R15)
+    if char then
+        for _, partName in ipairs({"RightHand", "Right Arm", "Torso", "UpperTorso"}) do
+            local bodyPart = char:FindFirstChild(partName)
+            if bodyPart then
+                for _, child in ipairs(char:GetChildren()) do
+                    if child:IsA("Model") and child.Name ~= char.Name and not child:FindFirstChildOfClass("Humanoid") then
+                        return child.Name
+                    end
+                end
+            end
+        end
+    end
+
+    -- 4. Atributos
+    if player:GetAttribute("Weapon") then return tostring(player:GetAttribute("Weapon")) end
+    if player:GetAttribute("EquippedWeapon") then return tostring(player:GetAttribute("EquippedWeapon")) end
+    if char and char:GetAttribute("Weapon") then return tostring(char:GetAttribute("Weapon")) end
+
+    return nil
+end
+
 local function getEffectiveWeaponName()
     if Settings.CustomWeaponName and Settings.CustomWeaponName ~= "" then
         return Settings.CustomWeaponName
     end
-
-    local char = player.Character
-    if char then
-        local tool = char:FindFirstChildOfClass("Tool")
-        if tool then
-            return tool.Name
-        end
-    end
-
-    return "VoidRods"
+    local found = detectCurrentWeaponDetailed()
+    return found or "VoidRods"
 end
 
 local function getDynamicHotbar()
@@ -676,7 +719,7 @@ local function runIncursionPhaseFlow()
 end
 
 -- ====================================================================
--- LOOP PRINCIPAL (PRIORIDADE: ENGAGE PRIMEIRO, DEPOIS REPLAY)
+-- LOOP PRINCIPAL
 -- ====================================================================
 task.spawn(function()
     while isScriptRunning do
@@ -737,7 +780,7 @@ end)
 toggleNoclip(Settings.AutoFarm)
 
 -- ====================================================================
--- 11. INTERFACE FLUENT LIMPA COM DETECÇÃO DE ARMA
+-- 11. INTERFACE FLUENT COM SCANNER VISUAL DE ARMA
 -- ====================================================================
 local Window = Fluent:CreateWindow({
     Title = "Hub dos Rapazes",
@@ -825,7 +868,7 @@ local function destroyScript()
     end
     for _, gui in ipairs({CoreGui, player.PlayerGui}) do
         for _, child in ipairs(gui:GetChildren()) do
-            if child.Name:find("Fluent") or child.Name == "IBdihP_PersistentToggle" then
+            if child.Name == "IBdihP_PersistentToggle" or child.Name:find("Fluent") then
                 pcall(function() child:Destroy() end)
             end
         end
@@ -882,14 +925,24 @@ local WeaponInput = WeaponSection:AddInput("WeaponInputBox", {
 
 WeaponSection:AddButton({
     Title = "🔍 Detectar Arma da Mão",
-    Description = "Lê a arma atualmente equipada no seu personagem",
+    Description = "Lê automaticamente o nome da arma do personagem/inventário",
     Callback = function()
-        local char = player.Character
-        local tool = char and char:FindFirstChildOfClass("Tool")
-        if tool then
-            Settings.CustomWeaponName = tool.Name
-            WeaponInput:SetValue(tool.Name)
+        local detected = detectCurrentWeaponDetailed()
+        if detected and detected ~= "" then
+            Settings.CustomWeaponName = detected
+            WeaponInput:SetValue(detected)
             saveConfig()
+            Fluent:Notify({
+                Title = "Arma Detectada!",
+                Content = "Arma identificada: " .. tostring(detected),
+                Duration = 4
+            })
+        else
+            Fluent:Notify({
+                Title = "Nenhuma Arma Encontrada",
+                Content = "Digite o nome exato da arma na caixa de texto.",
+                Duration = 4
+            })
         end
     end
 })
