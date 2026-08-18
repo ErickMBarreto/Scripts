@@ -114,7 +114,7 @@ local teleportCooldown = 0
 local lastSkillUse = 0
 local comboIndex = 1
 local isDungeonEnded = false
-local cachedWeapon = "Katana"
+local cachedWeapon = nil
 
 local function getCharacter()
     local char = player.Character
@@ -149,50 +149,56 @@ player.CharacterAdded:Connect(function()
     end
 end)
 
--- DETECÇÃO DINÂMICA DE QUALQUER ARMA EQUIPADA
+-- DETECTOR UNIVERSAL DE ARMA
 local function getWeaponName()
-    -- 1. Checa atributos no Player ou Character
     local char = player.Character
-    if player:GetAttribute("EquippedWeapon") then
-        return tostring(player:GetAttribute("EquippedWeapon"))
-    end
-    if char and char:GetAttribute("EquippedWeapon") then
-        return tostring(char:GetAttribute("EquippedWeapon"))
-    end
-    if player:GetAttribute("Weapon") then
-        return tostring(player:GetAttribute("Weapon"))
-    end
 
-    -- 2. Checa Tool equipada no Character
+    -- 1. Objeto Tool na mão (Character)
     if char then
         local tool = char:FindFirstChildOfClass("Tool")
-        if tool then 
+        if tool then
             cachedWeapon = tool.Name
-            return tool.Name 
+            return tool.Name, tool
         end
+    end
 
-        -- 3. Varre modelos anexados com Part/Mesh ou Handle
+    -- 2. Values / Atributos no Player
+    local valObj = player:FindFirstChild("EquippedWeapon") or player:FindFirstChild("Weapon") or player:FindFirstChild("CurrentWeapon")
+    if valObj and valObj:IsA("ValueBase") and valObj.Value ~= "" then
+        cachedWeapon = tostring(valObj.Value)
+        return cachedWeapon, nil
+    end
+
+    -- 3. Atributos do Player ou Character
+    local attr = player:GetAttribute("EquippedWeapon") or (char and char:GetAttribute("EquippedWeapon")) or player:GetAttribute("Weapon")
+    if attr and tostring(attr) ~= "" then
+        cachedWeapon = tostring(attr)
+        return cachedWeapon, nil
+    end
+
+    -- 4. Varredura de modelos soldados ao personagem
+    if char then
         for _, child in ipairs(char:GetChildren()) do
             if child:IsA("Model") and not Players:GetPlayerFromCharacter(child) and child.Name ~= "Animate" then
-                if child:FindFirstChild("Handle") or child:FindFirstChildWhichIsA("MeshPart") or child:FindFirstChildWhichIsA("BasePart") then
+                if child:FindFirstChild("Handle") or child:FindFirstChildWhichIsA("BasePart") then
                     cachedWeapon = child.Name
-                    return child.Name
+                    return child.Name, nil
                 end
             end
         end
     end
 
-    -- 4. Checa Backpack
-    local backpack = player:FindFirstChild("Backpack")
-    if backpack then
-        local bpTool = backpack:FindFirstChildOfClass("Tool")
+    -- 5. Primeira Tool na Backpack caso não esteja equipada
+    local bp = player:FindFirstChild("Backpack")
+    if bp then
+        local bpTool = bp:FindFirstChildOfClass("Tool")
         if bpTool then
             cachedWeapon = bpTool.Name
-            return bpTool.Name
+            return bpTool.Name, bpTool
         end
     end
 
-    return cachedWeapon or "Katana"
+    return cachedWeapon or "Katana", nil
 end
 
 local function toggleNoclip(enable)
@@ -388,25 +394,32 @@ local function getDynamicHotbar()
     return nil
 end
 
+-- Disparo Nativo Multi-Arma
 local function executeNativeAttack()
     if isDungeonEnded then return end
     comboIndex = (comboIndex % 4) + 1
-    local weapon = getWeaponName()
+    local weaponName, activeTool = getWeaponName()
 
     if not attackRemote then
         attackRemote = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Attack")
     end
 
+    -- Dispara o Remote com o nome dinâmico da arma
     if attackRemote then
         pcall(function()
-            attackRemote:FireServer("M1", weapon, comboIndex, 0, 0, 2)
+            attackRemote:FireServer("M1", weaponName, comboIndex, 0, 0, 2)
         end)
     end
 
-    local char = player.Character
-    if char then
-        local tool = char:FindFirstChildOfClass("Tool")
-        if tool then tool:Activate() end
+    -- Se for Tool física, força ativação direta
+    if activeTool and activeTool:IsA("Tool") then
+        pcall(function() activeTool:Activate() end)
+    else
+        local char = player.Character
+        local tool = char and char:FindFirstChildOfClass("Tool")
+        if tool then
+            pcall(function() tool:Activate() end)
+        end
     end
 end
 
@@ -425,7 +438,6 @@ local function farmTarget(enemy, enemyRoot)
     end
 end
 
--- Loop de Ataque com velocidade calibrada
 task.spawn(function()
     while true do
         if Settings.AutoAttack and not isDungeonEnded then
