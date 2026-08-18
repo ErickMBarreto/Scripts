@@ -90,6 +90,23 @@ task.spawn(function()
     end
 end)
 
+-- Captura Dinâmica da Arma Ativa via Spy Interno Transparente
+local currentActiveWeapon = "SnowKatana"
+
+pcall(function()
+    local oldNamecall
+    oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+        local method = getnamecallmethod()
+        local args = {...}
+        if (method == "FireServer" or method == "fireServer") and tostring(self.Name):lower() == "attack" then
+            if args[1] == "M1" and args[2] and typeof(args[2]) == "string" and args[2] ~= "" then
+                currentActiveWeapon = args[2]
+            end
+        end
+        return oldNamecall(self, ...)
+    end))
+end)
+
 local Settings = {
     AutoFarm = true,
     AutoAttack = true,
@@ -100,7 +117,7 @@ local Settings = {
     SkillCooldown = 0.8,
     HeightAboveEnemy = 9.0,
     TweenSpeed = 90,
-    AttackSpeed = 0.22,
+    AttackSpeed = 0.18,
     LocalRoomRadius = 80,
     PortalTriggerDistance = 35
 }
@@ -114,7 +131,6 @@ local teleportCooldown = 0
 local lastSkillUse = 0
 local comboIndex = 1
 local isDungeonEnded = false
-local activeWeaponName = "GiantFrozenBeast"
 
 local function getCharacter()
     local char = player.Character
@@ -137,69 +153,57 @@ local function stopMovement()
     end
 end
 
--- LEITURA DINÂMICA DA ARMA PELO INVENTÁRIO (EquippedSelection)
-local function getEquippedWeaponFromInventory()
+-- Detecção da arma no Inventário / Modelos
+local function getWeapon()
     local pguiRef = player:FindFirstChild("PlayerGui")
     local main = pguiRef and pguiRef:FindFirstChild("Main")
-
-    local ignoredTypes = {
+    local ignored = {
         ["bearclaw"] = true, ["slashrotation"] = true, ["deadcalm"] = true,
         ["soulwarrior"] = true, ["soundheadband"] = true, ["sworddancerarmor"] = true,
         ["iceelfwarriorarmor"] = true
     }
 
-    -- 1. Varre os cards de itens no Scroll do Inventário
     if main then
-        for _, scroll in ipairs(main:GetDescendants()) do
-            if scroll:IsA("ScrollingFrame") and (scroll.Name == "Scroll" or scroll.Name:find("Item")) then
-                for _, itemCard in ipairs(scroll:GetChildren()) do
-                    local equippedMark = itemCard:FindFirstChild("EquippedSelection")
-                    if equippedMark and equippedMark:IsA("GuiObject") and equippedMark.Visible then
-                        local n = itemCard.Name:lower()
-                        if not ignoredTypes[n] 
-                           and not n:find("armor") 
-                           and not n:find("headband") 
-                           and not n:find("helmet") 
-                           and not n:find("ring") 
-                           and not n:find("aura") 
-                           and not n:find("title") 
-                           and not n:find("hero") then
-                            activeWeaponName = itemCard.Name
-                            return itemCard.Name
-                        end
+        local scroll = main:FindFirstChild("Scroll", true)
+        if scroll then
+            for _, itemCard in ipairs(scroll:GetChildren()) do
+                local mark = itemCard:FindFirstChild("EquippedSelection")
+                if mark and mark:IsA("GuiObject") and mark.Visible then
+                    local n = itemCard.Name:lower()
+                    if not ignored[n] and not n:find("armor") and not n:find("headband") and not n:find("soul") then
+                        currentActiveWeapon = itemCard.Name
+                        return itemCard.Name
                     end
                 end
             end
         end
     end
 
-    -- 2. Fallback via Modelos no Character
     local char = player.Character
     if char then
         for _, child in ipairs(char:GetChildren()) do
             if child:IsA("Model") and child.Name ~= "Animate" and not Players:GetPlayerFromCharacter(child) then
                 local n = child.Name:lower()
-                if not ignoredTypes[n] 
-                   and not n:find("armor") 
-                   and not n:find("headband") 
-                   and not n:find("helmet") 
-                   and not n:find("warrior") 
-                   and not n:find("aura") then
-                    activeWeaponName = child.Name
+                if not ignored[n] and not n:find("armor") and not n:find("headband") and not n:find("warrior") then
+                    currentActiveWeapon = child.Name
                     return child.Name
                 end
             end
         end
     end
 
-    return activeWeaponName or "GiantFrozenBeast"
+    return currentActiveWeapon or "SnowKatana"
 end
 
--- Disparo Nativo Direto com a Arma Identificada
+-- DISPARO COM OS 4 ARGUMENTOS EXATOS
 local function executeNativeAttack()
     if isDungeonEnded then return end
-    comboIndex = (comboIndex % 4) + 1
-    local weapon = getEquippedWeaponFromInventory()
+    local _, root = getCharacter()
+    if not root then return end
+
+    comboIndex = (comboIndex % 3) + 1
+    local weapon = getWeapon()
+    local lookDirection = root.CFrame.LookVector
 
     if not attackRemote then
         attackRemote = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Attack")
@@ -207,16 +211,8 @@ local function executeNativeAttack()
 
     if attackRemote then
         pcall(function()
-            attackRemote:FireServer("M1", weapon, comboIndex, 0, 0, 2)
+            attackRemote:FireServer("M1", weapon, lookDirection, comboIndex)
         end)
-    end
-
-    local char = player.Character
-    if char then
-        local tool = char:FindFirstChildOfClass("Tool")
-        if tool then
-            pcall(function() tool:Activate() end)
-        end
     end
 end
 
@@ -440,7 +436,7 @@ local function farmTarget(enemy, enemyRoot)
     end
 end
 
--- Loop de Ataque Automático
+-- Loop de Ataque Automático Contínuo
 task.spawn(function()
     while true do
         if Settings.AutoAttack and not isDungeonEnded then
@@ -453,7 +449,7 @@ task.spawn(function()
     end
 end)
 
--- Loop de Skills
+-- Loop de Skills (Spell1 & Spell2)
 task.spawn(function()
     while true do
         if Settings.AutoSkills and not isDungeonEnded then
@@ -698,7 +694,7 @@ FarmSection:AddToggle("AutoSkillsToggle", {
 
 FarmSection:AddSlider("AttackSpeedSlider", {
     Title = "Velocidade do Ataque (segundos)",
-    Default = 0.22,
+    Default = 0.18,
     Min = 0.08,
     Max = 0.50,
     Rounding = 2,
