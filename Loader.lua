@@ -90,6 +90,23 @@ task.spawn(function()
     end
 end)
 
+-- Captura dinâmica automática da arma em uso caso você ataque manualmente
+local currentActiveWeapon = "GiantFrozenBeast"
+
+pcall(function()
+    local oldHook
+    oldHook = hookmetamethod(game, "__namecall", function(self, ...)
+        local method = getnamecallmethod()
+        local args = {...}
+        if (method == "FireServer" or method == "fireServer") and tostring(self.Name):lower():find("attack") then
+            if args[1] == "M1" and args[2] and typeof(args[2]) == "string" then
+                currentActiveWeapon = args[2]
+            end
+        end
+        return oldHook(self, ...)
+    end)
+end)
+
 local Settings = {
     AutoFarm = true,
     AutoAttack = true,
@@ -148,37 +165,25 @@ player.CharacterAdded:Connect(function()
     end
 end)
 
--- DETECTOR DE ARMA UNIVERSAL SIMPLIFICADO E BLINDADO
+-- Detecta dinamicamente a arma pelo modelo anexado ao Character
 local function getWeaponName()
     local char = player.Character
     if char then
-        -- 1. Tool equipada na mão
         local tool = char:FindFirstChildOfClass("Tool")
         if tool and tool.Name ~= "" then
             return tool.Name
         end
 
-        -- 2. Procura modelo de arma soldado ao braço/mão direita
-        local rightArm = char:FindFirstChild("RightHand") or char:FindFirstChild("Right Arm")
-        if rightArm then
-            for _, child in ipairs(char:GetChildren()) do
-                if child:IsA("Model") and child.Name ~= "Animate" and not Players:GetPlayerFromCharacter(child) then
+        for _, child in ipairs(char:GetChildren()) do
+            if child:IsA("Model") and child.Name ~= "Animate" and not Players:GetPlayerFromCharacter(child) then
+                if child:FindFirstChild("Handle") or child:FindFirstChildWhichIsA("BasePart") then
                     return child.Name
                 end
             end
         end
     end
 
-    -- 3. Backpack do player
-    local bp = player:FindFirstChild("Backpack")
-    if bp then
-        local bpTool = bp:FindFirstChildOfClass("Tool")
-        if bpTool and bpTool.Name ~= "" then
-            return bpTool.Name
-        end
-    end
-
-    return "Katana"
+    return currentActiveWeapon or "GiantFrozenBeast"
 end
 
 local function toggleNoclip(enable)
@@ -374,7 +379,6 @@ local function getDynamicHotbar()
     return nil
 end
 
--- Disparo Nativo de Ataque Restaurado e Estabilizado
 local function executeNativeAttack()
     if isDungeonEnded then return end
     comboIndex = (comboIndex % 4) + 1
