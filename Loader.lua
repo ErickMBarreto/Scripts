@@ -114,7 +114,6 @@ local teleportCooldown = 0
 local lastSkillUse = 0
 local comboIndex = 1
 local isDungeonEnded = false
-local cachedWeapon = nil
 
 local function getCharacter()
     local char = player.Character
@@ -149,56 +148,37 @@ player.CharacterAdded:Connect(function()
     end
 end)
 
--- DETECTOR UNIVERSAL DE ARMA
+-- DETECTOR DE ARMA UNIVERSAL SIMPLIFICADO E BLINDADO
 local function getWeaponName()
     local char = player.Character
-
-    -- 1. Objeto Tool na mão (Character)
     if char then
+        -- 1. Tool equipada na mão
         local tool = char:FindFirstChildOfClass("Tool")
-        if tool then
-            cachedWeapon = tool.Name
-            return tool.Name, tool
+        if tool and tool.Name ~= "" then
+            return tool.Name
         end
-    end
 
-    -- 2. Values / Atributos no Player
-    local valObj = player:FindFirstChild("EquippedWeapon") or player:FindFirstChild("Weapon") or player:FindFirstChild("CurrentWeapon")
-    if valObj and valObj:IsA("ValueBase") and valObj.Value ~= "" then
-        cachedWeapon = tostring(valObj.Value)
-        return cachedWeapon, nil
-    end
-
-    -- 3. Atributos do Player ou Character
-    local attr = player:GetAttribute("EquippedWeapon") or (char and char:GetAttribute("EquippedWeapon")) or player:GetAttribute("Weapon")
-    if attr and tostring(attr) ~= "" then
-        cachedWeapon = tostring(attr)
-        return cachedWeapon, nil
-    end
-
-    -- 4. Varredura de modelos soldados ao personagem
-    if char then
-        for _, child in ipairs(char:GetChildren()) do
-            if child:IsA("Model") and not Players:GetPlayerFromCharacter(child) and child.Name ~= "Animate" then
-                if child:FindFirstChild("Handle") or child:FindFirstChildWhichIsA("BasePart") then
-                    cachedWeapon = child.Name
-                    return child.Name, nil
+        -- 2. Procura modelo de arma soldado ao braço/mão direita
+        local rightArm = char:FindFirstChild("RightHand") or char:FindFirstChild("Right Arm")
+        if rightArm then
+            for _, child in ipairs(char:GetChildren()) do
+                if child:IsA("Model") and child.Name ~= "Animate" and not Players:GetPlayerFromCharacter(child) then
+                    return child.Name
                 end
             end
         end
     end
 
-    -- 5. Primeira Tool na Backpack caso não esteja equipada
+    -- 3. Backpack do player
     local bp = player:FindFirstChild("Backpack")
     if bp then
         local bpTool = bp:FindFirstChildOfClass("Tool")
-        if bpTool then
-            cachedWeapon = bpTool.Name
-            return bpTool.Name, bpTool
+        if bpTool and bpTool.Name ~= "" then
+            return bpTool.Name
         end
     end
 
-    return cachedWeapon or "Katana", nil
+    return "Katana"
 end
 
 local function toggleNoclip(enable)
@@ -394,29 +374,25 @@ local function getDynamicHotbar()
     return nil
 end
 
--- Disparo Nativo Multi-Arma
+-- Disparo Nativo de Ataque Restaurado e Estabilizado
 local function executeNativeAttack()
     if isDungeonEnded then return end
     comboIndex = (comboIndex % 4) + 1
-    local weaponName, activeTool = getWeaponName()
+    local weapon = getWeaponName()
 
     if not attackRemote then
         attackRemote = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Attack")
     end
 
-    -- Dispara o Remote com o nome dinâmico da arma
     if attackRemote then
         pcall(function()
-            attackRemote:FireServer("M1", weaponName, comboIndex, 0, 0, 2)
+            attackRemote:FireServer("M1", weapon, comboIndex, 0, 0, 2)
         end)
     end
 
-    -- Se for Tool física, força ativação direta
-    if activeTool and activeTool:IsA("Tool") then
-        pcall(function() activeTool:Activate() end)
-    else
-        local char = player.Character
-        local tool = char and char:FindFirstChildOfClass("Tool")
+    local char = player.Character
+    if char then
+        local tool = char:FindFirstChildOfClass("Tool")
         if tool then
             pcall(function() tool:Activate() end)
         end
