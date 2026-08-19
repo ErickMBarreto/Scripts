@@ -90,7 +90,7 @@ local Settings = {
     AutoStart = true,
     AutoPlayAgain = true,
     AutoEngage = true,
-    StartWaitTime = 3.5, -- 3.5s padrão anti-erro
+    StartWaitTime = 3.5,
     SkillCooldown = 0.8,
     SkillMaxDistance = 20,
     HeightAboveEnemy = 8.5,
@@ -296,19 +296,24 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 7. DETECÇÃO DE INIMIGOS E LEITOR DE WAVE
+-- 7. DETECÇÃO DE INIMIGOS E LEITOR EXATO DE WAVE (VIA PATH IDENTIFICADO)
 -- ====================================================================
 local function getCurrentWaveNumber()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if pguiRef then
-        for _, desc in ipairs(pguiRef:GetDescendants()) do
-            if desc:IsA("TextLabel") and desc.Visible and desc.Text ~= "" then
-                local cur = desc.Text:match("(%d+)%s*/%s*12") or desc.Text:match("(%d+)%s*/%s*%d+")
-                if cur then
-                    local n = tonumber(cur)
-                    if n and n >= 1 and n <= 12 then
-                        return n
-                    end
+        -- 1. Leitura Direta no Elemento Identificado pelo Scanner
+        local stageAmountLabel = pguiRef:FindFirstChild("Main")
+            and pguiRef.Main:FindFirstChild("DungeonFrame")
+            and pguiRef.Main.DungeonFrame:FindFirstChild("StatsHolder")
+            and pguiRef.Main.DungeonFrame.StatsHolder:FindFirstChild("Stage")
+            and pguiRef.Main.DungeonFrame.StatsHolder.Stage:FindFirstChild("Amount")
+
+        if stageAmountLabel and stageAmountLabel:IsA("TextLabel") and stageAmountLabel.Visible and stageAmountLabel.Text ~= "" then
+            local cur = stageAmountLabel.Text:match("(%d+)%s*/%s*%d+") or stageAmountLabel.Text:match("(%d+)")
+            if cur then
+                local n = tonumber(cur)
+                if n and n >= 1 and n <= 12 then
+                    return n
                 end
             end
         end
@@ -557,7 +562,7 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINAS DE ESTADOS (COM ESPERA INICIAL RESPEITADA)
+-- 10. MÁQUINAS DE ESTADOS (BASEADA NA LABEL OFICIAL DA DUNGEON)
 -- ====================================================================
 
 -- 1. FASE BLEACH
@@ -565,30 +570,28 @@ local function runBleachPhaseFlow()
     local char, root = getCharacter()
     if not root then return end
 
-    -- TRAVA DE ESPERA DE 3.5s NO INÍCIO DA FASE
     if (tick() - dungeonStartTime) < Settings.StartWaitTime then
         stopMovement()
         return
     end
 
     local wave = getCurrentWaveNumber()
-
     local inRoom1 = root.Position.Z < 2100 and root.Position.Y > -450
     local inBossRoom = root.Position.Y > -400 and root.Position.Z > 2800
 
-    -- 1. WAVE 12 -> OBRIGAÇÃO PORTAL 2 (BOSS)
+    -- 1. WAVE 12 -> VOO FORÇADO AO PORTAL 2 (BOSS)
     if wave >= 12 and not inBossRoom then
         smoothFlyTo(PORTAL_2_BOSS_POS * CFrame.new(0, 0, -5))
         return
     end
 
-    -- 2. WAVE 8 A 11 -> OBRIGAÇÃO PORTAL 1 (SE AINDA ESTIVER NA SALA 1)
+    -- 2. WAVE 8 A 11 -> VOO FORÇADO AO PORTAL 1 (SE AINDA ESTIVER NA SALA 1)
     if wave >= 8 and inRoom1 then
         smoothFlyTo(PORTAL_1_WAVE8_POS * CFrame.new(0, 0, -4))
         return
     end
 
-    -- 3. COMBATE NORMAL
+    -- 3. COMBATE NORMAL DENTRO DA SALA ATIVA
     local enemies = getAllLivingEnemies()
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
@@ -702,7 +705,7 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 11. INTERFACE FLUENT LIMPA COM CONTROLE DE VELOCIDADE
+-- 11. INTERFACE FLUENT COM CONTROLE DE VELOCIDADE
 -- ====================================================================
 local Window = Fluent:CreateWindow({
     Title = "Hub dos Rapazes",
