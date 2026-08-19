@@ -146,12 +146,10 @@ local currentTween = nil
 local charConnection = nil
 
 -- COORDENADAS REAIS MAPEADAS PELO SCANNER
-local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0) -- Transição para Sala 2
-local PORTAL_2_BOSS_POS  = CFrame.new(5415.7, -568.5, 2534.2) -- Transição para o Boss
+local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0) -- Transição Sala 1 -> Sala 2
+local PORTAL_2_BOSS_POS  = CFrame.new(5415.7, -568.5, 2534.2) -- Transição Sala 2 -> Boss
 
-local dungeonStartTime = tick() -- Marca o início exato da fase
-local emptyEnemiesSince = 0
-
+local dungeonStartTime = tick()
 local passedPortal1 = false
 local passedPortal2 = false
 local needsBossReturn = false
@@ -241,7 +239,7 @@ local function pressKey(keyCode)
 end
 
 -- ====================================================================
--- 6. MOTOR DE COMBATE DIRETO E IDENTIFICAÇÃO DE ARMA
+-- 6. MOTOR DE COMBATE DIRETO E SCANNER DE ARMA
 -- ====================================================================
 local function findAttackRemote()
     if attackRemote and attackRemote.Parent then return attackRemote end
@@ -307,7 +305,7 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 7. DETECÇÃO DE INIMIGOS
+-- 7. DETECÇÃO ESTRITA DE INIMIGOS REAIS (SEM FALSOS POSITIVOS)
 -- ====================================================================
 local function getEntityTargetPart(obj)
     if not obj or not obj.Parent then return nil end
@@ -328,10 +326,7 @@ local function isEntityAlive(obj)
     
     local hum = obj:FindFirstChildOfClass("Humanoid")
     if hum then 
-        if hum.Health <= 0 or hum:GetState() == Enum.HumanoidStateType.Dead then
-            return false
-        end
-        return true
+        return (hum.Health > 0 and hum:GetState() ~= Enum.HumanoidStateType.Dead)
     end
 
     local hpAttr = obj:GetAttribute("Health") or obj:GetAttribute("HP")
@@ -340,13 +335,14 @@ local function isEntityAlive(obj)
     local hpVal = obj:FindFirstChild("Health") or obj:FindFirstChild("HP")
     if hpVal and hpVal:IsA("ValueBase") then return tonumber(hpVal.Value) > 0 end
 
-    return getEntityTargetPart(obj) ~= nil
+    return false -- Não considera objetos sem dados de vida como inimigos
 end
 
 local function getAllLivingEnemies()
     local list = {}
     local char = player.Character
 
+    -- 1. Varre estritamente a pasta de Inimigos oficiais do jogo
     local gameFolder = workspace:FindFirstChild("Game")
     local enemiesFolder = (gameFolder and gameFolder:FindFirstChild("Enemies")) or workspace:FindFirstChild("Enemies")
 
@@ -358,13 +354,13 @@ local function getAllLivingEnemies()
         end
     end
 
-    if #list == 0 then
-        for _, obj in ipairs(workspace:GetChildren()) do
-            if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
-                if obj.Name:lower():find("enemy") or obj.Name:lower():find("mob") or obj.Name:lower():find("boss") or obj:FindFirstChildOfClass("Humanoid") then
-                    if isEntityAlive(obj) then
-                        table.insert(list, obj)
-                    end
+    -- 2. Varre Stages por segurança caso os mobs fiquem dentro de subpastas
+    if #list == 0 and gameFolder and gameFolder:FindFirstChild("Stages") then
+        for _, stage in ipairs(gameFolder.Stages:GetChildren()) do
+            local spawns = stage:FindFirstChild("Spawns") or stage
+            for _, mob in ipairs(spawns:GetChildren()) do
+                if mob:IsA("Model") and mob ~= char and isEntityAlive(mob) then
+                    table.insert(list, mob)
                 end
             end
         end
@@ -533,48 +529,33 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINAS DE ESTADOS (TRAVA DE INÍCIO + COMBATE PRIORITÁRIO)
+-- 10. MÁQUINAS DE ESTADOS (ROTA IMPECÁVEL POR COORDENADAS)
 -- ====================================================================
 
 -- 1. FASE BLEACH
-local function navigateToExactCFrame(targetCFrame)
-    local char, root = getCharacter()
-    if not root or not targetCFrame then return false end
-
-    local initialPos = root.Position
-    local dist = (root.Position - targetCFrame.Position).Magnitude
-
-    smoothFlyTo(targetCFrame)
-
-    if dist <= 18 then
-        task.wait(0.4)
-        if (root.Position - initialPos).Magnitude > 30 then
-            stopMovement()
-            return true
-        end
-    end
-    return false
-end
-
 local function runBleachPhaseFlow()
-    local _, root = getCharacter()
+    local char, root = getCharacter()
     if not root then return end
 
-    -- 1. RETORNO AO BOSS PÓS-MORTE
+    -- Detecção exata de qual sala o jogador está com base na coordenada Z
+    local inRoom1 = root.Position.Z < 2100 and root.Position.Y > -450
+    local inRoom2 = root.Position.Z >= 1800 and root.Position.Y < -450
+    local inBossRoom = root.Position.Y > -400 and root.Position.Z > 2800
+
+    -- Atualiza os estados automaticamente caso o jogador tenha teletransportado
+    if inRoom2 then passedPortal1 = true end
+    if inBossRoom then passedPortal1 = true; passedPortal2 = true; needsBossReturn = false end
+
+    -- 1. RETORNO AO BOSS APÓS MORTE
     if needsBossReturn then
-        if navigateToExactCFrame(PORTAL_2_BOSS_POS) then
-            passedPortal2 = true
-            needsBossReturn = false
-            teleportCooldown = tick() + 2.0
-            return
-        end
+        smoothFlyTo(PORTAL_2_BOSS_POS)
+        return
     end
 
     local enemies = getAllLivingEnemies()
 
-    -- 2. SE HOUVER MONSTROS, ATACA E RESETA CONTADOR DE SALA VAZIA
+    -- 2. SE HOUVER MONSTROS VIVOS, FOCA TOTAL EM MATAR
     if #enemies > 0 then
-        emptyEnemiesSince = 0
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
             while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and not isRespawning and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) do
@@ -588,34 +569,21 @@ local function runBleachPhaseFlow()
             end
         end
     else
-        -- 3. SALA VAZIA: EXIGE ESPERA DE 4 SEGUNDOS DE PARTIDA + 1.5s DE CONFIRMAÇÃO
-        if (tick() - dungeonStartTime) < 4.0 then
-            -- A partida acabou de começar, aguarda o spawn inicial dos monstros
+        -- 3. SALA LIMPA: VOA DIRETO PARA O PORTAL CORRETO
+        if (tick() - dungeonStartTime) < 3.5 then
             stopMovement()
             task.wait(0.2)
             return
         end
 
-        if emptyEnemiesSince == 0 then
-            emptyEnemiesSince = tick()
-        end
-
-        -- Só vai para o portal se a sala ficar comprovadamente vazia por mais de 1.5s
-        if (tick() - emptyEnemiesSince) >= 1.5 then
+        if not passedPortal1 or inRoom1 then
+            -- Voa até o Portal da Sala 1
+            smoothFlyTo(PORTAL_1_WAVE8_POS)
+        elseif not passedPortal2 or inRoom2 then
+            -- Voa até o Portal do Boss
+            smoothFlyTo(PORTAL_2_BOSS_POS)
+        else
             stopMovement()
-            if not passedPortal1 then
-                if navigateToExactCFrame(PORTAL_1_WAVE8_POS) then
-                    passedPortal1 = true
-                    emptyEnemiesSince = 0
-                    teleportCooldown = tick() + 2.0
-                end
-            elseif not passedPortal2 then
-                if navigateToExactCFrame(PORTAL_2_BOSS_POS) then
-                    passedPortal2 = true
-                    emptyEnemiesSince = 0
-                    teleportCooldown = tick() + 2.0
-                end
-            end
         end
     end
 end
@@ -671,7 +639,6 @@ task.spawn(function()
                         passedPortal1 = false
                         passedPortal2 = false
                         needsBossReturn = false
-                        emptyEnemiesSince = 0
                         stopMovement()
                         
                         if Settings.AutoEngage and checkAndClickEngageButton() then
