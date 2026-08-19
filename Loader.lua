@@ -374,7 +374,7 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 7. DETECÇÃO DE INIMIGOS, WAVE E SCANNER AVANÇADO DE PORTAL
+-- 7. DETECÇÃO DE INIMIGOS, WAVE E BUSCA PRECISA DE PORTAIS
 -- ====================================================================
 local function getCurrentWaveNumber()
     local pguiRef = player:FindFirstChild("PlayerGui")
@@ -478,49 +478,31 @@ local function getClosestLivingEnemy()
     return closestEnemy, closestPart
 end
 
--- SCANNER UNIVERSAL E ROBUSTO DE PORTAIS (Ignora diferenças de nome do jogo)
-local function findDungeonPortal(portalIdentifier)
-    local targetNameLower = portalIdentifier:lower()
-    local char, root = getCharacter()
-    if not root then return nil end
-
-    -- 1. Varre a pasta Game.Teleports
+-- BUSCA EXATA BASEADA NO MAPEAMENTO DO SCANNER
+local function getExactDungeonPortal(portalNumber)
+    -- 1. Caminho Real mapeado no Scanner: Workspace.Game.Teleports.Teleport1 / Teleport2
     local gameFolder = workspace:FindFirstChild("Game")
-    local teleportsFolder = (gameFolder and gameFolder:FindFirstChild("Teleports")) or workspace:FindFirstChild("Teleports")
-    
+    local teleportsFolder = gameFolder and gameFolder:FindFirstChild("Teleports")
     if teleportsFolder then
-        for _, item in ipairs(teleportsFolder:GetChildren()) do
-            local itemName = item.Name:lower()
-            if itemName == targetNameLower or itemName:find(targetNameLower) or (targetNameLower:find("1") and itemName:find("1")) or (targetNameLower:find("2") and itemName:find("2")) then
-                return item:FindFirstChild("HitBox") or item:FindFirstChild("Hitbox") or item:FindFirstChildWhichIsA("BasePart") or (item:IsA("BasePart") and item) or item.PrimaryPart
-            end
+        local tp = teleportsFolder:FindFirstChild("Teleport" .. tostring(portalNumber))
+        if tp then
+            local hitBox = tp:FindFirstChild("HitBox") or tp:FindFirstChild("Hitbox") or tp:FindFirstChildWhichIsA("BasePart")
+            if hitBox then return hitBox end
         end
     end
 
-    -- 2. Varredura Global por qualquer objeto Portal/Gate/Teleport
-    local closestPortalPart = nil
-    local minDistance = math.huge
-
-    for _, desc in ipairs(workspace:GetDescendants()) do
-        local dName = desc.Name:lower()
-        if (dName:find("teleport") or dName:find("portal") or dName:find("gate") or dName:find("door")) then
-            if (targetNameLower:find("1") and (dName:find("1") or dName:find("one") or dName:find("first"))) or
-               (targetNameLower:find("2") and (dName:find("2") or dName:find("two") or dName:find("boss") or dName:find("second"))) or
-               (#targetNameLower > 0 and dName:find(targetNameLower)) then
-               
-                local part = desc:FindFirstChild("HitBox") or desc:FindFirstChild("Hitbox") or desc:FindFirstChildWhichIsA("BasePart") or (desc:IsA("BasePart") and desc)
-                if part and part:IsA("BasePart") then
-                    local dist = (root.Position - part.Position).Magnitude
-                    if dist < minDistance then
-                        minDistance = dist
-                        closestPortalPart = part
-                    end
-                end
-            end
+    -- 2. Caminho Visual mapeado no Scanner: Workspace.Map.Effects.Portals
+    local mapFolder = workspace:FindFirstChild("Map")
+    local effectsFolder = mapFolder and mapFolder:FindFirstChild("Effects")
+    local portalsFolder = effectsFolder and effectsFolder:FindFirstChild("Portals")
+    if portalsFolder then
+        for _, m in ipairs(portalsFolder:GetChildren()) do
+            local p = m:FindFirstChild("Portal") or m:FindFirstChildWhichIsA("BasePart")
+            if p then return p end
         end
     end
 
-    return closestPortalPart
+    return nil
 end
 
 -- ====================================================================
@@ -671,7 +653,7 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINAS DE ESTADOS (TRAVESSIA DE PORTAL GARANTIDA)
+-- 10. MÁQUINAS DE ESTADOS (TRAVESSIA DE PORTAL MAPEARA)
 -- ====================================================================
 
 -- 1. FASE BLEACH
@@ -682,7 +664,6 @@ local function navigateToPortal(portalPart)
     local initialPos = root.Position
     local dist = (root.Position - portalPart.Position).Magnitude
 
-    -- Ativa colisão normal ao se aproximar para permitir que o gatilho .Touched do servidor funcione
     if dist <= 12 then
         isTouchingPortal = true
     else
@@ -708,7 +689,7 @@ local function runBleachPhaseFlow()
 
     -- 1. MORTE NO BOSS: Voa direto ao Teleport2
     if needsBossReturn then
-        local p2 = findDungeonPortal("Teleport2") or findDungeonPortal("2") or findDungeonPortal("Boss")
+        local p2 = getExactDungeonPortal(2)
         if p2 then
             if navigateToPortal(p2) then
                 passedPortal2 = true
@@ -723,7 +704,7 @@ local function runBleachPhaseFlow()
 
     -- 2. TRANSIÇÃO SALA 1: Aciona na WAVE 8
     if not passedPortal1 and wave >= 8 then
-        local p1 = findDungeonPortal("Teleport1") or findDungeonPortal("1") or findDungeonPortal("Gate")
+        local p1 = getExactDungeonPortal(1)
         if p1 then
             if navigateToPortal(p1) then
                 passedPortal1 = true
@@ -731,14 +712,13 @@ local function runBleachPhaseFlow()
             end
             return
         else
-            -- Se não achou na busca estrita, mantém tentando no próximo frame sem pular a rota
             task.wait(0.2)
         end
     end
 
     -- 3. TRANSIÇÃO SALA 2: Aciona na WAVE 12
     if passedPortal1 and not passedPortal2 and wave >= 12 then
-        local p2 = findDungeonPortal("Teleport2") or findDungeonPortal("2") or findDungeonPortal("Boss")
+        local p2 = getExactDungeonPortal(2)
         if p2 then
             if navigateToPortal(p2) then
                 passedPortal2 = true
