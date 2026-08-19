@@ -150,7 +150,8 @@ local flightGyro = nil
 local passedPortal1 = false
 local passedPortal2 = false
 local needsBossReturn = false
-local isRespawning = false -- Trava de segurança pós-morte
+local isRespawning = false
+local isTouchingPortal = false
 
 local teleportCooldown = 0
 local lastSkillUse = 0
@@ -186,9 +187,9 @@ local function stopMovement()
     end
 end
 
--- ESPERA DE SEGURANÇA PÓS-MORTE (1 SEGUNDO DE DELAY ANTI-CHEAT)
 charConnection = player.CharacterAdded:Connect(function()
     isRespawning = true
+    isTouchingPortal = false
     stopMovement()
     teleportCooldown = 0
     attackRemote = nil
@@ -208,7 +209,7 @@ local function toggleNoclip(enable)
         if not noclipConnection then
             noclipConnection = RunService.Stepped:Connect(function()
                 local char, root = getCharacter()
-                if char and root and Settings.AutoFarm and not isDungeonEnded and not isRespawning and isScriptRunning then
+                if char and root and Settings.AutoFarm and not isDungeonEnded and not isRespawning and not isTouchingPortal and isScriptRunning then
                     for _, part in ipairs(char:GetDescendants()) do
                         if part:IsA("BasePart") and part.CanCollide then
                             part.CanCollide = false
@@ -225,7 +226,6 @@ local function toggleNoclip(enable)
     end
 end
 
--- MOVIMENTO FÍSICO LEGÍTIMO
 local function flyTowards(targetPos, faceLookAt)
     if isDungeonEnded or isRespawning or not isScriptRunning then return end
     local _, root, hum = getCharacter()
@@ -250,7 +250,7 @@ local function flyTowards(targetPos, faceLookAt)
         flightGyro.Parent = root
     end
 
-    if dist > 1.5 then
+    if dist > 1.2 then
         local dir = diff.Unit
         local currentSpeed = math.clamp(Settings.FlySpeed, 15, 60)
         flightMover.Velocity = dir * currentSpeed
@@ -374,7 +374,7 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 7. DETECÇÃO DE INIMIGOS E LEITURA DE WAVE
+-- 7. DETECÇÃO DE INIMIGOS, WAVE E SCANNER AVANÇADO DE PORTAL
 -- ====================================================================
 local function getCurrentWaveNumber()
     local pguiRef = player:FindFirstChild("PlayerGui")
@@ -478,24 +478,49 @@ local function getClosestLivingEnemy()
     return closestEnemy, closestPart
 end
 
-local function getPortalPart(portalName)
+-- SCANNER UNIVERSAL E ROBUSTO DE PORTAIS (Ignora diferenças de nome do jogo)
+local function findDungeonPortal(portalIdentifier)
+    local targetNameLower = portalIdentifier:lower()
+    local char, root = getCharacter()
+    if not root then return nil end
+
+    -- 1. Varre a pasta Game.Teleports
     local gameFolder = workspace:FindFirstChild("Game")
     local teleportsFolder = (gameFolder and gameFolder:FindFirstChild("Teleports")) or workspace:FindFirstChild("Teleports")
     
     if teleportsFolder then
-        local p = teleportsFolder:FindFirstChild(portalName)
-        if p then
-            return p:FindFirstChild("HitBox") or p:FindFirstChild("Hitbox") or (p:IsA("BasePart") and p) or p:FindFirstChildWhichIsA("BasePart") or (p:IsA("Model") and p.PrimaryPart)
+        for _, item in ipairs(teleportsFolder:GetChildren()) do
+            local itemName = item.Name:lower()
+            if itemName == targetNameLower or itemName:find(targetNameLower) or (targetNameLower:find("1") and itemName:find("1")) or (targetNameLower:find("2") and itemName:find("2")) then
+                return item:FindFirstChild("HitBox") or item:FindFirstChild("Hitbox") or item:FindFirstChildWhichIsA("BasePart") or (item:IsA("BasePart") and item) or item.PrimaryPart
+            end
         end
     end
+
+    -- 2. Varredura Global por qualquer objeto Portal/Gate/Teleport
+    local closestPortalPart = nil
+    local minDistance = math.huge
 
     for _, desc in ipairs(workspace:GetDescendants()) do
-        if desc.Name == portalName then
-            return desc:FindFirstChild("HitBox") or desc:FindFirstChild("Hitbox") or (desc:IsA("BasePart") and desc) or desc:FindFirstChildWhichIsA("BasePart")
+        local dName = desc.Name:lower()
+        if (dName:find("teleport") or dName:find("portal") or dName:find("gate") or dName:find("door")) then
+            if (targetNameLower:find("1") and (dName:find("1") or dName:find("one") or dName:find("first"))) or
+               (targetNameLower:find("2") and (dName:find("2") or dName:find("two") or dName:find("boss") or dName:find("second"))) or
+               (#targetNameLower > 0 and dName:find(targetNameLower)) then
+               
+                local part = desc:FindFirstChild("HitBox") or desc:FindFirstChild("Hitbox") or desc:FindFirstChildWhichIsA("BasePart") or (desc:IsA("BasePart") and desc)
+                if part and part:IsA("BasePart") then
+                    local dist = (root.Position - part.Position).Magnitude
+                    if dist < minDistance then
+                        minDistance = dist
+                        closestPortalPart = part
+                    end
+                end
+            end
         end
     end
 
-    return nil
+    return closestPortalPart
 end
 
 -- ====================================================================
@@ -646,7 +671,7 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINAS DE ESTADOS (VOO FÍSICO SUAVE ANTI-BAN)
+-- 10. MÁQUINAS DE ESTADOS (TRAVESSIA DE PORTAL GARANTIDA)
 -- ====================================================================
 
 -- 1. FASE BLEACH
@@ -657,11 +682,19 @@ local function navigateToPortal(portalPart)
     local initialPos = root.Position
     local dist = (root.Position - portalPart.Position).Magnitude
 
+    -- Ativa colisão normal ao se aproximar para permitir que o gatilho .Touched do servidor funcione
+    if dist <= 12 then
+        isTouchingPortal = true
+    else
+        isTouchingPortal = false
+    end
+
     flyTowards(portalPart.Position, nil)
 
-    if dist <= 6 then
+    if dist <= 5 then
         task.wait(0.6)
         if (root.Position - initialPos).Magnitude > 20 then
+            isTouchingPortal = false
             stopMovement()
             return true
         end
@@ -675,7 +708,7 @@ local function runBleachPhaseFlow()
 
     -- 1. MORTE NO BOSS: Voa direto ao Teleport2
     if needsBossReturn then
-        local p2 = getPortalPart("Teleport2")
+        local p2 = findDungeonPortal("Teleport2") or findDungeonPortal("2") or findDungeonPortal("Boss")
         if p2 then
             if navigateToPortal(p2) then
                 passedPortal2 = true
@@ -690,7 +723,7 @@ local function runBleachPhaseFlow()
 
     -- 2. TRANSIÇÃO SALA 1: Aciona na WAVE 8
     if not passedPortal1 and wave >= 8 then
-        local p1 = getPortalPart("Teleport1")
+        local p1 = findDungeonPortal("Teleport1") or findDungeonPortal("1") or findDungeonPortal("Gate")
         if p1 then
             if navigateToPortal(p1) then
                 passedPortal1 = true
@@ -698,13 +731,14 @@ local function runBleachPhaseFlow()
             end
             return
         else
-            passedPortal1 = true
+            -- Se não achou na busca estrita, mantém tentando no próximo frame sem pular a rota
+            task.wait(0.2)
         end
     end
 
     -- 3. TRANSIÇÃO SALA 2: Aciona na WAVE 12
     if passedPortal1 and not passedPortal2 and wave >= 12 then
-        local p2 = getPortalPart("Teleport2")
+        local p2 = findDungeonPortal("Teleport2") or findDungeonPortal("2") or findDungeonPortal("Boss")
         if p2 then
             if navigateToPortal(p2) then
                 passedPortal2 = true
@@ -712,7 +746,7 @@ local function runBleachPhaseFlow()
             end
             return
         else
-            passedPortal2 = true
+            task.wait(0.2)
         end
     end
 
