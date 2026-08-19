@@ -90,7 +90,7 @@ local Settings = {
     AutoStart = true,
     AutoPlayAgain = true,
     AutoEngage = true,
-    StartWaitTime = 2.0,
+    StartWaitTime = 3.5, -- 3.5s padrão anti-erro
     SkillCooldown = 0.8,
     SkillMaxDistance = 20,
     HeightAboveEnemy = 8.5,
@@ -107,7 +107,8 @@ local function saveConfig()
                 HeightAboveEnemy = Settings.HeightAboveEnemy,
                 TweenSpeed = Settings.TweenSpeed,
                 AttackSpeed = Settings.AttackSpeed,
-                SkillCooldown = Settings.SkillCooldown
+                SkillCooldown = Settings.SkillCooldown,
+                StartWaitTime = Settings.StartWaitTime
             })
             writefile(CONFIG_FILE, data)
         end
@@ -126,6 +127,7 @@ local function loadConfig()
                 if data.TweenSpeed then Settings.TweenSpeed = data.TweenSpeed end
                 if data.AttackSpeed then Settings.AttackSpeed = data.AttackSpeed end
                 if data.SkillCooldown then Settings.SkillCooldown = data.SkillCooldown end
+                if data.StartWaitTime then Settings.StartWaitTime = data.StartWaitTime end
             end
         end
     end)
@@ -145,10 +147,11 @@ local isScriptRunning = true
 local currentTween = nil
 local charConnection = nil
 
--- COORDENADAS REAIS DOS PORTAIS FORNECIDAS PELO SCANNER
-local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0) -- Ponto do Portal 1
-local PORTAL_2_BOSS_POS  = CFrame.new(5415.7, -568.5, 2534.2) -- Ponto do Portal 2
+-- COORDENADAS REAIS DOS PORTAIS
+local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0)
+local PORTAL_2_BOSS_POS  = CFrame.new(5415.7, -568.5, 2534.2)
 
+local dungeonStartTime = tick()
 local isRespawning = false
 local lastSkillUse = 0
 local comboIndex = 1
@@ -293,7 +296,7 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 7. DETECÇÃO DE INIMIGOS E LEITOR DEFINITIVO DE WAVE
+-- 7. DETECÇÃO DE INIMIGOS E LEITOR DE WAVE
 -- ====================================================================
 local function getCurrentWaveNumber()
     local pguiRef = player:FindFirstChild("PlayerGui")
@@ -408,6 +411,7 @@ local function checkDungeonStartButton()
         local startBtn = df:FindFirstChild("Start") or df:FindFirstChild("Play")
         if startBtn and startBtn:IsA("GuiObject") and startBtn.Visible then
             triggerGuiButton(startBtn)
+            dungeonStartTime = tick()
         end
     end
 end
@@ -422,6 +426,7 @@ local function checkAndClickEngageButton()
         local confirmBtn = virusFrame:FindFirstChild("Confirm", true) or virusFrame:FindFirstChild("Engage", true)
         if confirmBtn and confirmBtn:IsA("GuiObject") and confirmBtn.Visible then
             triggerGuiButton(confirmBtn)
+            dungeonStartTime = tick()
             return true
         end
     end
@@ -431,6 +436,7 @@ local function checkAndClickEngageButton()
             local txt = desc:IsA("TextButton") and desc.Text:lower() or desc.Name:lower()
             if txt:find("engage") or (txt:find("confirm") and desc:FindFirstAncestorWhichIsA("Frame") and desc:FindFirstAncestorWhichIsA("Frame").Name:lower():find("virus")) then
                 triggerGuiButton(desc)
+                dungeonStartTime = tick()
                 return true
             end
         end
@@ -461,24 +467,18 @@ end
 -- ====================================================================
 local function isPortalTransitionActive()
     if isRespawning then return true end
+    if (tick() - dungeonStartTime) < Settings.StartWaitTime then return true end
+
     if Settings.SelectedPhase == "Bleach (Fase 4)" then
         local _, root = getCharacter()
         if not root then return true end
 
         local wave = getCurrentWaveNumber()
         local inRoom1 = root.Position.Z < 2100 and root.Position.Y > -450
-        local inRoom2 = root.Position.Y < -450
         local inBossRoom = root.Position.Y > -400 and root.Position.Z > 2800
 
-        -- TRAVA 1: Na Wave 8 a 11, se ainda estiver na Sala 1, NÃO ATACA
-        if wave >= 8 and inRoom1 then
-            return true
-        end
-
-        -- TRAVA 2: Na Wave 12, se ainda não estiver na Arena do Boss, NÃO ATACA
-        if wave >= 12 and not inBossRoom then
-            return true
-        end
+        if wave >= 8 and inRoom1 then return true end
+        if wave >= 12 and not inBossRoom then return true end
     end
     return false
 end
@@ -557,34 +557,38 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINAS DE ESTADOS (ROTA FORÇADA POR WAVE E COORDENADA)
+-- 10. MÁQUINAS DE ESTADOS (COM ESPERA INICIAL RESPEITADA)
 -- ====================================================================
 
--- 1. FASE BLEACH (ROTA MATEMÁTICA DEFINITIVA)
+-- 1. FASE BLEACH
 local function runBleachPhaseFlow()
     local char, root = getCharacter()
     if not root then return end
 
+    -- TRAVA DE ESPERA DE 3.5s NO INÍCIO DA FASE
+    if (tick() - dungeonStartTime) < Settings.StartWaitTime then
+        stopMovement()
+        return
+    end
+
     local wave = getCurrentWaveNumber()
 
-    -- Identificação de Sala pelas Coordenadas
     local inRoom1 = root.Position.Z < 2100 and root.Position.Y > -450
-    local inRoom2 = root.Position.Y < -450
     local inBossRoom = root.Position.Y > -400 and root.Position.Z > 2800
 
-    -- REGRA 1: BATEU WAVE 12 (E AINDA NÃO ESTÁ NO BOSS) -> OBRIGA A IR PRO PORTAL 2
+    -- 1. WAVE 12 -> OBRIGAÇÃO PORTAL 2 (BOSS)
     if wave >= 12 and not inBossRoom then
         smoothFlyTo(PORTAL_2_BOSS_POS * CFrame.new(0, 0, -5))
         return
     end
 
-    -- REGRA 2: BATEU WAVE 8 A 11 (E AINDA ESTÁ NA SALA 1) -> OBRIGA A IR PRO PORTAL 1
+    -- 2. WAVE 8 A 11 -> OBRIGAÇÃO PORTAL 1 (SE AINDA ESTIVER NA SALA 1)
     if wave >= 8 and inRoom1 then
         smoothFlyTo(PORTAL_1_WAVE8_POS * CFrame.new(0, 0, -4))
         return
     end
 
-    -- REGRA 3: COMBATE NORMAL DENTRO DA SALA VÁLIDA
+    -- 3. COMBATE NORMAL
     local enemies = getAllLivingEnemies()
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
@@ -593,7 +597,6 @@ local function runBleachPhaseFlow()
                 local _, currentRoot = getCharacter()
                 if not currentRoot then break end
 
-                -- Checa se a wave virou para a transição durante a luta
                 local currentWave = getCurrentWaveNumber()
                 local isR1 = currentRoot.Position.Z < 2100 and currentRoot.Position.Y > -450
                 local isBoss = currentRoot.Position.Y > -400 and currentRoot.Position.Z > 2800
@@ -615,6 +618,11 @@ end
 
 -- 2. FASE INCURSÃO
 local function runIncursionPhaseFlow()
+    if (tick() - dungeonStartTime) < Settings.StartWaitTime then
+        stopMovement()
+        return
+    end
+
     local enemies = getAllLivingEnemies()
 
     if #enemies > 0 then
@@ -655,6 +663,7 @@ task.spawn(function()
 
                 if engaged then
                     isDungeonEnded = false
+                    dungeonStartTime = tick()
                     task.wait(2.0)
                 else
                     local ended, playAgainBtn = checkDungeonEnd()
@@ -664,6 +673,7 @@ task.spawn(function()
                         
                         if Settings.AutoEngage and checkAndClickEngageButton() then
                             isDungeonEnded = false
+                            dungeonStartTime = tick()
                             task.wait(2.0)
                         elseif Settings.AutoPlayAgain and playAgainBtn then
                             queueNextExecution()
@@ -893,6 +903,18 @@ CombatSection:AddToggle("AutoStartToggle", {
     Default = true,
     Callback = function(Value)
         Settings.AutoStart = Value
+    end
+})
+
+CombatSection:AddSlider("StartWaitTimeSlider", {
+    Title = "Espera Inicial (segundos)",
+    Default = Settings.StartWaitTime,
+    Min = 1.0,
+    Max = 8.0,
+    Rounding = 1,
+    Callback = function(Value)
+        Settings.StartWaitTime = Value
+        saveConfig()
     end
 })
 
