@@ -94,7 +94,7 @@ local Settings = {
     SkillCooldown = 0.8,
     SkillMaxDistance = 20,
     HeightAboveEnemy = 8.5,
-    FlySpeed = 35,
+    TweenSpeed = 50, -- Velocidade original que funcionava perfeitamente
     AttackSpeed = 0.15
 }
 
@@ -105,7 +105,7 @@ local function saveConfig()
                 SelectedPhase = Settings.SelectedPhase,
                 CustomWeaponName = Settings.CustomWeaponName,
                 HeightAboveEnemy = Settings.HeightAboveEnemy,
-                FlySpeed = Settings.FlySpeed,
+                TweenSpeed = Settings.TweenSpeed,
                 AttackSpeed = Settings.AttackSpeed,
                 SkillCooldown = Settings.SkillCooldown
             })
@@ -123,7 +123,7 @@ local function loadConfig()
                 if data.SelectedPhase then Settings.SelectedPhase = data.SelectedPhase end
                 if data.CustomWeaponName then Settings.CustomWeaponName = data.CustomWeaponName end
                 if data.HeightAboveEnemy then Settings.HeightAboveEnemy = data.HeightAboveEnemy end
-                if data.FlySpeed or data.TweenSpeed then Settings.FlySpeed = data.FlySpeed or data.TweenSpeed end
+                if data.TweenSpeed then Settings.TweenSpeed = data.TweenSpeed end
                 if data.AttackSpeed then Settings.AttackSpeed = data.AttackSpeed end
                 if data.SkillCooldown then Settings.SkillCooldown = data.SkillCooldown end
             end
@@ -137,16 +137,13 @@ loadConfig()
 -- 5. SERVIÇOS E ESTADOS GLOBAIS
 -- ====================================================================
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
-local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local isScriptRunning = true
+local currentTween = nil
 local charConnection = nil
-local alignPos = nil
-local alignOri = nil
-local att0 = nil
-local att1 = nil
 
 local passedPortal1 = false
 local passedPortal2 = false
@@ -167,20 +164,12 @@ local function getCharacter()
     return nil, nil, nil
 end
 
-local function cleanupPhysicsMovers()
-    if alignPos and alignPos.Parent then pcall(function() alignPos:Destroy() end) end
-    if alignOri and alignOri.Parent then pcall(function() alignOri:Destroy() end) end
-    if att0 and att0.Parent then pcall(function() att0:Destroy() end) end
-    if att1 and att1.Parent then pcall(function() att1:Destroy() end) end
-    alignPos, alignOri, att0, att1 = nil, nil, nil, nil
-end
-
 local function stopMovement()
-    cleanupPhysicsMovers()
-    local char, root, hum = getCharacter()
-    if hum and hum.Parent then
-        hum.PlatformStand = false
+    if currentTween then
+        currentTween:Cancel()
+        currentTween = nil
     end
+    local _, root = getCharacter()
     if root and root.Parent then
         root.AssemblyLinearVelocity = Vector3.zero
     end
@@ -197,31 +186,27 @@ charConnection = player.CharacterAdded:Connect(function()
         needsBossReturn = true
     end
 
-    task.delay(1.5, function()
+    task.delay(1.2, function()
         isRespawning = false
     end)
 end)
 
--- MOVIMENTAÇÃO NATURAL COMPATÍVEL COM ANTI-CHEAT
-local function moveTowardsTarget(targetPos, lookAtPos)
+-- VOO SUAVE ORIGINAL POR TWEENSERVICE (100% LIMPO E ESTÁVEL)
+local function smoothFlyTo(targetCFrame)
     if isDungeonEnded or isRespawning or not isScriptRunning then return end
-    local char, root, hum = getCharacter()
-    if not root or not root.Parent or not hum then return end
+    local _, root = getCharacter()
+    if not root or not root.Parent then return end
+    
+    local distance = (root.Position - targetCFrame.Position).Magnitude
+    local duration = distance / math.max(Settings.TweenSpeed, 5)
 
-    local diff = (targetPos - root.Position)
-    local dist = diff.Magnitude
-
-    if dist > 1.2 then
-        local dir = diff.Unit
-        local speed = math.clamp(Settings.FlySpeed, 10, 45)
-        root.AssemblyLinearVelocity = dir * speed
-    else
-        root.AssemblyLinearVelocity = Vector3.zero
+    if currentTween then
+        currentTween:Cancel()
     end
 
-    if lookAtPos then
-        root.CFrame = CFrame.new(root.Position, Vector3.new(lookAtPos.X, root.Position.Y, lookAtPos.Z))
-    end
+    local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
+    currentTween = TweenService:Create(root, tweenInfo, {CFrame = targetCFrame})
+    currentTween:Play()
 end
 
 local function triggerGuiButton(btn)
@@ -437,6 +422,7 @@ local function getClosestLivingEnemy()
     return closestEnemy, closestPart
 end
 
+-- MAPEAMENTO DO SCANNER: Workspace.Game.Teleports.Teleport1 / Teleport2
 local function getExactDungeonPortal(portalNumber)
     local gameFolder = workspace:FindFirstChild("Game")
     local teleportsFolder = gameFolder and gameFolder:FindFirstChild("Teleports")
@@ -609,7 +595,7 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINAS DE ESTADOS
+-- 10. MÁQUINAS DE ESTADOS (TRAVESSIA VIA TWEENSERVICE LIMPO)
 -- ====================================================================
 
 -- 1. FASE BLEACH
@@ -620,10 +606,10 @@ local function navigateToPortal(portalPart)
     local initialPos = root.Position
     local dist = (root.Position - portalPart.Position).Magnitude
 
-    moveTowardsTarget(portalPart.Position, nil)
+    smoothFlyTo(portalPart.CFrame)
 
-    if dist <= 5 then
-        task.wait(0.6)
+    if dist <= 12 then
+        task.wait(0.5)
         if (root.Position - initialPos).Magnitude > 20 then
             stopMovement()
             return true
@@ -651,7 +637,7 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 2. TRANSIÇÃO SALA 1
+    -- 2. TRANSIÇÃO SALA 1: Aciona na WAVE 8
     if not passedPortal1 and wave >= 8 then
         local p1 = getExactDungeonPortal(1)
         if p1 then
@@ -665,7 +651,7 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 3. TRANSIÇÃO SALA 2
+    -- 3. TRANSIÇÃO SALA 2: Aciona na WAVE 12
     if passedPortal1 and not passedPortal2 and wave >= 12 then
         local p2 = getExactDungeonPortal(2)
         if p2 then
@@ -688,8 +674,9 @@ local function runBleachPhaseFlow()
                 if not currentRoot then break end
 
                 local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
-                moveTowardsTarget(abovePos, enemyPart.Position)
-                task.wait(0.04)
+                local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
+                smoothFlyTo(targetCFrame)
+                task.wait(0.05)
             end
         end
     else
@@ -709,8 +696,9 @@ local function runIncursionPhaseFlow()
                 if not currentRoot then break end
 
                 local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
-                moveTowardsTarget(abovePos, enemyPart.Position)
-                task.wait(0.04)
+                local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
+                smoothFlyTo(targetCFrame)
+                task.wait(0.05)
             end
         end
     else
@@ -1050,14 +1038,14 @@ CombatSection:AddSlider("HeightAboveEnemy", {
     end
 })
 
-CombatSection:AddSlider("FlySpeedSlider", {
-    Title = "Velocidade do Voo (Anti-Kick)",
-    Default = Settings.FlySpeed,
-    Min = 10,
-    Max = 50,
+CombatSection:AddSlider("TweenSpeed", {
+    Title = "Velocidade do Voo",
+    Default = Settings.TweenSpeed,
+    Min = 20,
+    Max = 120,
     Rounding = 0,
     Callback = function(Value)
-        Settings.FlySpeed = Value
+        Settings.TweenSpeed = Value
         saveConfig()
     end
 })
