@@ -147,7 +147,7 @@ local isScriptRunning = true
 local currentTween = nil
 local charConnection = nil
 
--- COORDENADAS REAIS DOS PORTAIS
+-- COORDENADAS REAIS DOS PORTAIS (FASE 4 - BLEACH TRANCADA)
 local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0)
 local PORTAL_2_BOSS_POS  = CFrame.new(5411.5, -561.0, 2550.0)
 
@@ -236,7 +236,7 @@ local function pressKey(keyCode)
 end
 
 -- ====================================================================
--- 6. MOTOR DE COMBATE DIRETO E IDENTIFICAÇÃO DE ARMA
+-- 6. MOTOR DE COMBATE DIRETO E SCANNER DE ARMA
 -- ====================================================================
 local function findAttackRemote()
     if attackRemote and attackRemote.Parent then return attackRemote end
@@ -302,7 +302,7 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 7. DETECÇÃO LIMPA DE INIMIGOS E LEITOR EXATO DE WAVE
+-- 7. DETECÇÕES DE INIMIGOS (SEPARADAS POR MODO)
 -- ====================================================================
 local function getCurrentWaveNumber()
     local pguiRef = player:FindFirstChild("PlayerGui")
@@ -317,7 +317,7 @@ local function getCurrentWaveNumber()
             local cur = stageAmountLabel.Text:match("(%d+)%s*/%s*%d+") or stageAmountLabel.Text:match("(%d+)")
             if cur then
                 local n = tonumber(cur)
-                if n and n >= 1 and n <= 12 then
+                if n and n >= 1 and n <= 15 then
                     return n
                 end
             end
@@ -329,9 +329,10 @@ end
 local function getEntityTargetPart(obj)
     if not obj or not obj.Parent then return nil end
     return obj:FindFirstChild("HumanoidRootPart")
-        or obj:FindFirstChild("Bot")
+        or obj:FindFirstChild("RootPart")
         or obj:FindFirstChild("Hitbox")
         or obj:FindFirstChild("HitBox")
+        or obj:FindFirstChild("Bot")
         or obj:FindFirstChild("Torso")
         or obj:FindFirstChild("UpperTorso")
         or obj:FindFirstChild("Head")
@@ -357,7 +358,8 @@ local function isEntityAlive(obj)
     return false
 end
 
-local function getAllLivingEnemies()
+-- A. BUSCA EXCLUSIVA: FASE 4 (BLEACH - TRANCADA)
+local function getAllLivingEnemiesBleach()
     local list = {}
     local char = player.Character
 
@@ -386,11 +388,71 @@ local function getAllLivingEnemies()
     return list
 end
 
+-- B. BUSCA EXCLUSIVA: INCURSÃO (SEM LIMITE DE DISTÂNCIA / MAPA COMPLETO)
+local function getAllLivingEnemiesIncursion()
+    local list = {}
+    local char = player.Character
+    local registered = {}
+
+    local function addEntity(mob)
+        if mob and mob:IsA("Model") and mob ~= char and not registered[mob] and not Players:GetPlayerFromCharacter(mob) then
+            if isEntityAlive(mob) and getEntityTargetPart(mob) then
+                registered[mob] = true
+                table.insert(list, mob)
+            end
+        end
+    end
+
+    local gameFolder = workspace:FindFirstChild("Game")
+    if gameFolder then
+        local enemiesFolder = gameFolder:FindFirstChild("Enemies")
+        if enemiesFolder then
+            for _, enemy in ipairs(enemiesFolder:GetChildren()) do addEntity(enemy) end
+        end
+
+        local summonsFolder = gameFolder:FindFirstChild("Summons") or gameFolder:FindFirstChild("Minions") or gameFolder:FindFirstChild("Clones")
+        if summonsFolder then
+            for _, summon in ipairs(summonsFolder:GetChildren()) do addEntity(summon) end
+        end
+
+        local stagesFolder = gameFolder:FindFirstChild("Stages")
+        if stagesFolder then
+            for _, stage in ipairs(stagesFolder:GetChildren()) do
+                local spawns = stage:FindFirstChild("Spawns") or stage
+                for _, mob in ipairs(spawns:GetChildren()) do addEntity(mob) end
+            end
+        end
+    end
+
+    local wsEnemies = workspace:FindFirstChild("Enemies")
+    if wsEnemies then
+        for _, enemy in ipairs(wsEnemies:GetChildren()) do addEntity(enemy) end
+    end
+
+    -- Varredura Global no Workspace inteiro (Sem limite de raio para achar inimigos distantes)
+    for _, obj in ipairs(workspace:GetChildren()) do
+        if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
+            local name = obj.Name:lower()
+            if name:find("mob") or name:find("enemy") or name:find("clone") or name:find("summon") or name:find("minion") or name:find("boss") or obj:FindFirstChildOfClass("Humanoid") then
+                addEntity(obj)
+            end
+        end
+    end
+
+    return list
+end
+
 local function getClosestLivingEnemy()
     local _, root = getCharacter()
     if not root then return nil, nil end
 
-    local enemies = getAllLivingEnemies()
+    local enemies
+    if Settings.SelectedPhase == "Incursão" then
+        enemies = getAllLivingEnemiesIncursion()
+    else
+        enemies = getAllLivingEnemiesBleach()
+    end
+
     local closestEnemy, closestPart = nil, nil
     local minDistance = math.huge
 
@@ -567,7 +629,7 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINAS DE ESTADOS (TRAVESSIA FÍSICA ATIVA SEM TRAVAR OCORRÊNCIA)
+-- 10. MÁQUINAS DE ESTADOS
 -- ====================================================================
 local function passThroughPortalSafely(targetPortalCFrame)
     local char, root, hum = getCharacter()
@@ -581,7 +643,6 @@ local function passThroughPortalSafely(targetPortalCFrame)
         enteringPortal = true
         stopMovement()
         
-        -- Empurrão com física real através do portal para ativar o gatilho .Touched do servidor
         root.CFrame = targetPortalCFrame * CFrame.new(0, 0, 2)
         local forwardDir = (targetPortalCFrame.LookVector * 16)
         root.AssemblyLinearVelocity = forwardDir
@@ -595,7 +656,7 @@ local function passThroughPortalSafely(targetPortalCFrame)
     end
 end
 
--- 1. FASE BLEACH
+-- 1. FASE BLEACH (100% TRANCADA E INTACTA)
 local function runBleachPhaseFlow()
     local char, root = getCharacter()
     if not root then return end
@@ -626,20 +687,17 @@ local function runBleachPhaseFlow()
 
     local wave = getCurrentWaveNumber()
 
-    -- 1. WAVE 12 -> ATRAVESSA O PORTAL 2 PARA O BOSS
     if wave >= 12 and currentRoom ~= "BossRoom" then
         passThroughPortalSafely(PORTAL_2_BOSS_POS)
         return
     end
 
-    -- 2. WAVE 8 A 11 -> ATRAVESSA O PORTAL 1 PARA A SALA 2
     if wave >= 8 and currentRoom == "Room1" then
         passThroughPortalSafely(PORTAL_1_WAVE8_POS)
         return
     end
 
-    -- 3. COMBATE NORMAL NA SALA ATUAL
-    local enemies = getAllLivingEnemies()
+    local enemies = getAllLivingEnemiesBleach()
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
@@ -666,27 +724,21 @@ local function runBleachPhaseFlow()
     end
 end
 
--- 2. FASE INCURSÃO
+-- 2. FASE INCURSÃO (BUSCA ILIMITADA NO MAPA INTEIRO)
 local function runIncursionPhaseFlow()
     if (tick() - dungeonStartTime) < Settings.StartWaitTime then
         stopMovement()
         return
     end
 
-    local enemies = getAllLivingEnemies()
+    local enemies = getAllLivingEnemiesIncursion()
 
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
-            while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and not isRespawning and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) do
-                local _, currentRoot = getCharacter()
-                if not currentRoot then break end
-
-                local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
-                local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
-                smoothFlyTo(targetCFrame)
-                task.wait(0.05)
-            end
+            local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
+            local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
+            smoothFlyTo(targetCFrame)
         end
     else
         stopMovement()
