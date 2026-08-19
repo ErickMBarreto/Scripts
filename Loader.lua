@@ -94,7 +94,7 @@ local Settings = {
     SkillCooldown = 0.8,
     SkillMaxDistance = 20,
     HeightAboveEnemy = 8.5,
-    TweenSpeed = 50, -- Velocidade original que funcionava perfeitamente
+    TweenSpeed = 50,
     AttackSpeed = 0.15
 }
 
@@ -191,7 +191,6 @@ charConnection = player.CharacterAdded:Connect(function()
     end)
 end)
 
--- VOO SUAVE ORIGINAL POR TWEENSERVICE (100% LIMPO E ESTÁVEL)
 local function smoothFlyTo(targetCFrame)
     if isDungeonEnded or isRespawning or not isScriptRunning then return end
     local _, root = getCharacter()
@@ -318,7 +317,7 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 7. DETECÇÃO DE INIMIGOS, WAVE E PORTAIS
+-- 7. DETECÇÃO DE INIMIGOS, WAVE E LOCALIZADOR DE PORTAL
 -- ====================================================================
 local function getCurrentWaveNumber()
     local pguiRef = player:FindFirstChild("PlayerGui")
@@ -422,8 +421,9 @@ local function getClosestLivingEnemy()
     return closestEnemy, closestPart
 end
 
--- MAPEAMENTO DO SCANNER: Workspace.Game.Teleports.Teleport1 / Teleport2
+-- MAPEAMENTO EXATO REVELADO PELO SCANNER
 local function getExactDungeonPortal(portalNumber)
+    -- 1. Hitbox Física Real: Workspace.Game.Teleports.Teleport1 / Teleport2
     local gameFolder = workspace:FindFirstChild("Game")
     local teleportsFolder = gameFolder and gameFolder:FindFirstChild("Teleports")
     if teleportsFolder then
@@ -434,6 +434,7 @@ local function getExactDungeonPortal(portalNumber)
         end
     end
 
+    -- 2. Fallback Visual: Workspace.Map.Effects.Portals
     local mapFolder = workspace:FindFirstChild("Map")
     local effectsFolder = mapFolder and mapFolder:FindFirstChild("Effects")
     local portalsFolder = effectsFolder and effectsFolder:FindFirstChild("Portals")
@@ -595,7 +596,7 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINAS DE ESTADOS (TRAVESSIA VIA TWEENSERVICE LIMPO)
+-- 10. MÁQUINAS DE ESTADOS (TRAVESSIA PRIORITÁRIA DE PORTAIS)
 -- ====================================================================
 
 -- 1. FASE BLEACH
@@ -608,7 +609,7 @@ local function navigateToPortal(portalPart)
 
     smoothFlyTo(portalPart.CFrame)
 
-    if dist <= 12 then
+    if dist <= 14 then
         task.wait(0.5)
         if (root.Position - initialPos).Magnitude > 20 then
             stopMovement()
@@ -619,10 +620,9 @@ local function navigateToPortal(portalPart)
 end
 
 local function runBleachPhaseFlow()
-    local enemies = getAllLivingEnemies()
     local wave = getCurrentWaveNumber()
 
-    -- 1. MORTE NO BOSS
+    -- 1. PRIORIDADE MÁXIMA: RETORNO AO BOSS APÓS MORTE
     if needsBossReturn then
         local p2 = getExactDungeonPortal(2)
         if p2 then
@@ -637,8 +637,9 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 2. TRANSIÇÃO SALA 1: Aciona na WAVE 8
+    -- 2. PRIORIDADE MÁXIMA: TRANSIÇÃO SALA 1 (WAVE >= 8)
     if not passedPortal1 and wave >= 8 then
+        stopMovement()
         local p1 = getExactDungeonPortal(1)
         if p1 then
             if navigateToPortal(p1) then
@@ -646,13 +647,12 @@ local function runBleachPhaseFlow()
                 teleportCooldown = tick() + 2.0
             end
             return
-        else
-            task.wait(0.2)
         end
     end
 
-    -- 3. TRANSIÇÃO SALA 2: Aciona na WAVE 12
+    -- 3. PRIORIDADE MÁXIMA: TRANSIÇÃO SALA 2 / BOSS (WAVE >= 12)
     if passedPortal1 and not passedPortal2 and wave >= 12 then
+        stopMovement()
         local p2 = getExactDungeonPortal(2)
         if p2 then
             if navigateToPortal(p2) then
@@ -660,15 +660,15 @@ local function runBleachPhaseFlow()
                 teleportCooldown = tick() + 2.0
             end
             return
-        else
-            task.wait(0.2)
         end
     end
 
-    -- 4. COMBATE NORMAL
+    -- 4. COMBATE NORMAL NA SALA ATUAL (SÓ EXECUTA SE NÃO TIVER PORTAL PENDENTE)
+    local enemies = getAllLivingEnemies()
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
+            -- Sai do combate imediatamente se a Wave virar para 8 ou 12
             while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and not isRespawning and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) and not isPortalTransitionActive() do
                 local _, currentRoot = getCharacter()
                 if not currentRoot then break end
