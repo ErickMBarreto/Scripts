@@ -145,17 +145,11 @@ local isScriptRunning = true
 local currentTween = nil
 local charConnection = nil
 
--- COORDENADAS REAIS MAPEADAS PELO SCANNER
-local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0) -- Transição Sala 1 -> Sala 2
-local PORTAL_2_BOSS_POS  = CFrame.new(5415.7, -568.5, 2534.2) -- Transição Sala 2 -> Boss (Wave 12)
+-- COORDENADAS REAIS DOS PORTAIS FORNECIDAS PELO SCANNER
+local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0) -- Ponto do Portal 1
+local PORTAL_2_BOSS_POS  = CFrame.new(5415.7, -568.5, 2534.2) -- Ponto do Portal 2
 
-local dungeonStartTime = tick()
-local passedPortal1 = false
-local passedPortal2 = false
-local needsBossReturn = false
 local isRespawning = false
-
-local teleportCooldown = 0
 local lastSkillUse = 0
 local comboIndex = 1
 local isDungeonEnded = false
@@ -183,13 +177,7 @@ end
 charConnection = player.CharacterAdded:Connect(function()
     isRespawning = true
     stopMovement()
-    teleportCooldown = 0
     attackRemote = nil
-
-    if Settings.SelectedPhase == "Bleach (Fase 4)" and passedPortal2 then
-        passedPortal2 = false
-        needsBossReturn = true
-    end
 
     task.delay(1.2, function()
         isRespawning = false
@@ -202,7 +190,7 @@ local function smoothFlyTo(targetCFrame)
     if not root or not root.Parent then return end
     
     local distance = (root.Position - targetCFrame.Position).Magnitude
-    local duration = math.clamp(distance / math.max(Settings.TweenSpeed, 5), 0.15, 10)
+    local duration = math.clamp(distance / math.max(Settings.TweenSpeed, 5), 0.1, 10)
 
     if currentTween then
         currentTween:Cancel()
@@ -305,18 +293,18 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 7. DETECÇÃO DE INIMIGOS E LEITOR ULTRA-PRECISO DE WAVE
+-- 7. DETECÇÃO DE INIMIGOS E LEITOR DEFINITIVO DE WAVE
 -- ====================================================================
 local function getCurrentWaveNumber()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if pguiRef then
         for _, desc in ipairs(pguiRef:GetDescendants()) do
             if desc:IsA("TextLabel") and desc.Visible and desc.Text ~= "" then
-                local current = desc.Text:match("(%d+)%s*/%s*12") or desc.Text:match("(%d+)%s*/%s*%d+") or desc.Text:match("Wave%s*(%d+)")
-                if current then
-                    local val = tonumber(current)
-                    if val and val >= 1 and val <= 15 then
-                        return val
+                local cur = desc.Text:match("(%d+)%s*/%s*12") or desc.Text:match("(%d+)%s*/%s*%d+")
+                if cur then
+                    local n = tonumber(cur)
+                    if n and n >= 1 and n <= 12 then
+                        return n
                     end
                 end
             end
@@ -356,10 +344,9 @@ local function isEntityAlive(obj)
     return false
 end
 
-local function getAllLivingEnemiesInRoom()
+local function getAllLivingEnemies()
     local list = {}
-    local _, root = getCharacter()
-    if not root then return list end
+    local char = player.Character
 
     local gameFolder = workspace:FindFirstChild("Game")
     local enemiesFolder = (gameFolder and gameFolder:FindFirstChild("Enemies")) or workspace:FindFirstChild("Enemies")
@@ -367,12 +354,17 @@ local function getAllLivingEnemiesInRoom()
     if enemiesFolder then
         for _, enemy in ipairs(enemiesFolder:GetChildren()) do
             if isEntityAlive(enemy) then
-                local part = getEntityTargetPart(enemy)
-                if part then
-                    local dist = (root.Position - part.Position).Magnitude
-                    if dist <= 180 then
-                        table.insert(list, enemy)
-                    end
+                table.insert(list, enemy)
+            end
+        end
+    end
+
+    if #list == 0 and gameFolder and gameFolder:FindFirstChild("Stages") then
+        for _, stage in ipairs(gameFolder.Stages:GetChildren()) do
+            local spawns = stage:FindFirstChild("Spawns") or stage
+            for _, mob in ipairs(spawns:GetChildren()) do
+                if mob:IsA("Model") and mob ~= char and isEntityAlive(mob) then
+                    table.insert(list, mob)
                 end
             end
         end
@@ -385,7 +377,7 @@ local function getClosestLivingEnemy()
     local _, root = getCharacter()
     if not root then return nil, nil end
 
-    local enemies = getAllLivingEnemiesInRoom()
+    local enemies = getAllLivingEnemies()
     local closestEnemy, closestPart = nil, nil
     local minDistance = math.huge
 
@@ -471,14 +463,20 @@ local function isPortalTransitionActive()
     if isRespawning then return true end
     if Settings.SelectedPhase == "Bleach (Fase 4)" then
         local _, root = getCharacter()
-        local wave = getCurrentWaveNumber()
-        local inBossRoom = root and (root.Position.Y > -400 and root.Position.Z > 2800)
+        if not root then return true end
 
-        -- TRAVA ABSOLUTA: Se bateu Wave 12 e ainda não entrou na arena do Boss, NÃO ATACA
-        if wave >= 12 and not inBossRoom then
+        local wave = getCurrentWaveNumber()
+        local inRoom1 = root.Position.Z < 2100 and root.Position.Y > -450
+        local inRoom2 = root.Position.Y < -450
+        local inBossRoom = root.Position.Y > -400 and root.Position.Z > 2800
+
+        -- TRAVA 1: Na Wave 8 a 11, se ainda estiver na Sala 1, NÃO ATACA
+        if wave >= 8 and inRoom1 then
             return true
         end
-        if needsBossReturn then
+
+        -- TRAVA 2: Na Wave 12, se ainda não estiver na Arena do Boss, NÃO ATACA
+        if wave >= 12 and not inBossRoom then
             return true
         end
     end
@@ -559,49 +557,35 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINAS DE ESTADOS (TRAVA OBRIGATÓRIA DA WAVE 12)
+-- 10. MÁQUINAS DE ESTADOS (ROTA FORÇADA POR WAVE E COORDENADA)
 -- ====================================================================
 
--- 1. FASE BLEACH
+-- 1. FASE BLEACH (ROTA MATEMÁTICA DEFINITIVA)
 local function runBleachPhaseFlow()
     local char, root = getCharacter()
     if not root then return end
 
     local wave = getCurrentWaveNumber()
 
-    -- Identificação de Sala por Coordenadas Físicas
+    -- Identificação de Sala pelas Coordenadas
     local inRoom1 = root.Position.Z < 2100 and root.Position.Y > -450
     local inRoom2 = root.Position.Y < -450
     local inBossRoom = root.Position.Y > -400 and root.Position.Z > 2800
 
-    -- Atualiza os estados caso já tenha atravessado
-    if inRoom2 then passedPortal1 = true end
-    if inBossRoom then passedPortal1 = true; passedPortal2 = true; needsBossReturn = false end
-
-    -- 1. RETORNO AO BOSS PÓS-MORTE
-    if needsBossReturn then
-        smoothFlyTo(PORTAL_2_BOSS_POS * CFrame.new(0, 0, -4))
-        return
-    end
-
-    -- 2. REGRA OBRIGATÓRIA: BATEU WAVE 12 E NÃO ESTÁ NA ARENA DO BOSS -> VOA DIRETO PRO PORTAL 2!
+    -- REGRA 1: BATEU WAVE 12 (E AINDA NÃO ESTÁ NO BOSS) -> OBRIGA A IR PRO PORTAL 2
     if wave >= 12 and not inBossRoom then
         smoothFlyTo(PORTAL_2_BOSS_POS * CFrame.new(0, 0, -5))
-        task.wait(0.1)
         return
     end
 
-    -- 3. PROXIMIDADE IMEDIATA DO PORTAL 2 (SE ENCOSTOU NO FINAL DA WAVE 11)
-    local distToPortal2 = (root.Position - PORTAL_2_BOSS_POS.Position).Magnitude
-    if inRoom2 and distToPortal2 <= 35 and not inBossRoom then
-        smoothFlyTo(PORTAL_2_BOSS_POS * CFrame.new(0, 0, -5))
-        task.wait(0.2)
+    -- REGRA 2: BATEU WAVE 8 A 11 (E AINDA ESTÁ NA SALA 1) -> OBRIGA A IR PRO PORTAL 1
+    if wave >= 8 and inRoom1 then
+        smoothFlyTo(PORTAL_1_WAVE8_POS * CFrame.new(0, 0, -4))
         return
     end
 
-    local enemies = getAllLivingEnemiesInRoom()
-
-    -- 4. COMBATE NORMAL NAS WAVES 1 A 11 OU NA ARENA DO BOSS (WAVE 12)
+    -- REGRA 3: COMBATE NORMAL DENTRO DA SALA VÁLIDA
+    local enemies = getAllLivingEnemies()
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
@@ -609,10 +593,12 @@ local function runBleachPhaseFlow()
                 local _, currentRoot = getCharacter()
                 if not currentRoot then break end
 
-                -- Checa se a wave virou para 12 no meio da luta
+                -- Checa se a wave virou para a transição durante a luta
                 local currentWave = getCurrentWaveNumber()
+                local isR1 = currentRoot.Position.Z < 2100 and currentRoot.Position.Y > -450
                 local isBoss = currentRoot.Position.Y > -400 and currentRoot.Position.Z > 2800
-                if currentWave >= 12 and not isBoss then
+
+                if (currentWave >= 8 and isR1) or (currentWave >= 12 and not isBoss) then
                     break
                 end
 
@@ -623,26 +609,13 @@ local function runBleachPhaseFlow()
             end
         end
     else
-        -- 5. SALA LIMPA: VOA PARA O RESPECTIVO PORTAL
-        if (tick() - dungeonStartTime) < 3.5 then
-            stopMovement()
-            task.wait(0.2)
-            return
-        end
-
-        if inRoom1 or not passedPortal1 then
-            smoothFlyTo(PORTAL_1_WAVE8_POS * CFrame.new(0, 0, -4))
-        elseif inRoom2 or not passedPortal2 then
-            smoothFlyTo(PORTAL_2_BOSS_POS * CFrame.new(0, 0, -5))
-        else
-            stopMovement()
-        end
+        stopMovement()
     end
 end
 
 -- 2. FASE INCURSÃO
 local function runIncursionPhaseFlow()
-    local enemies = getAllLivingEnemiesInRoom()
+    local enemies = getAllLivingEnemies()
 
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
@@ -682,15 +655,11 @@ task.spawn(function()
 
                 if engaged then
                     isDungeonEnded = false
-                    dungeonStartTime = tick()
                     task.wait(2.0)
                 else
                     local ended, playAgainBtn = checkDungeonEnd()
                     if ended then
                         isDungeonEnded = true
-                        passedPortal1 = false
-                        passedPortal2 = false
-                        needsBossReturn = false
                         stopMovement()
                         
                         if Settings.AutoEngage and checkAndClickEngageButton() then
@@ -845,9 +814,6 @@ PhaseSection:AddDropdown("PhaseSelector", {
     Callback = function(Value)
         Settings.SelectedPhase = Value
         saveConfig()
-        passedPortal1 = false
-        passedPortal2 = false
-        needsBossReturn = false
     end
 })
 
