@@ -93,8 +93,8 @@ local Settings = {
     StartWaitTime = 2.0,
     SkillCooldown = 0.8,
     SkillMaxDistance = 20,
-    HeightAboveEnemy = 9.0,
-    TweenSpeed = 45, -- Velocidade ajustada para não bugar o voo e registrar portais
+    HeightAboveEnemy = 8.5,
+    TweenSpeed = 38, -- Velocidade segura anti-cheat
     AttackSpeed = 0.15
 }
 
@@ -211,6 +211,7 @@ local function toggleNoclip(enable)
     end
 end
 
+-- VOO SUAVE CONTÍNUO (SEM TELEPORTES ABRUPTOS DE CFRAME)
 local function smoothFlyTo(targetCFrame)
     if isDungeonEnded or not isScriptRunning then return end
     local _, root = getCharacter()
@@ -254,7 +255,7 @@ local function pressKey(keyCode)
 end
 
 -- ====================================================================
--- 6. MOTOR DE COMBATE DIRETO E SCANNER INTELIGENTE DE ARMA
+-- 6. MOTOR DE COMBATE DIRETO E SCANNER DE ARMA
 -- ====================================================================
 local function findAttackRemote()
     if attackRemote and attackRemote.Parent then return attackRemote end
@@ -608,38 +609,25 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINAS DE ESTADOS ISOLADAS (PORTAL COM PARADA FÍSICA)
+-- 10. MÁQUINAS DE ESTADOS (TRAVESSIA SEGURA ANTI-KICK NO PORTAL)
 -- ====================================================================
 
 -- 1. FASE BLEACH
-local function flyToPortalLocation(portalPart)
+local function moveToPortalSmoothly(portalPart)
     local char, root = getCharacter()
     if not root or not portalPart then return false end
 
     local initialPos = root.Position
     local dist = (root.Position - portalPart.Position).Magnitude
 
-    -- Voa em velocidade controlada até o portal
-    if dist > 18 then
-        smoothFlyTo(portalPart.CFrame)
-    else
-        -- CHEGOU NO PORTAL: Para o voo e entra dentro da caixa
-        stopMovement()
-        root.CFrame = portalPart.CFrame
-        
-        -- Garante ativação de proximidade e touch
-        if firetouchinterest then
-            pcall(function()
-                firetouchinterest(root, portalPart, 0)
-                task.wait(0.05)
-                firetouchinterest(root, portalPart, 1)
-            end)
-        end
+    -- Voa suavemente até o portal sem teleporte instantâneo
+    smoothFlyTo(portalPart.CFrame)
 
-        task.wait(0.8) -- Espera o jogo processar o teleporte
-        
-        if (root.Position - initialPos).Magnitude > 25 then
-            return true -- Teleporte efetuado com sucesso!
+    -- Ao chegar próximo, desacelera e permite que a colisão do servidor valide
+    if dist <= 8 then
+        task.wait(0.5)
+        if (root.Position - initialPos).Magnitude > 20 then
+            return true -- Confirmou o teleporte para a nova sala
         end
     end
     return false
@@ -649,11 +637,11 @@ local function runBleachPhaseFlow()
     local enemies = getAllLivingEnemies()
     local wave = getCurrentWaveNumber()
 
-    -- 1. MORTE NO BOSS: Voa direto até o Teleport2 para voltar
+    -- 1. MORTE NO BOSS: Voa suavemente até o Teleport2 para voltar
     if needsBossReturn then
         local p2 = getPortalPart("Teleport2")
         if p2 then
-            if flyToPortalLocation(p2) then
+            if moveToPortalSmoothly(p2) then
                 passedPortal2 = true
                 needsBossReturn = false
                 teleportCooldown = tick() + 2.0
@@ -664,11 +652,11 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 2. TRANSIÇÃO SALA 1: Só aciona quando a Wave for 8 ou mais
+    -- 2. TRANSIÇÃO SALA 1: Aciona na WAVE 8
     if not passedPortal1 and wave >= 8 then
         local p1 = getPortalPart("Teleport1")
         if p1 then
-            if flyToPortalLocation(p1) then
+            if moveToPortalSmoothly(p1) then
                 passedPortal1 = true
                 teleportCooldown = tick() + 2.0
             end
@@ -678,11 +666,11 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 3. TRANSIÇÃO SALA 2: Só aciona quando a Wave for 12 ou mais
+    -- 3. TRANSIÇÃO SALA 2: Aciona na WAVE 12
     if passedPortal1 and not passedPortal2 and wave >= 12 then
         local p2 = getPortalPart("Teleport2")
         if p2 then
-            if flyToPortalLocation(p2) then
+            if moveToPortalSmoothly(p2) then
                 passedPortal2 = true
                 teleportCooldown = tick() + 2.0
             end
@@ -692,7 +680,7 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 4. COMBATE NORMAL: Foco no monstro mais próximo
+    -- 4. COMBATE NORMAL
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
@@ -734,7 +722,7 @@ local function runIncursionPhaseFlow()
 end
 
 -- ====================================================================
--- LOOP PRINCIPAL (PRIORIDADE: ENGAGE PRIMEIRO, DEPOIS REPLAY)
+-- LOOP PRINCIPAL
 -- ====================================================================
 task.spawn(function()
     while isScriptRunning do
@@ -795,7 +783,7 @@ end)
 toggleNoclip(Settings.AutoFarm)
 
 -- ====================================================================
--- 11. INTERFACE FLUENT LIMPA COM DETECÇÃO DE ARMA
+-- 11. INTERFACE FLUENT COM CONTROLE DE VELOCIDADE SEGURO
 -- ====================================================================
 local Window = Fluent:CreateWindow({
     Title = "Hub dos Rapazes",
@@ -1070,10 +1058,10 @@ CombatSection:AddSlider("HeightAboveEnemy", {
 })
 
 CombatSection:AddSlider("TweenSpeed", {
-    Title = "Velocidade do Voo",
+    Title = "Velocidade do Voo (Anti-Kick)",
     Default = Settings.TweenSpeed,
-    Min = 20,
-    Max = 160,
+    Min = 15,
+    Max = 70,
     Rounding = 0,
     Callback = function(Value)
         Settings.TweenSpeed = Value
