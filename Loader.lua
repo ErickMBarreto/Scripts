@@ -94,7 +94,7 @@ local Settings = {
     SkillCooldown = 0.8,
     SkillMaxDistance = 20,
     HeightAboveEnemy = 8.5,
-    FlySpeed = 38,
+    FlySpeed = 35,
     AttackSpeed = 0.15
 }
 
@@ -142,16 +142,16 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local isScriptRunning = true
-local noclipConnection = nil
 local charConnection = nil
-local flightMover = nil
-local flightGyro = nil
+local alignPos = nil
+local alignOri = nil
+local att0 = nil
+local att1 = nil
 
 local passedPortal1 = false
 local passedPortal2 = false
 local needsBossReturn = false
 local isRespawning = false
-local isTouchingPortal = false
 
 local teleportCooldown = 0
 local lastSkillUse = 0
@@ -167,21 +167,20 @@ local function getCharacter()
     return nil, nil, nil
 end
 
-local function cleanupFlightMovers()
-    if flightMover and flightMover.Parent then
-        pcall(function() flightMover:Destroy() end)
-    end
-    flightMover = nil
-
-    if flightGyro and flightGyro.Parent then
-        pcall(function() flightGyro:Destroy() end)
-    end
-    flightGyro = nil
+local function cleanupPhysicsMovers()
+    if alignPos and alignPos.Parent then pcall(function() alignPos:Destroy() end) end
+    if alignOri and alignOri.Parent then pcall(function() alignOri:Destroy() end) end
+    if att0 and att0.Parent then pcall(function() att0:Destroy() end) end
+    if att1 and att1.Parent then pcall(function() att1:Destroy() end) end
+    alignPos, alignOri, att0, att1 = nil, nil, nil, nil
 end
 
 local function stopMovement()
-    cleanupFlightMovers()
-    local _, root = getCharacter()
+    cleanupPhysicsMovers()
+    local char, root, hum = getCharacter()
+    if hum and hum.Parent then
+        hum.PlatformStand = false
+    end
     if root and root.Parent then
         root.AssemblyLinearVelocity = Vector3.zero
     end
@@ -189,7 +188,6 @@ end
 
 charConnection = player.CharacterAdded:Connect(function()
     isRespawning = true
-    isTouchingPortal = false
     stopMovement()
     teleportCooldown = 0
     attackRemote = nil
@@ -199,69 +197,30 @@ charConnection = player.CharacterAdded:Connect(function()
         needsBossReturn = true
     end
 
-    task.delay(1.2, function()
+    task.delay(1.5, function()
         isRespawning = false
     end)
 end)
 
-local function toggleNoclip(enable)
-    if enable and isScriptRunning then
-        if not noclipConnection then
-            noclipConnection = RunService.Stepped:Connect(function()
-                local char, root = getCharacter()
-                if char and root and Settings.AutoFarm and not isDungeonEnded and not isRespawning and not isTouchingPortal and isScriptRunning then
-                    for _, part in ipairs(char:GetDescendants()) do
-                        if part:IsA("BasePart") and part.CanCollide then
-                            part.CanCollide = false
-                        end
-                    end
-                end
-            end)
-        end
-    else
-        if noclipConnection then
-            noclipConnection:Disconnect()
-            noclipConnection = nil
-        end
-    end
-end
-
-local function flyTowards(targetPos, faceLookAt)
+-- MOVIMENTAÇÃO NATURAL COMPATÍVEL COM ANTI-CHEAT
+local function moveTowardsTarget(targetPos, lookAtPos)
     if isDungeonEnded or isRespawning or not isScriptRunning then return end
-    local _, root, hum = getCharacter()
+    local char, root, hum = getCharacter()
     if not root or not root.Parent or not hum then return end
 
     local diff = (targetPos - root.Position)
     local dist = diff.Magnitude
 
-    if not flightMover or flightMover.Parent ~= root then
-        cleanupFlightMovers()
-
-        flightMover = Instance.new("BodyVelocity")
-        flightMover.Name = "LegitFlyVelocity"
-        flightMover.MaxForce = Vector3.new(1e6, 1e6, 1e6)
-        flightMover.Parent = root
-
-        flightGyro = Instance.new("BodyGyro")
-        flightGyro.Name = "LegitFlyGyro"
-        flightGyro.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
-        flightGyro.D = 400
-        flightGyro.P = 15000
-        flightGyro.Parent = root
-    end
-
     if dist > 1.2 then
         local dir = diff.Unit
-        local currentSpeed = math.clamp(Settings.FlySpeed, 15, 60)
-        flightMover.Velocity = dir * currentSpeed
+        local speed = math.clamp(Settings.FlySpeed, 10, 45)
+        root.AssemblyLinearVelocity = dir * speed
     else
-        flightMover.Velocity = Vector3.zero
+        root.AssemblyLinearVelocity = Vector3.zero
     end
 
-    if faceLookAt then
-        flightGyro.CFrame = CFrame.new(root.Position, faceLookAt)
-    else
-        flightGyro.CFrame = CFrame.new(root.Position, targetPos)
+    if lookAtPos then
+        root.CFrame = CFrame.new(root.Position, Vector3.new(lookAtPos.X, root.Position.Y, lookAtPos.Z))
     end
 end
 
@@ -374,7 +333,7 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 7. DETECÇÃO DE INIMIGOS, WAVE E BUSCA PRECISA DE PORTAIS
+-- 7. DETECÇÃO DE INIMIGOS, WAVE E PORTAIS
 -- ====================================================================
 local function getCurrentWaveNumber()
     local pguiRef = player:FindFirstChild("PlayerGui")
@@ -478,9 +437,7 @@ local function getClosestLivingEnemy()
     return closestEnemy, closestPart
 end
 
--- BUSCA EXATA BASEADA NO MAPEAMENTO DO SCANNER
 local function getExactDungeonPortal(portalNumber)
-    -- 1. Caminho Real mapeado no Scanner: Workspace.Game.Teleports.Teleport1 / Teleport2
     local gameFolder = workspace:FindFirstChild("Game")
     local teleportsFolder = gameFolder and gameFolder:FindFirstChild("Teleports")
     if teleportsFolder then
@@ -491,7 +448,6 @@ local function getExactDungeonPortal(portalNumber)
         end
     end
 
-    -- 2. Caminho Visual mapeado no Scanner: Workspace.Map.Effects.Portals
     local mapFolder = workspace:FindFirstChild("Map")
     local effectsFolder = mapFolder and mapFolder:FindFirstChild("Effects")
     local portalsFolder = effectsFolder and effectsFolder:FindFirstChild("Portals")
@@ -653,7 +609,7 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINAS DE ESTADOS (TRAVESSIA DE PORTAL MAPEARA)
+-- 10. MÁQUINAS DE ESTADOS
 -- ====================================================================
 
 -- 1. FASE BLEACH
@@ -664,18 +620,11 @@ local function navigateToPortal(portalPart)
     local initialPos = root.Position
     local dist = (root.Position - portalPart.Position).Magnitude
 
-    if dist <= 12 then
-        isTouchingPortal = true
-    else
-        isTouchingPortal = false
-    end
-
-    flyTowards(portalPart.Position, nil)
+    moveTowardsTarget(portalPart.Position, nil)
 
     if dist <= 5 then
         task.wait(0.6)
         if (root.Position - initialPos).Magnitude > 20 then
-            isTouchingPortal = false
             stopMovement()
             return true
         end
@@ -687,7 +636,7 @@ local function runBleachPhaseFlow()
     local enemies = getAllLivingEnemies()
     local wave = getCurrentWaveNumber()
 
-    -- 1. MORTE NO BOSS: Voa direto ao Teleport2
+    -- 1. MORTE NO BOSS
     if needsBossReturn then
         local p2 = getExactDungeonPortal(2)
         if p2 then
@@ -702,7 +651,7 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 2. TRANSIÇÃO SALA 1: Aciona na WAVE 8
+    -- 2. TRANSIÇÃO SALA 1
     if not passedPortal1 and wave >= 8 then
         local p1 = getExactDungeonPortal(1)
         if p1 then
@@ -716,7 +665,7 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 3. TRANSIÇÃO SALA 2: Aciona na WAVE 12
+    -- 3. TRANSIÇÃO SALA 2
     if passedPortal1 and not passedPortal2 and wave >= 12 then
         local p2 = getExactDungeonPortal(2)
         if p2 then
@@ -739,7 +688,7 @@ local function runBleachPhaseFlow()
                 if not currentRoot then break end
 
                 local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
-                flyTowards(abovePos, enemyPart.Position)
+                moveTowardsTarget(abovePos, enemyPart.Position)
                 task.wait(0.04)
             end
         end
@@ -760,7 +709,7 @@ local function runIncursionPhaseFlow()
                 if not currentRoot then break end
 
                 local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
-                flyTowards(abovePos, enemyPart.Position)
+                moveTowardsTarget(abovePos, enemyPart.Position)
                 task.wait(0.04)
             end
         end
@@ -828,10 +777,8 @@ task.spawn(function()
     end
 end)
 
-toggleNoclip(Settings.AutoFarm)
-
 -- ====================================================================
--- 11. INTERFACE FLUENT COM CONTROLE DE VELOCIDADE
+-- 11. INTERFACE FLUENT LIMPA COM CONTROLE DE VELOCIDADE
 -- ====================================================================
 local Window = Fluent:CreateWindow({
     Title = "Hub dos Rapazes",
@@ -901,7 +848,6 @@ local function destroyScript()
     Settings.AutoSkills = false
     
     stopMovement()
-    toggleNoclip(false)
     
     if charConnection then
         charConnection:Disconnect()
@@ -1006,7 +952,6 @@ CombatSection:AddToggle("AutoFarmToggle", {
     Default = true,
     Callback = function(Value)
         Settings.AutoFarm = Value
-        toggleNoclip(Value)
         if not Value then
             stopMovement()
         end
@@ -1108,8 +1053,8 @@ CombatSection:AddSlider("HeightAboveEnemy", {
 CombatSection:AddSlider("FlySpeedSlider", {
     Title = "Velocidade do Voo (Anti-Kick)",
     Default = Settings.FlySpeed,
-    Min = 15,
-    Max = 60,
+    Min = 10,
+    Max = 50,
     Rounding = 0,
     Callback = function(Value)
         Settings.FlySpeed = Value
