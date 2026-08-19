@@ -155,6 +155,7 @@ local dungeonStartTime = tick()
 local isRespawning = false
 local isTransitioning = false
 local enteringPortal = false
+local isVirusActive = false
 local lastRoomState = "Room1"
 
 local lastSkillUse = 0
@@ -388,7 +389,7 @@ local function getAllLivingEnemiesBleach()
     return list
 end
 
--- B. BUSCA EXCLUSIVA: INCURSÃO (SEM LIMITE DE DISTÂNCIA / MAPA COMPLETO)
+-- B. BUSCA EXCLUSIVA: INCURSÃO (SUPORTE A VIRUS / SECRET BOSS / SUMMONS)
 local function getAllLivingEnemiesIncursion()
     local list = {}
     local char = player.Character
@@ -410,6 +411,12 @@ local function getAllLivingEnemiesIncursion()
             for _, enemy in ipairs(enemiesFolder:GetChildren()) do addEntity(enemy) end
         end
 
+        local virusFolder = gameFolder:FindFirstChild("Virus") or gameFolder:FindFirstChild("Boss") or gameFolder:FindFirstChild("SecretBoss")
+        if virusFolder then
+            for _, enemy in ipairs(virusFolder:GetChildren()) do addEntity(enemy) end
+            if isEntityAlive(virusFolder) then addEntity(virusFolder) end
+        end
+
         local summonsFolder = gameFolder:FindFirstChild("Summons") or gameFolder:FindFirstChild("Minions") or gameFolder:FindFirstChild("Clones")
         if summonsFolder then
             for _, summon in ipairs(summonsFolder:GetChildren()) do addEntity(summon) end
@@ -424,16 +431,16 @@ local function getAllLivingEnemiesIncursion()
         end
     end
 
-    local wsEnemies = workspace:FindFirstChild("Enemies")
+    local wsEnemies = workspace:FindFirstChild("Enemies") or workspace:FindFirstChild("Virus")
     if wsEnemies then
         for _, enemy in ipairs(wsEnemies:GetChildren()) do addEntity(enemy) end
     end
 
-    -- Varredura Global no Workspace inteiro (Sem limite de raio para achar inimigos distantes)
+    -- Varredura Global no Workspace
     for _, obj in ipairs(workspace:GetChildren()) do
         if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
             local name = obj.Name:lower()
-            if name:find("mob") or name:find("enemy") or name:find("clone") or name:find("summon") or name:find("minion") or name:find("boss") or obj:FindFirstChildOfClass("Humanoid") then
+            if name:find("mob") or name:find("enemy") or name:find("clone") or name:find("summon") or name:find("minion") or name:find("boss") or name:find("virus") or obj:FindFirstChildOfClass("Humanoid") then
                 addEntity(obj)
             end
         end
@@ -484,6 +491,7 @@ local function checkDungeonStartButton()
         if startBtn and startBtn:IsA("GuiObject") and startBtn.Visible then
             triggerGuiButton(startBtn)
             dungeonStartTime = tick()
+            isVirusActive = false
         end
     end
 end
@@ -499,6 +507,8 @@ local function checkAndClickEngageButton()
         if confirmBtn and confirmBtn:IsA("GuiObject") and confirmBtn.Visible then
             triggerGuiButton(confirmBtn)
             dungeonStartTime = tick()
+            isVirusActive = true
+            isDungeonEnded = false
             return true
         end
     end
@@ -509,6 +519,8 @@ local function checkAndClickEngageButton()
             if txt:find("engage") or (txt:find("confirm") and desc:FindFirstAncestorWhichIsA("Frame") and desc:FindFirstAncestorWhichIsA("Frame").Name:lower():find("virus")) then
                 triggerGuiButton(desc)
                 dungeonStartTime = tick()
+                isVirusActive = true
+                isDungeonEnded = false
                 return true
             end
         end
@@ -520,6 +532,16 @@ end
 local function checkDungeonEnd()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef or not isScriptRunning then return false, nil end
+
+    -- Se o Boss Secreto estiver ativo na Incursão, checa se ainda há inimigos antes de declarar fim
+    if isVirusActive and Settings.SelectedPhase == "Incursão" then
+        local enemies = getAllLivingEnemiesIncursion()
+        if #enemies > 0 then
+            return false, nil
+        else
+            isVirusActive = false
+        end
+    end
 
     local main = pguiRef:FindFirstChild("Main")
     local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
@@ -724,7 +746,7 @@ local function runBleachPhaseFlow()
     end
 end
 
--- 2. FASE INCURSÃO (BUSCA ILIMITADA NO MAPA INTEIRO)
+-- 2. FASE INCURSÃO (TARGETING ATIVO COM SUPORTE A ENGAGE / VIRUS BOSS)
 local function runIncursionPhaseFlow()
     if (tick() - dungeonStartTime) < Settings.StartWaitTime then
         stopMovement()
@@ -765,18 +787,21 @@ task.spawn(function()
 
                 if engaged then
                     isDungeonEnded = false
+                    isVirusActive = true
                     dungeonStartTime = tick()
-                    task.wait(2.0)
+                    task.wait(1.5)
                 else
                     local ended, playAgainBtn = checkDungeonEnd()
                     if ended then
                         isDungeonEnded = true
+                        isVirusActive = false
                         stopMovement()
                         
                         if Settings.AutoEngage and checkAndClickEngageButton() then
                             isDungeonEnded = false
+                            isVirusActive = true
                             dungeonStartTime = tick()
-                            task.wait(2.0)
+                            task.wait(1.5)
                         elseif Settings.AutoPlayAgain and playAgainBtn then
                             queueNextExecution()
                             task.wait(0.8)
