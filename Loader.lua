@@ -191,6 +191,7 @@ charConnection = player.CharacterAdded:Connect(function()
     end)
 end)
 
+-- VOO SUAVE UNIVERSAL (ANTI-SUSPICIOUS MOVEMENT)
 local function smoothFlyTo(targetCFrame)
     if isDungeonEnded or isRespawning or not isScriptRunning then return end
     local _, root = getCharacter()
@@ -317,7 +318,7 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 7. DETECÇÃO DE INIMIGOS, WAVE E LOCALIZADOR DE PORTAL
+-- 7. DETECÇÃO DE INIMIGOS, WAVE E PORTAIS
 -- ====================================================================
 local function getCurrentWaveNumber()
     local pguiRef = player:FindFirstChild("PlayerGui")
@@ -421,9 +422,7 @@ local function getClosestLivingEnemy()
     return closestEnemy, closestPart
 end
 
--- MAPEAMENTO EXATO REVELADO PELO SCANNER
 local function getExactDungeonPortal(portalNumber)
-    -- 1. Hitbox Física Real: Workspace.Game.Teleports.Teleport1 / Teleport2
     local gameFolder = workspace:FindFirstChild("Game")
     local teleportsFolder = gameFolder and gameFolder:FindFirstChild("Teleports")
     if teleportsFolder then
@@ -434,7 +433,6 @@ local function getExactDungeonPortal(portalNumber)
         end
     end
 
-    -- 2. Fallback Visual: Workspace.Map.Effects.Portals
     local mapFolder = workspace:FindFirstChild("Map")
     local effectsFolder = mapFolder and mapFolder:FindFirstChild("Effects")
     local portalsFolder = effectsFolder and effectsFolder:FindFirstChild("Portals")
@@ -596,7 +594,7 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINAS DE ESTADOS (TRAVESSIA PRIORITÁRIA DE PORTAIS)
+-- 10. MÁQUINAS DE ESTADOS (COM VOO SEGURO TWEENSERVICE NAS DUAS FASES)
 -- ====================================================================
 
 -- 1. FASE BLEACH
@@ -622,7 +620,7 @@ end
 local function runBleachPhaseFlow()
     local wave = getCurrentWaveNumber()
 
-    -- 1. PRIORIDADE MÁXIMA: RETORNO AO BOSS APÓS MORTE
+    -- 1. MORTE NO BOSS
     if needsBossReturn then
         local p2 = getExactDungeonPortal(2)
         if p2 then
@@ -637,7 +635,7 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 2. PRIORIDADE MÁXIMA: TRANSIÇÃO SALA 1 (WAVE >= 8)
+    -- 2. TRANSIÇÃO SALA 1 (WAVE >= 8)
     if not passedPortal1 and wave >= 8 then
         stopMovement()
         local p1 = getExactDungeonPortal(1)
@@ -650,7 +648,7 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 3. PRIORIDADE MÁXIMA: TRANSIÇÃO SALA 2 / BOSS (WAVE >= 12)
+    -- 3. TRANSIÇÃO SALA 2 (WAVE >= 12)
     if passedPortal1 and not passedPortal2 and wave >= 12 then
         stopMovement()
         local p2 = getExactDungeonPortal(2)
@@ -663,12 +661,11 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 4. COMBATE NORMAL NA SALA ATUAL (SÓ EXECUTA SE NÃO TIVER PORTAL PENDENTE)
+    -- 4. COMBATE NORMAL
     local enemies = getAllLivingEnemies()
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
-            -- Sai do combate imediatamente se a Wave virar para 8 ou 12
             while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and not isRespawning and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) and not isPortalTransitionActive() do
                 local _, currentRoot = getCharacter()
                 if not currentRoot then break end
@@ -684,7 +681,7 @@ local function runBleachPhaseFlow()
     end
 end
 
--- 2. FASE INCURSÃO
+-- 2. FASE INCURSÃO (13 Waves, Arena Contínua com Voo Suave Seguro)
 local function runIncursionPhaseFlow()
     local enemies = getAllLivingEnemies()
 
