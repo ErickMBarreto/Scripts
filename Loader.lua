@@ -145,9 +145,9 @@ local isScriptRunning = true
 local currentTween = nil
 local charConnection = nil
 
--- COORDENADAS REAIS MAPEADAS
-local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0) -- Abre no fim da Wave 7 (Wave 8)
-local PORTAL_2_BOSS_POS  = CFrame.new(5415.7, -568.5, 2534.2) -- Abre no fim da Wave 11 (Wave 12 Boss)
+-- COORDENADAS REAIS MAPEADAS PELO SCANNER
+local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0) -- Transição Sala 1 -> Sala 2
+local PORTAL_2_BOSS_POS  = CFrame.new(5415.7, -568.5, 2534.2) -- Transição Sala 2 -> Boss (Wave 12)
 
 local dungeonStartTime = tick()
 local passedPortal1 = false
@@ -202,7 +202,7 @@ local function smoothFlyTo(targetCFrame)
     if not root or not root.Parent then return end
     
     local distance = (root.Position - targetCFrame.Position).Magnitude
-    local duration = distance / math.max(Settings.TweenSpeed, 5)
+    local duration = math.clamp(distance / math.max(Settings.TweenSpeed, 5), 0.15, 10)
 
     if currentTween then
         currentTween:Cancel()
@@ -305,8 +305,26 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 7. DETECÇÃO DE INIMIGOS (COM FILTRO DE RAIO DA SALA ATUAL)
+-- 7. DETECÇÃO DE INIMIGOS E LEITOR ULTRA-PRECISO DE WAVE
 -- ====================================================================
+local function getCurrentWaveNumber()
+    local pguiRef = player:FindFirstChild("PlayerGui")
+    if pguiRef then
+        for _, desc in ipairs(pguiRef:GetDescendants()) do
+            if desc:IsA("TextLabel") and desc.Visible and desc.Text ~= "" then
+                local current = desc.Text:match("(%d+)%s*/%s*12") or desc.Text:match("(%d+)%s*/%s*%d+") or desc.Text:match("Wave%s*(%d+)")
+                if current then
+                    local val = tonumber(current)
+                    if val and val >= 1 and val <= 15 then
+                        return val
+                    end
+                end
+            end
+        end
+    end
+    return 1
+end
+
 local function getEntityTargetPart(obj)
     if not obj or not obj.Parent then return nil end
     return obj:FindFirstChild("HumanoidRootPart")
@@ -340,7 +358,6 @@ end
 
 local function getAllLivingEnemiesInRoom()
     local list = {}
-    local char = player.Character
     local _, root = getCharacter()
     if not root then return list end
 
@@ -352,7 +369,6 @@ local function getAllLivingEnemiesInRoom()
             if isEntityAlive(enemy) then
                 local part = getEntityTargetPart(enemy)
                 if part then
-                    -- Ignora monstros de salas distantes/Boss quando estiver nas salas anteriores
                     local dist = (root.Position - part.Position).Magnitude
                     if dist <= 180 then
                         table.insert(list, enemy)
@@ -451,8 +467,26 @@ end
 -- ====================================================================
 -- 9. TRAVA E EXECUÇÃO DE COMBATE
 -- ====================================================================
+local function isPortalTransitionActive()
+    if isRespawning then return true end
+    if Settings.SelectedPhase == "Bleach (Fase 4)" then
+        local _, root = getCharacter()
+        local wave = getCurrentWaveNumber()
+        local inBossRoom = root and (root.Position.Y > -400 and root.Position.Z > 2800)
+
+        -- TRAVA ABSOLUTA: Se bateu Wave 12 e ainda não entrou na arena do Boss, NÃO ATACA
+        if wave >= 12 and not inBossRoom then
+            return true
+        end
+        if needsBossReturn then
+            return true
+        end
+    end
+    return false
+end
+
 local function executeNativeAttack()
-    if isDungeonEnded or isRespawning or not isScriptRunning then return end
+    if isDungeonEnded or isRespawning or not isScriptRunning or isPortalTransitionActive() then return end
     
     comboIndex = (comboIndex % 4) + 1
     local weapon = getEffectiveWeaponName()
@@ -475,7 +509,7 @@ end
 
 task.spawn(function()
     while isScriptRunning do
-        if Settings.AutoAttack and not isDungeonEnded and not isRespawning then
+        if Settings.AutoAttack and not isDungeonEnded and not isRespawning and not isPortalTransitionActive() then
             local char, _, hum = getCharacter()
             if char and hum and hum.Health > 0 then
                 executeNativeAttack()
@@ -487,7 +521,7 @@ end)
 
 task.spawn(function()
     while isScriptRunning do
-        if Settings.AutoSkills and not isDungeonEnded and not isRespawning then
+        if Settings.AutoSkills and not isDungeonEnded and not isRespawning and not isPortalTransitionActive() then
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 if (tick() - lastSkillUse) >= Settings.SkillCooldown then
@@ -525,13 +559,15 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINAS DE ESTADOS (ROTA CORRIGIDA: 12 WAVES TOTAL)
+-- 10. MÁQUINAS DE ESTADOS (TRAVA OBRIGATÓRIA DA WAVE 12)
 -- ====================================================================
 
 -- 1. FASE BLEACH
 local function runBleachPhaseFlow()
     local char, root = getCharacter()
     if not root then return end
+
+    local wave = getCurrentWaveNumber()
 
     -- Identificação de Sala por Coordenadas Físicas
     local inRoom1 = root.Position.Z < 2100 and root.Position.Y > -450
@@ -544,19 +580,41 @@ local function runBleachPhaseFlow()
 
     -- 1. RETORNO AO BOSS PÓS-MORTE
     if needsBossReturn then
-        smoothFlyTo(PORTAL_2_BOSS_POS)
+        smoothFlyTo(PORTAL_2_BOSS_POS * CFrame.new(0, 0, -4))
+        return
+    end
+
+    -- 2. REGRA OBRIGATÓRIA: BATEU WAVE 12 E NÃO ESTÁ NA ARENA DO BOSS -> VOA DIRETO PRO PORTAL 2!
+    if wave >= 12 and not inBossRoom then
+        smoothFlyTo(PORTAL_2_BOSS_POS * CFrame.new(0, 0, -5))
+        task.wait(0.1)
+        return
+    end
+
+    -- 3. PROXIMIDADE IMEDIATA DO PORTAL 2 (SE ENCOSTOU NO FINAL DA WAVE 11)
+    local distToPortal2 = (root.Position - PORTAL_2_BOSS_POS.Position).Magnitude
+    if inRoom2 and distToPortal2 <= 35 and not inBossRoom then
+        smoothFlyTo(PORTAL_2_BOSS_POS * CFrame.new(0, 0, -5))
+        task.wait(0.2)
         return
     end
 
     local enemies = getAllLivingEnemiesInRoom()
 
-    -- 2. SE HOUVER MONSTROS NA SALA ATUAL, MATA TODOS
+    -- 4. COMBATE NORMAL NAS WAVES 1 A 11 OU NA ARENA DO BOSS (WAVE 12)
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
-            while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and not isRespawning and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) do
+            while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and not isRespawning and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) and not isPortalTransitionActive() do
                 local _, currentRoot = getCharacter()
                 if not currentRoot then break end
+
+                -- Checa se a wave virou para 12 no meio da luta
+                local currentWave = getCurrentWaveNumber()
+                local isBoss = currentRoot.Position.Y > -400 and currentRoot.Position.Z > 2800
+                if currentWave >= 12 and not isBoss then
+                    break
+                end
 
                 local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
                 local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
@@ -565,7 +623,7 @@ local function runBleachPhaseFlow()
             end
         end
     else
-        -- 3. SALA LIMPA: VOA DIRETO PARA O PORTAL
+        -- 5. SALA LIMPA: VOA PARA O RESPECTIVO PORTAL
         if (tick() - dungeonStartTime) < 3.5 then
             stopMovement()
             task.wait(0.2)
@@ -573,11 +631,9 @@ local function runBleachPhaseFlow()
         end
 
         if inRoom1 or not passedPortal1 then
-            -- Wave 1 a 7 limpas -> Voa até o Portal 1 (Wave 8)
-            smoothFlyTo(PORTAL_1_WAVE8_POS)
+            smoothFlyTo(PORTAL_1_WAVE8_POS * CFrame.new(0, 0, -4))
         elseif inRoom2 or not passedPortal2 then
-            -- Wave 8 a 11 limpas -> Voa até o Portal 2 para a Wave 12 (Boss)
-            smoothFlyTo(PORTAL_2_BOSS_POS)
+            smoothFlyTo(PORTAL_2_BOSS_POS * CFrame.new(0, 0, -5))
         else
             stopMovement()
         end
