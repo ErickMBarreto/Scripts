@@ -94,7 +94,7 @@ local Settings = {
     SkillCooldown = 0.8,
     SkillMaxDistance = 20,
     HeightAboveEnemy = 8.5,
-    TweenSpeed = 38, -- Velocidade segura anti-cheat
+    FlySpeed = 38,
     AttackSpeed = 0.15
 }
 
@@ -105,7 +105,7 @@ local function saveConfig()
                 SelectedPhase = Settings.SelectedPhase,
                 CustomWeaponName = Settings.CustomWeaponName,
                 HeightAboveEnemy = Settings.HeightAboveEnemy,
-                TweenSpeed = Settings.TweenSpeed,
+                FlySpeed = Settings.FlySpeed,
                 AttackSpeed = Settings.AttackSpeed,
                 SkillCooldown = Settings.SkillCooldown
             })
@@ -123,7 +123,7 @@ local function loadConfig()
                 if data.SelectedPhase then Settings.SelectedPhase = data.SelectedPhase end
                 if data.CustomWeaponName then Settings.CustomWeaponName = data.CustomWeaponName end
                 if data.HeightAboveEnemy then Settings.HeightAboveEnemy = data.HeightAboveEnemy end
-                if data.TweenSpeed then Settings.TweenSpeed = data.TweenSpeed end
+                if data.FlySpeed or data.TweenSpeed then Settings.FlySpeed = data.FlySpeed or data.TweenSpeed end
                 if data.AttackSpeed then Settings.AttackSpeed = data.AttackSpeed end
                 if data.SkillCooldown then Settings.SkillCooldown = data.SkillCooldown end
             end
@@ -137,19 +137,20 @@ loadConfig()
 -- 5. SERVIÇOS E ESTADOS GLOBAIS
 -- ====================================================================
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
-local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local isScriptRunning = true
-local currentTween = nil
 local noclipConnection = nil
 local charConnection = nil
+local flightMover = nil
+local flightGyro = nil
 
 local passedPortal1 = false
 local passedPortal2 = false
 local needsBossReturn = false
+local isRespawning = false -- Trava de segurança pós-morte
 
 local teleportCooldown = 0
 local lastSkillUse = 0
@@ -165,19 +166,29 @@ local function getCharacter()
     return nil, nil, nil
 end
 
-local function stopMovement()
-    if currentTween then
-        currentTween:Cancel()
-        currentTween = nil
+local function cleanupFlightMovers()
+    if flightMover and flightMover.Parent then
+        pcall(function() flightMover:Destroy() end)
     end
+    flightMover = nil
+
+    if flightGyro and flightGyro.Parent then
+        pcall(function() flightGyro:Destroy() end)
+    end
+    flightGyro = nil
+end
+
+local function stopMovement()
+    cleanupFlightMovers()
     local _, root = getCharacter()
     if root and root.Parent then
         root.AssemblyLinearVelocity = Vector3.zero
-        root.AssemblyAngularVelocity = Vector3.zero
     end
 end
 
+-- ESPERA DE SEGURANÇA PÓS-MORTE (1 SEGUNDO DE DELAY ANTI-CHEAT)
 charConnection = player.CharacterAdded:Connect(function()
+    isRespawning = true
     stopMovement()
     teleportCooldown = 0
     attackRemote = nil
@@ -186,6 +197,10 @@ charConnection = player.CharacterAdded:Connect(function()
         passedPortal2 = false
         needsBossReturn = true
     end
+
+    task.delay(1.2, function()
+        isRespawning = false
+    end)
 end)
 
 local function toggleNoclip(enable)
@@ -193,13 +208,12 @@ local function toggleNoclip(enable)
         if not noclipConnection then
             noclipConnection = RunService.Stepped:Connect(function()
                 local char, root = getCharacter()
-                if char and root and Settings.AutoFarm and not isDungeonEnded and isScriptRunning then
+                if char and root and Settings.AutoFarm and not isDungeonEnded and not isRespawning and isScriptRunning then
                     for _, part in ipairs(char:GetDescendants()) do
                         if part:IsA("BasePart") and part.CanCollide then
                             part.CanCollide = false
                         end
                     end
-                    root.AssemblyLinearVelocity = Vector3.zero
                 end
             end)
         end
@@ -211,22 +225,44 @@ local function toggleNoclip(enable)
     end
 end
 
--- VOO SUAVE CONTÍNUO (SEM TELEPORTES ABRUPTOS DE CFRAME)
-local function smoothFlyTo(targetCFrame)
-    if isDungeonEnded or not isScriptRunning then return end
-    local _, root = getCharacter()
-    if not root or not root.Parent then return end
-    
-    local distance = (root.Position - targetCFrame.Position).Magnitude
-    local duration = distance / math.max(Settings.TweenSpeed, 5)
+-- MOVIMENTO FÍSICO LEGÍTIMO
+local function flyTowards(targetPos, faceLookAt)
+    if isDungeonEnded or isRespawning or not isScriptRunning then return end
+    local _, root, hum = getCharacter()
+    if not root or not root.Parent or not hum then return end
 
-    if currentTween then
-        currentTween:Cancel()
+    local diff = (targetPos - root.Position)
+    local dist = diff.Magnitude
+
+    if not flightMover or flightMover.Parent ~= root then
+        cleanupFlightMovers()
+
+        flightMover = Instance.new("BodyVelocity")
+        flightMover.Name = "LegitFlyVelocity"
+        flightMover.MaxForce = Vector3.new(1e6, 1e6, 1e6)
+        flightMover.Parent = root
+
+        flightGyro = Instance.new("BodyGyro")
+        flightGyro.Name = "LegitFlyGyro"
+        flightGyro.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
+        flightGyro.D = 400
+        flightGyro.P = 15000
+        flightGyro.Parent = root
     end
 
-    local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
-    currentTween = TweenService:Create(root, tweenInfo, {CFrame = targetCFrame})
-    currentTween:Play()
+    if dist > 1.5 then
+        local dir = diff.Unit
+        local currentSpeed = math.clamp(Settings.FlySpeed, 15, 60)
+        flightMover.Velocity = dir * currentSpeed
+    else
+        flightMover.Velocity = Vector3.zero
+    end
+
+    if faceLookAt then
+        flightGyro.CFrame = CFrame.new(root.Position, faceLookAt)
+    else
+        flightGyro.CFrame = CFrame.new(root.Position, targetPos)
+    end
 end
 
 local function triggerGuiButton(btn)
@@ -526,6 +562,7 @@ end
 -- 9. TRAVA E EXECUÇÃO DE COMBATE
 -- ====================================================================
 local function isPortalTransitionActive()
+    if isRespawning then return true end
     if Settings.SelectedPhase == "Bleach (Fase 4)" then
         local wave = getCurrentWaveNumber()
         if needsBossReturn then return true end
@@ -536,7 +573,7 @@ local function isPortalTransitionActive()
 end
 
 local function executeNativeAttack()
-    if isDungeonEnded or not isScriptRunning or isPortalTransitionActive() then return end
+    if isDungeonEnded or isRespawning or not isScriptRunning or isPortalTransitionActive() then return end
     
     comboIndex = (comboIndex % 4) + 1
     local weapon = getEffectiveWeaponName()
@@ -559,7 +596,7 @@ end
 
 task.spawn(function()
     while isScriptRunning do
-        if Settings.AutoAttack and not isDungeonEnded and not isPortalTransitionActive() then
+        if Settings.AutoAttack and not isDungeonEnded and not isRespawning and not isPortalTransitionActive() then
             local char, _, hum = getCharacter()
             if char and hum and hum.Health > 0 then
                 executeNativeAttack()
@@ -571,7 +608,7 @@ end)
 
 task.spawn(function()
     while isScriptRunning do
-        if Settings.AutoSkills and not isDungeonEnded and not isPortalTransitionActive() then
+        if Settings.AutoSkills and not isDungeonEnded and not isRespawning and not isPortalTransitionActive() then
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 if (tick() - lastSkillUse) >= Settings.SkillCooldown then
@@ -609,25 +646,24 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINAS DE ESTADOS (TRAVESSIA SEGURA ANTI-KICK NO PORTAL)
+-- 10. MÁQUINAS DE ESTADOS (VOO FÍSICO SUAVE ANTI-BAN)
 -- ====================================================================
 
 -- 1. FASE BLEACH
-local function moveToPortalSmoothly(portalPart)
+local function navigateToPortal(portalPart)
     local char, root = getCharacter()
     if not root or not portalPart then return false end
 
     local initialPos = root.Position
     local dist = (root.Position - portalPart.Position).Magnitude
 
-    -- Voa suavemente até o portal sem teleporte instantâneo
-    smoothFlyTo(portalPart.CFrame)
+    flyTowards(portalPart.Position, nil)
 
-    -- Ao chegar próximo, desacelera e permite que a colisão do servidor valide
-    if dist <= 8 then
-        task.wait(0.5)
+    if dist <= 6 then
+        task.wait(0.6)
         if (root.Position - initialPos).Magnitude > 20 then
-            return true -- Confirmou o teleporte para a nova sala
+            stopMovement()
+            return true
         end
     end
     return false
@@ -637,11 +673,11 @@ local function runBleachPhaseFlow()
     local enemies = getAllLivingEnemies()
     local wave = getCurrentWaveNumber()
 
-    -- 1. MORTE NO BOSS: Voa suavemente até o Teleport2 para voltar
+    -- 1. MORTE NO BOSS: Voa direto ao Teleport2
     if needsBossReturn then
         local p2 = getPortalPart("Teleport2")
         if p2 then
-            if moveToPortalSmoothly(p2) then
+            if navigateToPortal(p2) then
                 passedPortal2 = true
                 needsBossReturn = false
                 teleportCooldown = tick() + 2.0
@@ -656,7 +692,7 @@ local function runBleachPhaseFlow()
     if not passedPortal1 and wave >= 8 then
         local p1 = getPortalPart("Teleport1")
         if p1 then
-            if moveToPortalSmoothly(p1) then
+            if navigateToPortal(p1) then
                 passedPortal1 = true
                 teleportCooldown = tick() + 2.0
             end
@@ -670,7 +706,7 @@ local function runBleachPhaseFlow()
     if passedPortal1 and not passedPortal2 and wave >= 12 then
         local p2 = getPortalPart("Teleport2")
         if p2 then
-            if moveToPortalSmoothly(p2) then
+            if navigateToPortal(p2) then
                 passedPortal2 = true
                 teleportCooldown = tick() + 2.0
             end
@@ -684,14 +720,13 @@ local function runBleachPhaseFlow()
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
-            while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) and not isPortalTransitionActive() do
+            while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and not isRespawning and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) and not isPortalTransitionActive() do
                 local _, currentRoot = getCharacter()
                 if not currentRoot then break end
 
                 local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
-                local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
-                smoothFlyTo(targetCFrame)
-                task.wait(0.05)
+                flyTowards(abovePos, enemyPart.Position)
+                task.wait(0.04)
             end
         end
     else
@@ -706,14 +741,13 @@ local function runIncursionPhaseFlow()
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
-            while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) do
+            while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and not isRespawning and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) do
                 local _, currentRoot = getCharacter()
                 if not currentRoot then break end
 
                 local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
-                local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
-                smoothFlyTo(targetCFrame)
-                task.wait(0.05)
+                flyTowards(abovePos, enemyPart.Position)
+                task.wait(0.04)
             end
         end
     else
@@ -726,7 +760,7 @@ end
 -- ====================================================================
 task.spawn(function()
     while isScriptRunning do
-        if Settings.AutoFarm then
+        if Settings.AutoFarm and not isRespawning then
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 
@@ -783,7 +817,7 @@ end)
 toggleNoclip(Settings.AutoFarm)
 
 -- ====================================================================
--- 11. INTERFACE FLUENT COM CONTROLE DE VELOCIDADE SEGURO
+-- 11. INTERFACE FLUENT COM CONTROLE DE VELOCIDADE
 -- ====================================================================
 local Window = Fluent:CreateWindow({
     Title = "Hub dos Rapazes",
@@ -1057,14 +1091,14 @@ CombatSection:AddSlider("HeightAboveEnemy", {
     end
 })
 
-CombatSection:AddSlider("TweenSpeed", {
+CombatSection:AddSlider("FlySpeedSlider", {
     Title = "Velocidade do Voo (Anti-Kick)",
-    Default = Settings.TweenSpeed,
+    Default = Settings.FlySpeed,
     Min = 15,
-    Max = 70,
+    Max = 60,
     Rounding = 0,
     Callback = function(Value)
-        Settings.TweenSpeed = Value
+        Settings.FlySpeed = Value
         saveConfig()
     end
 })
