@@ -145,6 +145,10 @@ local isScriptRunning = true
 local currentTween = nil
 local charConnection = nil
 
+-- COORDENADAS EXATAS MAPEADAS PELO SCANNER
+local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0) -- Transição para Sala 2
+local PORTAL_2_BOSS_POS  = CFrame.new(5415.7, -568.5, 2534.2) -- Transição para o Boss (Wave 12)
+
 local passedPortal1 = false
 local passedPortal2 = false
 local needsBossReturn = false
@@ -191,7 +195,7 @@ charConnection = player.CharacterAdded:Connect(function()
     end)
 end)
 
--- VOO SUAVE UNIVERSAL (ANTI-SUSPICIOUS MOVEMENT)
+-- VOO SUAVE NATIVO TWEENSERVICE (ANTI-SUSPICIOUS MOVEMENT)
 local function smoothFlyTo(targetCFrame)
     if isDungeonEnded or isRespawning or not isScriptRunning then return end
     local _, root = getCharacter()
@@ -278,23 +282,6 @@ local function detectCurrentWeaponDetailed()
         if tool then return tool.Name end
     end
 
-    if char then
-        for _, partName in ipairs({"RightHand", "Right Arm", "Torso", "UpperTorso"}) do
-            local bodyPart = char:FindFirstChild(partName)
-            if bodyPart then
-                for _, child in ipairs(char:GetChildren()) do
-                    if child:IsA("Model") and child.Name ~= char.Name and not child:FindFirstChildOfClass("Humanoid") then
-                        return child.Name
-                    end
-                end
-            end
-        end
-    end
-
-    if player:GetAttribute("Weapon") then return tostring(player:GetAttribute("Weapon")) end
-    if player:GetAttribute("EquippedWeapon") then return tostring(player:GetAttribute("EquippedWeapon")) end
-    if char and char:GetAttribute("Weapon") then return tostring(char:GetAttribute("Weapon")) end
-
     return nil
 end
 
@@ -318,7 +305,7 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 7. DETECÇÃO DE INIMIGOS, WAVE E PORTAIS
+-- 7. DETECÇÃO DE INIMIGOS E LEITURA DE WAVE
 -- ====================================================================
 local function getCurrentWaveNumber()
     local pguiRef = player:FindFirstChild("PlayerGui")
@@ -420,30 +407,6 @@ local function getClosestLivingEnemy()
     end
 
     return closestEnemy, closestPart
-end
-
-local function getExactDungeonPortal(portalNumber)
-    local gameFolder = workspace:FindFirstChild("Game")
-    local teleportsFolder = gameFolder and gameFolder:FindFirstChild("Teleports")
-    if teleportsFolder then
-        local tp = teleportsFolder:FindFirstChild("Teleport" .. tostring(portalNumber))
-        if tp then
-            local hitBox = tp:FindFirstChild("HitBox") or tp:FindFirstChild("Hitbox") or tp:FindFirstChildWhichIsA("BasePart")
-            if hitBox then return hitBox end
-        end
-    end
-
-    local mapFolder = workspace:FindFirstChild("Map")
-    local effectsFolder = mapFolder and mapFolder:FindFirstChild("Effects")
-    local portalsFolder = effectsFolder and effectsFolder:FindFirstChild("Portals")
-    if portalsFolder then
-        for _, m in ipairs(portalsFolder:GetChildren()) do
-            local p = m:FindFirstChild("Portal") or m:FindFirstChildWhichIsA("BasePart")
-            if p then return p end
-        end
-    end
-
-    return nil
 end
 
 -- ====================================================================
@@ -594,22 +557,22 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINAS DE ESTADOS (COM VOO SEGURO TWEENSERVICE NAS DUAS FASES)
+-- 10. MÁQUINAS DE ESTADOS (COM COORDENADAS 100% MAPEADAS)
 -- ====================================================================
 
 -- 1. FASE BLEACH
-local function navigateToPortal(portalPart)
+local function navigateToExactCFrame(targetCFrame)
     local char, root = getCharacter()
-    if not root or not portalPart then return false end
+    if not root or not targetCFrame then return false end
 
     local initialPos = root.Position
-    local dist = (root.Position - portalPart.Position).Magnitude
+    local dist = (root.Position - targetCFrame.Position).Magnitude
 
-    smoothFlyTo(portalPart.CFrame)
+    smoothFlyTo(targetCFrame)
 
-    if dist <= 14 then
-        task.wait(0.5)
-        if (root.Position - initialPos).Magnitude > 20 then
+    if dist <= 16 then
+        task.wait(0.4)
+        if (root.Position - initialPos).Magnitude > 30 then
             stopMovement()
             return true
         end
@@ -620,48 +583,37 @@ end
 local function runBleachPhaseFlow()
     local wave = getCurrentWaveNumber()
 
-    -- 1. MORTE NO BOSS
+    -- 1. RETORNO AO BOSS APÓS MORTE: VOA DIRETO AO PORTAL 2
     if needsBossReturn then
-        local p2 = getExactDungeonPortal(2)
-        if p2 then
-            if navigateToPortal(p2) then
-                passedPortal2 = true
-                needsBossReturn = false
-                teleportCooldown = tick() + 2.0
-            end
-            return
-        else
+        if navigateToExactCFrame(PORTAL_2_BOSS_POS) then
+            passedPortal2 = true
             needsBossReturn = false
-        end
-    end
-
-    -- 2. TRANSIÇÃO SALA 1 (WAVE >= 8)
-    if not passedPortal1 and wave >= 8 then
-        stopMovement()
-        local p1 = getExactDungeonPortal(1)
-        if p1 then
-            if navigateToPortal(p1) then
-                passedPortal1 = true
-                teleportCooldown = tick() + 2.0
-            end
+            teleportCooldown = tick() + 2.0
             return
         end
     end
 
-    -- 3. TRANSIÇÃO SALA 2 (WAVE >= 12)
-    if passedPortal1 and not passedPortal2 and wave >= 12 then
+    -- 2. TRANSIÇÃO SALA 1 (WAVE >= 8 E < 12): VOA DIRETO AO PORTAL 1
+    if not passedPortal1 and wave >= 8 and wave < 12 then
         stopMovement()
-        local p2 = getExactDungeonPortal(2)
-        if p2 then
-            if navigateToPortal(p2) then
-                passedPortal2 = true
-                teleportCooldown = tick() + 2.0
-            end
-            return
+        if navigateToExactCFrame(PORTAL_1_WAVE8_POS) then
+            passedPortal1 = true
+            teleportCooldown = tick() + 2.0
         end
+        return
     end
 
-    -- 4. COMBATE NORMAL
+    -- 3. TRANSIÇÃO SALA 2 / BOSS (WAVE >= 12): VOA DIRETO AO PORTAL 2
+    if not passedPortal2 and wave >= 12 then
+        stopMovement()
+        if navigateToExactCFrame(PORTAL_2_BOSS_POS) then
+            passedPortal2 = true
+            teleportCooldown = tick() + 2.0
+        end
+        return
+    end
+
+    -- 4. COMBATE NORMAL NA SALA ATUAL
     local enemies = getAllLivingEnemies()
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
