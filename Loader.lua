@@ -145,9 +145,9 @@ local isScriptRunning = true
 local currentTween = nil
 local charConnection = nil
 
--- COORDENADAS REAIS MAPEADAS PELO SCANNER
-local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0) -- Transição Sala 1 -> Sala 2
-local PORTAL_2_BOSS_POS  = CFrame.new(5415.7, -568.5, 2534.2) -- Transição Sala 2 -> Boss
+-- COORDENADAS REAIS MAPEADAS
+local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0) -- Abre no fim da Wave 7 (Wave 8)
+local PORTAL_2_BOSS_POS  = CFrame.new(5415.7, -568.5, 2534.2) -- Abre no fim da Wave 11 (Wave 12 Boss)
 
 local dungeonStartTime = tick()
 local passedPortal1 = false
@@ -305,7 +305,7 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 7. DETECÇÃO ESTRITA DE INIMIGOS REAIS (SEM FALSOS POSITIVOS)
+-- 7. DETECÇÃO DE INIMIGOS (COM FILTRO DE RAIO DA SALA ATUAL)
 -- ====================================================================
 local function getEntityTargetPart(obj)
     if not obj or not obj.Parent then return nil end
@@ -335,32 +335,28 @@ local function isEntityAlive(obj)
     local hpVal = obj:FindFirstChild("Health") or obj:FindFirstChild("HP")
     if hpVal and hpVal:IsA("ValueBase") then return tonumber(hpVal.Value) > 0 end
 
-    return false -- Não considera objetos sem dados de vida como inimigos
+    return false
 end
 
-local function getAllLivingEnemies()
+local function getAllLivingEnemiesInRoom()
     local list = {}
     local char = player.Character
+    local _, root = getCharacter()
+    if not root then return list end
 
-    -- 1. Varre estritamente a pasta de Inimigos oficiais do jogo
     local gameFolder = workspace:FindFirstChild("Game")
     local enemiesFolder = (gameFolder and gameFolder:FindFirstChild("Enemies")) or workspace:FindFirstChild("Enemies")
 
     if enemiesFolder then
         for _, enemy in ipairs(enemiesFolder:GetChildren()) do
             if isEntityAlive(enemy) then
-                table.insert(list, enemy)
-            end
-        end
-    end
-
-    -- 2. Varre Stages por segurança caso os mobs fiquem dentro de subpastas
-    if #list == 0 and gameFolder and gameFolder:FindFirstChild("Stages") then
-        for _, stage in ipairs(gameFolder.Stages:GetChildren()) do
-            local spawns = stage:FindFirstChild("Spawns") or stage
-            for _, mob in ipairs(spawns:GetChildren()) do
-                if mob:IsA("Model") and mob ~= char and isEntityAlive(mob) then
-                    table.insert(list, mob)
+                local part = getEntityTargetPart(enemy)
+                if part then
+                    -- Ignora monstros de salas distantes/Boss quando estiver nas salas anteriores
+                    local dist = (root.Position - part.Position).Magnitude
+                    if dist <= 180 then
+                        table.insert(list, enemy)
+                    end
                 end
             end
         end
@@ -373,7 +369,7 @@ local function getClosestLivingEnemy()
     local _, root = getCharacter()
     if not root then return nil, nil end
 
-    local enemies = getAllLivingEnemies()
+    local enemies = getAllLivingEnemiesInRoom()
     local closestEnemy, closestPart = nil, nil
     local minDistance = math.huge
 
@@ -529,7 +525,7 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINAS DE ESTADOS (ROTA IMPECÁVEL POR COORDENADAS)
+-- 10. MÁQUINAS DE ESTADOS (ROTA CORRIGIDA: 12 WAVES TOTAL)
 -- ====================================================================
 
 -- 1. FASE BLEACH
@@ -537,24 +533,24 @@ local function runBleachPhaseFlow()
     local char, root = getCharacter()
     if not root then return end
 
-    -- Detecção exata de qual sala o jogador está com base na coordenada Z
+    -- Identificação de Sala por Coordenadas Físicas
     local inRoom1 = root.Position.Z < 2100 and root.Position.Y > -450
-    local inRoom2 = root.Position.Z >= 1800 and root.Position.Y < -450
+    local inRoom2 = root.Position.Y < -450
     local inBossRoom = root.Position.Y > -400 and root.Position.Z > 2800
 
-    -- Atualiza os estados automaticamente caso o jogador tenha teletransportado
+    -- Atualiza os estados caso já tenha atravessado
     if inRoom2 then passedPortal1 = true end
     if inBossRoom then passedPortal1 = true; passedPortal2 = true; needsBossReturn = false end
 
-    -- 1. RETORNO AO BOSS APÓS MORTE
+    -- 1. RETORNO AO BOSS PÓS-MORTE
     if needsBossReturn then
         smoothFlyTo(PORTAL_2_BOSS_POS)
         return
     end
 
-    local enemies = getAllLivingEnemies()
+    local enemies = getAllLivingEnemiesInRoom()
 
-    -- 2. SE HOUVER MONSTROS VIVOS, FOCA TOTAL EM MATAR
+    -- 2. SE HOUVER MONSTROS NA SALA ATUAL, MATA TODOS
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
@@ -569,18 +565,18 @@ local function runBleachPhaseFlow()
             end
         end
     else
-        -- 3. SALA LIMPA: VOA DIRETO PARA O PORTAL CORRETO
+        -- 3. SALA LIMPA: VOA DIRETO PARA O PORTAL
         if (tick() - dungeonStartTime) < 3.5 then
             stopMovement()
             task.wait(0.2)
             return
         end
 
-        if not passedPortal1 or inRoom1 then
-            -- Voa até o Portal da Sala 1
+        if inRoom1 or not passedPortal1 then
+            -- Wave 1 a 7 limpas -> Voa até o Portal 1 (Wave 8)
             smoothFlyTo(PORTAL_1_WAVE8_POS)
-        elseif not passedPortal2 or inRoom2 then
-            -- Voa até o Portal do Boss
+        elseif inRoom2 or not passedPortal2 then
+            -- Wave 8 a 11 limpas -> Voa até o Portal 2 para a Wave 12 (Boss)
             smoothFlyTo(PORTAL_2_BOSS_POS)
         else
             stopMovement()
@@ -590,7 +586,7 @@ end
 
 -- 2. FASE INCURSÃO
 local function runIncursionPhaseFlow()
-    local enemies = getAllLivingEnemies()
+    local enemies = getAllLivingEnemiesInRoom()
 
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
