@@ -149,6 +149,9 @@ local charConnection = nil
 local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0) -- Transição para Sala 2
 local PORTAL_2_BOSS_POS  = CFrame.new(5415.7, -568.5, 2534.2) -- Transição para o Boss
 
+local dungeonStartTime = tick() -- Marca o início exato da fase
+local emptyEnemiesSince = 0
+
 local passedPortal1 = false
 local passedPortal2 = false
 local needsBossReturn = false
@@ -238,7 +241,7 @@ local function pressKey(keyCode)
 end
 
 -- ====================================================================
--- 6. MOTOR DE COMBATE DIRETO E SCANNER DE ARMA
+-- 6. MOTOR DE COMBATE DIRETO E IDENTIFICAÇÃO DE ARMA
 -- ====================================================================
 local function findAttackRemote()
     if attackRemote and attackRemote.Parent then return attackRemote end
@@ -530,7 +533,7 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINAS DE ESTADOS (COMBATE PRIMEIRO -> PORTAL QUANDO LIMPO)
+-- 10. MÁQUINAS DE ESTADOS (TRAVA DE INÍCIO + COMBATE PRIORITÁRIO)
 -- ====================================================================
 
 -- 1. FASE BLEACH
@@ -569,8 +572,9 @@ local function runBleachPhaseFlow()
 
     local enemies = getAllLivingEnemies()
 
-    -- 2. SE HOUVER MONSTROS NA SALA, MATA TODOS PRIMEIRO!
+    -- 2. SE HOUVER MONSTROS, ATACA E RESETA CONTADOR DE SALA VAZIA
     if #enemies > 0 then
+        emptyEnemiesSince = 0
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
             while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and not isRespawning and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) do
@@ -584,20 +588,33 @@ local function runBleachPhaseFlow()
             end
         end
     else
-        -- 3. NÃO HÁ MAIS MONSTROS NA SALA -> HORA DE IR AO PORTAL
-        stopMovement()
+        -- 3. SALA VAZIA: EXIGE ESPERA DE 4 SEGUNDOS DE PARTIDA + 1.5s DE CONFIRMAÇÃO
+        if (tick() - dungeonStartTime) < 4.0 then
+            -- A partida acabou de começar, aguarda o spawn inicial dos monstros
+            stopMovement()
+            task.wait(0.2)
+            return
+        end
 
-        if not passedPortal1 then
-            -- Se a Sala 1 foi limpa, voa para o Portal 1
-            if navigateToExactCFrame(PORTAL_1_WAVE8_POS) then
-                passedPortal1 = true
-                teleportCooldown = tick() + 2.0
-            end
-        elseif not passedPortal2 then
-            -- Se a Sala 2 foi limpa, voa para o Portal 2 (Boss)
-            if navigateToExactCFrame(PORTAL_2_BOSS_POS) then
-                passedPortal2 = true
-                teleportCooldown = tick() + 2.0
+        if emptyEnemiesSince == 0 then
+            emptyEnemiesSince = tick()
+        end
+
+        -- Só vai para o portal se a sala ficar comprovadamente vazia por mais de 1.5s
+        if (tick() - emptyEnemiesSince) >= 1.5 then
+            stopMovement()
+            if not passedPortal1 then
+                if navigateToExactCFrame(PORTAL_1_WAVE8_POS) then
+                    passedPortal1 = true
+                    emptyEnemiesSince = 0
+                    teleportCooldown = tick() + 2.0
+                end
+            elseif not passedPortal2 then
+                if navigateToExactCFrame(PORTAL_2_BOSS_POS) then
+                    passedPortal2 = true
+                    emptyEnemiesSince = 0
+                    teleportCooldown = tick() + 2.0
+                end
             end
         end
     end
@@ -645,6 +662,7 @@ task.spawn(function()
 
                 if engaged then
                     isDungeonEnded = false
+                    dungeonStartTime = tick()
                     task.wait(2.0)
                 else
                     local ended, playAgainBtn = checkDungeonEnd()
@@ -653,6 +671,7 @@ task.spawn(function()
                         passedPortal1 = false
                         passedPortal2 = false
                         needsBossReturn = false
+                        emptyEnemiesSince = 0
                         stopMovement()
                         
                         if Settings.AutoEngage and checkAndClickEngageButton() then
