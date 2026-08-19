@@ -149,7 +149,7 @@ local charConnection = nil
 
 -- COORDENADAS REAIS DOS PORTAIS
 local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0)
-local PORTAL_2_BOSS_POS  = CFrame.new(5415.7, -568.5, 2534.2)
+local PORTAL_2_BOSS_POS  = CFrame.new(5411.5, -561.0, 2550.0)
 
 local dungeonStartTime = tick()
 local isRespawning = false
@@ -236,7 +236,7 @@ local function pressKey(keyCode)
 end
 
 -- ====================================================================
--- 6. MOTOR DE COMBATE DIRETO E SCANNER DE ARMA
+-- 6. MOTOR DE COMBATE DIRETO E IDENTIFICAÇÃO DE ARMA
 -- ====================================================================
 local function findAttackRemote()
     if attackRemote and attackRemote.Parent then return attackRemote end
@@ -302,7 +302,7 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 7. DETECÇÃO DE INIMIGOS E LEITOR DE WAVE
+-- 7. DETECÇÃO LIMPA DE INIMIGOS E LEITOR EXATO DE WAVE
 -- ====================================================================
 local function getCurrentWaveNumber()
     local pguiRef = player:FindFirstChild("PlayerGui")
@@ -567,29 +567,30 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINAS DE ESTADOS (ENTRADA SUAVE NO PORTAL ANTI-TRAVAMENTO)
+-- 10. MÁQUINAS DE ESTADOS (TRAVESSIA FÍSICA ATIVA SEM TRAVAR OCORRÊNCIA)
 -- ====================================================================
-
--- Função dedicada para atravessar o portal sem lutar contra a física do servidor
 local function passThroughPortalSafely(targetPortalCFrame)
-    local char, root = getCharacter()
-    if not root or enteringPortal then return end
+    local char, root, hum = getCharacter()
+    if not root or not hum or enteringPortal then return end
 
     local dist = (root.Position - targetPortalCFrame.Position).Magnitude
 
     if dist > 8 then
-        -- Se estiver longe, voa até ele
         smoothFlyTo(targetPortalCFrame)
     else
-        -- Quando encostar (< 8 studs): CANCELA O TWEEN E DEIXA O JOGO TELEPORTAR
         enteringPortal = true
         stopMovement()
         
-        -- Dá um passo físico direto no ponto de ativação do portal
-        root.CFrame = targetPortalCFrame * CFrame.new(0, 0, -2)
+        -- Empurrão com física real através do portal para ativar o gatilho .Touched do servidor
+        root.CFrame = targetPortalCFrame * CFrame.new(0, 0, 2)
+        local forwardDir = (targetPortalCFrame.LookVector * 16)
+        root.AssemblyLinearVelocity = forwardDir
         
-        -- Espera a animação do portal e o teleporte ocorrerem livremente
-        task.wait(1.2)
+        if hum then
+            hum:MoveTo(targetPortalCFrame.Position + (targetPortalCFrame.LookVector * 6))
+        end
+
+        task.wait(0.8)
         enteringPortal = false
     end
 end
@@ -611,7 +612,6 @@ local function runBleachPhaseFlow()
         currentRoom = "BossRoom"
     end
 
-    -- Sincronização ao aterrissar em uma nova sala
     if currentRoom ~= lastRoomState then
         lastRoomState = currentRoom
         stopMovement()
@@ -626,19 +626,19 @@ local function runBleachPhaseFlow()
 
     local wave = getCurrentWaveNumber()
 
-    -- 1. WAVE 12 -> ATRAVESSA O PORTAL 2 (BOSS)
+    -- 1. WAVE 12 -> ATRAVESSA O PORTAL 2 PARA O BOSS
     if wave >= 12 and currentRoom ~= "BossRoom" then
         passThroughPortalSafely(PORTAL_2_BOSS_POS)
         return
     end
 
-    -- 2. WAVE 8 A 11 -> ATRAVESSA O PORTAL 1 (SE AINDA ESTIVER NA SALA 1)
+    -- 2. WAVE 8 A 11 -> ATRAVESSA O PORTAL 1 PARA A SALA 2
     if wave >= 8 and currentRoom == "Room1" then
         passThroughPortalSafely(PORTAL_1_WAVE8_POS)
         return
     end
 
-    -- 3. COMBATE NORMAL NA SALA ATIVA
+    -- 3. COMBATE NORMAL NA SALA ATUAL
     local enemies = getAllLivingEnemies()
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
