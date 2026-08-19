@@ -94,7 +94,7 @@ local Settings = {
     SkillCooldown = 0.8,
     SkillMaxDistance = 20,
     HeightAboveEnemy = 9.0,
-    TweenSpeed = 90,
+    TweenSpeed = 45, -- Velocidade ajustada para não bugar o voo e registrar portais
     AttackSpeed = 0.15
 }
 
@@ -271,7 +271,6 @@ local function findAttackRemote()
 end
 
 local function detectCurrentWeaponDetailed()
-    -- 1. Varredura no Inventário UI
     local pguiRef = player:FindFirstChild("PlayerGui")
     if pguiRef then
         for _, desc in ipairs(pguiRef:GetDescendants()) do
@@ -287,7 +286,6 @@ local function detectCurrentWeaponDetailed()
         end
     end
 
-    -- 2. Tool na mão ou na mochila
     local char = player.Character
     if char then
         local tool = char:FindFirstChildOfClass("Tool")
@@ -299,7 +297,6 @@ local function detectCurrentWeaponDetailed()
         if tool then return tool.Name end
     end
 
-    -- 3. Models soldados no braço/mão (R6 e R15)
     if char then
         for _, partName in ipairs({"RightHand", "Right Arm", "Torso", "UpperTorso"}) do
             local bodyPart = char:FindFirstChild(partName)
@@ -313,7 +310,6 @@ local function detectCurrentWeaponDetailed()
         end
     end
 
-    -- 4. Atributos
     if player:GetAttribute("Weapon") then return tostring(player:GetAttribute("Weapon")) end
     if player:GetAttribute("EquippedWeapon") then return tostring(player:GetAttribute("EquippedWeapon")) end
     if char and char:GetAttribute("Weapon") then return tostring(char:GetAttribute("Weapon")) end
@@ -612,7 +608,7 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINAS DE ESTADOS ISOLADAS POR FASE
+-- 10. MÁQUINAS DE ESTADOS ISOLADAS (PORTAL COM PARADA FÍSICA)
 -- ====================================================================
 
 -- 1. FASE BLEACH
@@ -623,12 +619,27 @@ local function flyToPortalLocation(portalPart)
     local initialPos = root.Position
     local dist = (root.Position - portalPart.Position).Magnitude
 
-    smoothFlyTo(portalPart.CFrame)
+    -- Voa em velocidade controlada até o portal
+    if dist > 18 then
+        smoothFlyTo(portalPart.CFrame)
+    else
+        -- CHEGOU NO PORTAL: Para o voo e entra dentro da caixa
+        stopMovement()
+        root.CFrame = portalPart.CFrame
+        
+        -- Garante ativação de proximidade e touch
+        if firetouchinterest then
+            pcall(function()
+                firetouchinterest(root, portalPart, 0)
+                task.wait(0.05)
+                firetouchinterest(root, portalPart, 1)
+            end)
+        end
 
-    if dist <= 16 then
-        task.wait(0.35)
+        task.wait(0.8) -- Espera o jogo processar o teleporte
+        
         if (root.Position - initialPos).Magnitude > 25 then
-            return true
+            return true -- Teleporte efetuado com sucesso!
         end
     end
     return false
@@ -638,6 +649,7 @@ local function runBleachPhaseFlow()
     local enemies = getAllLivingEnemies()
     local wave = getCurrentWaveNumber()
 
+    -- 1. MORTE NO BOSS: Voa direto até o Teleport2 para voltar
     if needsBossReturn then
         local p2 = getPortalPart("Teleport2")
         if p2 then
@@ -652,6 +664,7 @@ local function runBleachPhaseFlow()
         end
     end
 
+    -- 2. TRANSIÇÃO SALA 1: Só aciona quando a Wave for 8 ou mais
     if not passedPortal1 and wave >= 8 then
         local p1 = getPortalPart("Teleport1")
         if p1 then
@@ -665,6 +678,7 @@ local function runBleachPhaseFlow()
         end
     end
 
+    -- 3. TRANSIÇÃO SALA 2: Só aciona quando a Wave for 12 ou mais
     if passedPortal1 and not passedPortal2 and wave >= 12 then
         local p2 = getPortalPart("Teleport2")
         if p2 then
@@ -678,6 +692,7 @@ local function runBleachPhaseFlow()
         end
     end
 
+    -- 4. COMBATE NORMAL: Foco no monstro mais próximo
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
@@ -719,7 +734,7 @@ local function runIncursionPhaseFlow()
 end
 
 -- ====================================================================
--- LOOP PRINCIPAL
+-- LOOP PRINCIPAL (PRIORIDADE: ENGAGE PRIMEIRO, DEPOIS REPLAY)
 -- ====================================================================
 task.spawn(function()
     while isScriptRunning do
@@ -780,7 +795,7 @@ end)
 toggleNoclip(Settings.AutoFarm)
 
 -- ====================================================================
--- 11. INTERFACE FLUENT COM SCANNER VISUAL DE ARMA
+-- 11. INTERFACE FLUENT LIMPA COM DETECÇÃO DE ARMA
 -- ====================================================================
 local Window = Fluent:CreateWindow({
     Title = "Hub dos Rapazes",
