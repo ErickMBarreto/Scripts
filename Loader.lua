@@ -154,6 +154,7 @@ local PORTAL_2_BOSS_POS  = CFrame.new(5415.7, -568.5, 2534.2)
 local dungeonStartTime = tick()
 local isRespawning = false
 local isTransitioning = false
+local enteringPortal = false
 local lastRoomState = "Room1"
 
 local lastSkillUse = 0
@@ -183,6 +184,7 @@ end
 charConnection = player.CharacterAdded:Connect(function()
     isRespawning = true
     isTransitioning = false
+    enteringPortal = false
     stopMovement()
     attackRemote = nil
 
@@ -234,7 +236,7 @@ local function pressKey(keyCode)
 end
 
 -- ====================================================================
--- 6. MOTOR DE COMBATE DIRETO E IDENTIFICAÇÃO DE ARMA
+-- 6. MOTOR DE COMBATE DIRETO E SCANNER DE ARMA
 -- ====================================================================
 local function findAttackRemote()
     if attackRemote and attackRemote.Parent then return attackRemote end
@@ -300,7 +302,7 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 7. DETECÇÃO LIMPA DE INIMIGOS E LEITOR EXATO DE WAVE
+-- 7. DETECÇÃO DE INIMIGOS E LEITOR DE WAVE
 -- ====================================================================
 local function getCurrentWaveNumber()
     local pguiRef = player:FindFirstChild("PlayerGui")
@@ -474,7 +476,7 @@ end
 -- 9. TRAVA E EXECUÇÃO DE COMBATE
 -- ====================================================================
 local function isPortalTransitionActive()
-    if isRespawning or isTransitioning then return true end
+    if isRespawning or isTransitioning or enteringPortal then return true end
     if (tick() - dungeonStartTime) < Settings.StartWaitTime then return true end
 
     if Settings.SelectedPhase == "Bleach (Fase 4)" then
@@ -492,7 +494,7 @@ local function isPortalTransitionActive()
 end
 
 local function executeNativeAttack()
-    if isDungeonEnded or isRespawning or isTransitioning or not isScriptRunning or isPortalTransitionActive() then return end
+    if isDungeonEnded or isRespawning or isTransitioning or enteringPortal or not isScriptRunning or isPortalTransitionActive() then return end
     
     comboIndex = (comboIndex % 4) + 1
     local weapon = getEffectiveWeaponName()
@@ -515,7 +517,7 @@ end
 
 task.spawn(function()
     while isScriptRunning do
-        if Settings.AutoAttack and not isDungeonEnded and not isRespawning and not isTransitioning and not isPortalTransitionActive() then
+        if Settings.AutoAttack and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and not isPortalTransitionActive() then
             local char, _, hum = getCharacter()
             if char and hum and hum.Health > 0 then
                 executeNativeAttack()
@@ -527,7 +529,7 @@ end)
 
 task.spawn(function()
     while isScriptRunning do
-        if Settings.AutoSkills and not isDungeonEnded and not isRespawning and not isTransitioning and not isPortalTransitionActive() then
+        if Settings.AutoSkills and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and not isPortalTransitionActive() then
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 if (tick() - lastSkillUse) >= Settings.SkillCooldown then
@@ -565,8 +567,32 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINAS DE ESTADOS (COM CONTROLE DE TELEPORTE SUAVE ANTI-KICK)
+-- 10. MÁQUINAS DE ESTADOS (ENTRADA SUAVE NO PORTAL ANTI-TRAVAMENTO)
 -- ====================================================================
+
+-- Função dedicada para atravessar o portal sem lutar contra a física do servidor
+local function passThroughPortalSafely(targetPortalCFrame)
+    local char, root = getCharacter()
+    if not root or enteringPortal then return end
+
+    local dist = (root.Position - targetPortalCFrame.Position).Magnitude
+
+    if dist > 8 then
+        -- Se estiver longe, voa até ele
+        smoothFlyTo(targetPortalCFrame)
+    else
+        -- Quando encostar (< 8 studs): CANCELA O TWEEN E DEIXA O JOGO TELEPORTAR
+        enteringPortal = true
+        stopMovement()
+        
+        -- Dá um passo físico direto no ponto de ativação do portal
+        root.CFrame = targetPortalCFrame * CFrame.new(0, 0, -2)
+        
+        -- Espera a animação do portal e o teleporte ocorrerem livremente
+        task.wait(1.2)
+        enteringPortal = false
+    end
+end
 
 -- 1. FASE BLEACH
 local function runBleachPhaseFlow()
@@ -585,27 +611,30 @@ local function runBleachPhaseFlow()
         currentRoom = "BossRoom"
     end
 
-    -- DETECTOR DE MUDANÇA DE SALA (CANCELA O TWEEN ANTIGO NA HORA PARA NÃO DAR MOVIMENTO SUSPEITO)
+    -- Sincronização ao aterrissar em uma nova sala
     if currentRoom ~= lastRoomState then
         lastRoomState = currentRoom
         stopMovement()
+        enteringPortal = false
         isTransitioning = true
-        task.wait(0.8) -- Pausa de 0.8s para sincronizar com o servidor
+        task.wait(0.6)
         isTransitioning = false
         return
     end
 
+    if enteringPortal then return end
+
     local wave = getCurrentWaveNumber()
 
-    -- 1. WAVE 12 -> VOO ATÉ O PORTAL 2 (BOSS)
+    -- 1. WAVE 12 -> ATRAVESSA O PORTAL 2 (BOSS)
     if wave >= 12 and currentRoom ~= "BossRoom" then
-        smoothFlyTo(PORTAL_2_BOSS_POS * CFrame.new(0, 0, -5))
+        passThroughPortalSafely(PORTAL_2_BOSS_POS)
         return
     end
 
-    -- 2. WAVE 8 A 11 -> VOO ATÉ O PORTAL 1 (SE AINDA ESTIVER NA SALA 1)
+    -- 2. WAVE 8 A 11 -> ATRAVESSA O PORTAL 1 (SE AINDA ESTIVER NA SALA 1)
     if wave >= 8 and currentRoom == "Room1" then
-        smoothFlyTo(PORTAL_1_WAVE8_POS * CFrame.new(0, 0, -4))
+        passThroughPortalSafely(PORTAL_1_WAVE8_POS)
         return
     end
 
@@ -614,7 +643,7 @@ local function runBleachPhaseFlow()
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
-            while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and not isRespawning and not isTransitioning and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) and not isPortalTransitionActive() do
+            while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) and not isPortalTransitionActive() do
                 local _, currentRoot = getCharacter()
                 if not currentRoot then break end
 
