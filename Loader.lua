@@ -145,9 +145,9 @@ local isScriptRunning = true
 local currentTween = nil
 local charConnection = nil
 
--- COORDENADAS REAIS MAPEADAS
+-- COORDENADAS REAIS MAPEADAS PELO SCANNER
 local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0) -- Transição para Sala 2
-local PORTAL_2_BOSS_POS  = CFrame.new(5415.7, -568.5, 2534.2) -- Transição para o Boss (Wave 12)
+local PORTAL_2_BOSS_POS  = CFrame.new(5415.7, -568.5, 2534.2) -- Transição para o Boss
 
 local passedPortal1 = false
 local passedPortal2 = false
@@ -238,7 +238,7 @@ local function pressKey(keyCode)
 end
 
 -- ====================================================================
--- 6. MOTOR DE COMBATE DIRETO E IDENTIFICAÇÃO DE ARMA
+-- 6. MOTOR DE COMBATE DIRETO E SCANNER DE ARMA
 -- ====================================================================
 local function findAttackRemote()
     if attackRemote and attackRemote.Parent then return attackRemote end
@@ -304,44 +304,8 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 7. DETECÇÃO DE INIMIGOS E LEITURA DE WAVE (WORKSPACE + UI)
+-- 7. DETECÇÃO DE INIMIGOS
 -- ====================================================================
-local function getCurrentWaveNumber()
-    -- 1. Detecção direta pela pasta de Stages no Workspace (Inédito e 100% Preciso)
-    local stagesFolder = workspace:FindFirstChild("Game") and workspace.Game:FindFirstChild("Stages")
-    if stagesFolder then
-        local highestStage = 1
-        for _, stage in ipairs(stagesFolder:GetChildren()) do
-            local num = tonumber(stage.Name:match("%d+"))
-            if num and num > highestStage then
-                -- Verifica se a stage tem spawns ativos
-                local spawns = stage:FindFirstChild("Spawns") or stage
-                if spawns and #spawns:GetChildren() > 0 then
-                    highestStage = math.max(highestStage, num)
-                end
-            end
-        end
-        if highestStage > 1 then
-            return highestStage
-        end
-    end
-
-    -- 2. Fallback pela interface
-    local pguiRef = player:FindFirstChild("PlayerGui")
-    if pguiRef then
-        for _, desc in ipairs(pguiRef:GetDescendants()) do
-            if desc:IsA("TextLabel") and desc.Visible and desc.Text ~= "" then
-                local current = desc.Text:match("(%d+)%s*/%s*%d+") or desc.Text:match("Wave%s*(%d+)") or desc.Text:match("Stage%s*(%d+)")
-                if current then
-                    return tonumber(current)
-                end
-            end
-        end
-    end
-
-    return 1
-end
-
 local function getEntityTargetPart(obj)
     if not obj or not obj.Parent then return nil end
     return obj:FindFirstChild("HumanoidRootPart")
@@ -492,22 +456,8 @@ end
 -- ====================================================================
 -- 9. TRAVA E EXECUÇÃO DE COMBATE
 -- ====================================================================
-local function isPortalTransitionActive()
-    if isRespawning then return true end
-    if Settings.SelectedPhase == "Bleach (Fase 4)" then
-        local wave = getCurrentWaveNumber()
-        local _, root = getCharacter()
-        local inRoom1 = root and root.Position.Y > -450 and root.Position.Z < 2200
-
-        if needsBossReturn then return true end
-        if not passedPortal1 and (wave >= 8 or inRoom1 == false) then return true end
-        if not passedPortal2 and wave >= 12 then return true end
-    end
-    return false
-end
-
 local function executeNativeAttack()
-    if isDungeonEnded or isRespawning or not isScriptRunning or isPortalTransitionActive() then return end
+    if isDungeonEnded or isRespawning or not isScriptRunning then return end
     
     comboIndex = (comboIndex % 4) + 1
     local weapon = getEffectiveWeaponName()
@@ -530,7 +480,7 @@ end
 
 task.spawn(function()
     while isScriptRunning do
-        if Settings.AutoAttack and not isDungeonEnded and not isRespawning and not isPortalTransitionActive() then
+        if Settings.AutoAttack and not isDungeonEnded and not isRespawning then
             local char, _, hum = getCharacter()
             if char and hum and hum.Health > 0 then
                 executeNativeAttack()
@@ -542,7 +492,7 @@ end)
 
 task.spawn(function()
     while isScriptRunning do
-        if Settings.AutoSkills and not isDungeonEnded and not isRespawning and not isPortalTransitionActive() then
+        if Settings.AutoSkills and not isDungeonEnded and not isRespawning then
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 if (tick() - lastSkillUse) >= Settings.SkillCooldown then
@@ -580,7 +530,7 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINAS DE ESTADOS (ROTA FORÇADA E INDEPENDENTE DE UI)
+-- 10. MÁQUINAS DE ESTADOS (COMBATE PRIMEIRO -> PORTAL QUANDO LIMPO)
 -- ====================================================================
 
 -- 1. FASE BLEACH
@@ -604,14 +554,10 @@ local function navigateToExactCFrame(targetCFrame)
 end
 
 local function runBleachPhaseFlow()
-    local wave = getCurrentWaveNumber()
     local _, root = getCharacter()
     if not root then return end
 
-    -- Detecção de posição física para saber em qual sala o jogador realmente está
-    local isStillInRoom1 = root.Position.Y > -450 and root.Position.Z < 2200
-
-    -- 1. RETORNO AO BOSS
+    -- 1. RETORNO AO BOSS PÓS-MORTE
     if needsBossReturn then
         if navigateToExactCFrame(PORTAL_2_BOSS_POS) then
             passedPortal2 = true
@@ -621,36 +567,13 @@ local function runBleachPhaseFlow()
         end
     end
 
-    -- 2. TRANSIÇÃO SALA 1 -> SALA 2 (WAVE >= 8 OU AINDA PRESO NA SALA 1)
-    if not passedPortal1 and (wave >= 8 or isStillInRoom1) then
-        -- Se não tiver mais monstros vivos na sala 1, força a ida ao portal
-        local enemies = getAllLivingEnemies()
-        if wave >= 8 or #enemies == 0 then
-            stopMovement()
-            if navigateToExactCFrame(PORTAL_1_WAVE8_POS) then
-                passedPortal1 = true
-                teleportCooldown = tick() + 2.0
-            end
-            return
-        end
-    end
-
-    -- 3. TRANSIÇÃO SALA 2 -> BOSS (WAVE >= 12)
-    if not passedPortal2 and wave >= 12 then
-        stopMovement()
-        if navigateToExactCFrame(PORTAL_2_BOSS_POS) then
-            passedPortal2 = true
-            teleportCooldown = tick() + 2.0
-        end
-        return
-    end
-
-    -- 4. COMBATE NORMAL
     local enemies = getAllLivingEnemies()
+
+    -- 2. SE HOUVER MONSTROS NA SALA, MATA TODOS PRIMEIRO!
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
-            while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and not isRespawning and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) and not isPortalTransitionActive() do
+            while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and not isRespawning and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) do
                 local _, currentRoot = getCharacter()
                 if not currentRoot then break end
 
@@ -661,7 +584,22 @@ local function runBleachPhaseFlow()
             end
         end
     else
+        -- 3. NÃO HÁ MAIS MONSTROS NA SALA -> HORA DE IR AO PORTAL
         stopMovement()
+
+        if not passedPortal1 then
+            -- Se a Sala 1 foi limpa, voa para o Portal 1
+            if navigateToExactCFrame(PORTAL_1_WAVE8_POS) then
+                passedPortal1 = true
+                teleportCooldown = tick() + 2.0
+            end
+        elseif not passedPortal2 then
+            -- Se a Sala 2 foi limpa, voa para o Portal 2 (Boss)
+            if navigateToExactCFrame(PORTAL_2_BOSS_POS) then
+                passedPortal2 = true
+                teleportCooldown = tick() + 2.0
+            end
+        end
     end
 end
 
