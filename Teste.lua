@@ -26,7 +26,7 @@ end
 -- ====================================================================
 -- 2. REEXECUÇÃO AUTOMÁTICA INFINITA (Delta / Mobile)
 -- ====================================================================
-local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Teste.lua"
+local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Loader.lua"
 
 local function queueNextExecution()
     local queueFunc = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or queueonteleport
@@ -97,14 +97,10 @@ local Settings = {
     TweenSpeed = 50,
     AttackSpeed = 0.15,
     AutoSell = false,
-    SellCommon = true,
     SellRare = true,
     SellEpic = false,
     SellLegendary = false,
-    SellMythic = false,
-    SellWeapons = true,
-    SellArmors = true,
-    SellSpells = true
+    SellMythic = false
 }
 
 local function saveConfig()
@@ -119,14 +115,10 @@ local function saveConfig()
                 SkillCooldown = Settings.SkillCooldown,
                 StartWaitTime = Settings.StartWaitTime,
                 AutoSell = Settings.AutoSell,
-                SellCommon = Settings.SellCommon,
                 SellRare = Settings.SellRare,
                 SellEpic = Settings.SellEpic,
                 SellLegendary = Settings.SellLegendary,
-                SellMythic = Settings.SellMythic,
-                SellWeapons = Settings.SellWeapons,
-                SellArmors = Settings.SellArmors,
-                SellSpells = Settings.SellSpells
+                SellMythic = Settings.SellMythic
             })
             writefile(CONFIG_FILE, data)
         end
@@ -147,14 +139,10 @@ local function loadConfig()
                 if data.SkillCooldown ~= nil then Settings.SkillCooldown = data.SkillCooldown end
                 if data.StartWaitTime ~= nil then Settings.StartWaitTime = data.StartWaitTime end
                 if data.AutoSell ~= nil then Settings.AutoSell = data.AutoSell end
-                if data.SellCommon ~= nil then Settings.SellCommon = data.SellCommon end
                 if data.SellRare ~= nil then Settings.SellRare = data.SellRare end
                 if data.SellEpic ~= nil then Settings.SellEpic = data.SellEpic end
                 if data.SellLegendary ~= nil then Settings.SellLegendary = data.SellLegendary end
                 if data.SellMythic ~= nil then Settings.SellMythic = data.SellMythic end
-                if data.SellWeapons ~= nil then Settings.SellWeapons = data.SellWeapons end
-                if data.SellArmors ~= nil then Settings.SellArmors = data.SellArmors end
-                if data.SellSpells ~= nil then Settings.SellSpells = data.SellSpells end
             end
         end
     end)
@@ -173,6 +161,8 @@ local VirtualInputManager = game:GetService("VirtualInputManager")
 local isScriptRunning = true
 local currentTween = nil
 local charConnection = nil
+
+local equipRemote = ReplicatedStorage:WaitForChild("Remotes", 10) and ReplicatedStorage.Remotes:WaitForChild("Equip", 10)
 
 -- COORDENADAS REAIS DOS PORTAIS (FASE 4 - BLEACH TRANCADA)
 local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0)
@@ -535,7 +525,7 @@ local function getClosestLivingEnemy()
 end
 
 -- ====================================================================
--- 8. MOTOR DE AUTO-SELL COM CONFIRMAÇÃO DE POP-UP (NATIVO)
+-- 8. MOTOR DE AUTO-SELL DIRETO E INSTANTÂNEO (FIRESERVER PURO)
 -- ====================================================================
 local function getItemRarity(slot)
     local grad = slot:FindFirstChild("RarityGradient", true)
@@ -546,9 +536,7 @@ local function getItemRarity(slot)
     local g = math.round(color.G * 255)
     local b = math.round(color.B * 255)
 
-    if r >= 230 and g >= 230 and b >= 230 then
-        return "Common"
-    elseif r <= 50 and g >= 60 and b >= 190 then
+    if r <= 50 and g >= 60 and b >= 190 then
         return "Rare"
     elseif r >= 90 and r <= 160 and g <= 50 and b >= 190 then
         return "Epic"
@@ -561,13 +549,13 @@ local function getItemRarity(slot)
     return "Unknown"
 end
 
-local function shouldSellItem(slot)
+local function isEligibleForDirectSell(slot)
     if not slot or not slot:GetAttribute("Item") then return false end
     if slot.Name == "SteelSword" and slot:FindFirstChild("Title") and slot.Title.Text == "Steel Sword" then
         return false
     end
 
-    -- Trava: Itens em uso
+    -- Trava: Equipados
     local eq = slot:FindFirstChild("EquippedSelection")
     if eq and eq:IsA("ImageLabel") and eq.Visible and eq.ImageColor3 == Color3.fromRGB(0, 255, 0) then
         return false
@@ -580,7 +568,6 @@ local function shouldSellItem(slot)
     end
 
     local rarity = getItemRarity(slot)
-    if rarity == "Common" and Settings.SellCommon then return true end
     if rarity == "Rare" and Settings.SellRare then return true end
     if rarity == "Epic" and Settings.SellEpic then return true end
     if rarity == "Legendary" and Settings.SellLegendary then return true end
@@ -589,95 +576,41 @@ local function shouldSellItem(slot)
     return false
 end
 
-local function executeAutoSellCycle()
-    if not Settings.AutoSell or isSellingInProgress or not isScriptRunning then return end
+local function executeDirectAutoSell()
+    if not Settings.AutoSell or isSellingInProgress or not isScriptRunning or not equipRemote then return end
     
-    local pguiRef = player:FindFirstChild("PlayerGui")
-    local main = pguiRef and pguiRef:FindFirstChild("Main")
-    local mainFrame = main and main:FindFirstChild("MainFrame")
-    local itemsFrame = mainFrame and mainFrame:FindFirstChild("Items")
-    if not itemsFrame then return end
+    local scroll = pgui:FindFirstChild("Main")
+        and pgui.Main:FindFirstChild("MainFrame")
+        and pgui.Main.MainFrame:FindFirstChild("Items")
+        and pgui.Main.MainFrame.Items:FindFirstChild("Scroll")
+
+    if not scroll then return end
 
     isSellingInProgress = true
 
-    local wasMainVisible = mainFrame.Visible
-    local wasItemsVisible = itemsFrame.Visible
-
-    mainFrame.Visible = true
-    itemsFrame.Visible = true
-
-    local sellBtn = itemsFrame:FindFirstChild("Sell")
-    local sellConfirmBtn = itemsFrame:FindFirstChild("SellConfirm")
-    local buttonsFrame = itemsFrame:FindFirstChild("Buttons")
-
-    local categories = {}
-    if Settings.SellWeapons and buttonsFrame and buttonsFrame:FindFirstChild("Weapon") then
-        table.insert(categories, buttonsFrame.Weapon)
-    end
-    if Settings.SellArmors and buttonsFrame and buttonsFrame:FindFirstChild("Armor") then
-        table.insert(categories, buttonsFrame.Armor)
-    end
-    if Settings.SellSpells and buttonsFrame and buttonsFrame:FindFirstChild("Spell") then
-        table.insert(categories, buttonsFrame.Spell)
-    end
-
-    local totalSelected = 0
-
-    if sellBtn then
-        triggerGuiButton(sellBtn)
-        task.wait(0.35)
-
-        for _, catBtn in ipairs(categories) do
-            triggerGuiButton(catBtn)
-            task.wait(0.25)
-
-            local scroll = itemsFrame:FindFirstChild("Scroll")
-            if scroll then
-                for _, slot in ipairs(scroll:GetChildren()) do
-                    if slot:IsA("GuiObject") and slot:GetAttribute("Item") and slot.Visible and shouldSellItem(slot) then
-                        local sellSelect = slot:FindFirstChild("SellSelection")
-                        local clickTarget = (sellSelect and sellSelect:IsA("GuiButton") and sellSelect)
-                            or slot:FindFirstChildWhichIsA("GuiButton", true)
-                            or (slot:IsA("GuiButton") and slot)
-
-                        if clickTarget then
-                            triggerGuiButton(clickTarget)
-                            totalSelected = totalSelected + 1
-                            task.wait(0.04)
-                        end
-                    end
-                end
-            end
-        end
-
-        task.wait(0.2)
-        if totalSelected > 0 and sellConfirmBtn then
-            -- 1. Clica no primeiro SellConfirm (abre o pop-up)
-            triggerGuiButton(sellConfirmBtn)
-            task.wait(0.4)
-
-            -- 2. Clica no botão Confirm definitivo do pop-up de aviso
-            local popup = main and main:FindFirstChild("Popups") and main.Popups:FindFirstChild("Confirmation")
-            local finalConfirm = popup and popup:FindFirstChild("Buttons") and popup.Buttons:FindFirstChild("Confirm")
+    local itemsToSell = {}
+    for _, slot in ipairs(scroll:GetChildren()) do
+        if slot:IsA("GuiObject") and isEligibleForDirectSell(slot) then
+            local itemValObj = slot:FindFirstChild("Item")
+            local rawInstance = itemValObj and (itemValObj:IsA("ValueBase") and itemValObj.Value or itemValObj)
             
-            if finalConfirm and finalConfirm:IsA("GuiObject") then
-                triggerGuiButton(finalConfirm)
-                task.wait(0.3)
+            -- Passa o ponteiro Instance exato
+            if rawInstance and typeof(rawInstance) == "Instance" then
+                table.insert(itemsToSell, rawInstance)
             end
-
-            Fluent:Notify({
-                Title = "Auto-Sell Concluído",
-                Content = string.format("Vendidos %d itens com sucesso!", totalSelected),
-                Duration = 3.5
-            })
-        else
-            -- Se não havia itens para vender, sai do modo de venda
-            triggerGuiButton(sellBtn)
         end
     end
 
-    mainFrame.Visible = wasMainVisible
-    itemsFrame.Visible = wasItemsVisible
+    if #itemsToSell > 0 then
+        pcall(function()
+            equipRemote:FireServer("Sell", itemsToSell)
+        end)
+        Fluent:Notify({
+            Title = "Auto-Sell Concluído",
+            Content = string.format("Vendidos %d itens filtrados instantaneamente!", #itemsToSell),
+            Duration = 3.5
+        })
+    end
 
     isSellingInProgress = false
 end
@@ -1015,10 +948,10 @@ task.spawn(function()
                         isVirusActive = false
                         stopMovement()
                         
-                        -- Venda automática ao finalizar a partida
+                        -- Venda direta em background ao terminar a dungeon
                         if Settings.AutoSell then
-                            pcall(executeAutoSellCycle)
-                            task.wait(0.4)
+                            pcall(executeDirectAutoSell)
+                            task.wait(0.3)
                         end
 
                         if Settings.AutoEngage and checkAndClickEngageButton() then
@@ -1333,11 +1266,11 @@ CombatSection:AddSlider("TweenSpeed", {
 })
 
 -- ABA AUTO-SELL
-local AutoSellMainSection = Tabs.AutoSell:AddSection("Controle Geral de Venda")
+local AutoSellMainSection = Tabs.AutoSell:AddSection("Controle de Venda Direta")
 
 AutoSellMainSection:AddToggle("AutoSellToggle", {
-    Title = "Venda Automática Pós-Vitória",
-    Description = "Vende os drops filtrados automaticamente ao finalizar a partida",
+    Title = "Venda Automática Pós-Vitória (Silenciosa)",
+    Description = "Vende os drops via Remote nativo ao finalizar a partida",
     Default = Settings.AutoSell,
     Callback = function(Value)
         Settings.AutoSell = Value
@@ -1346,23 +1279,14 @@ AutoSellMainSection:AddToggle("AutoSellToggle", {
 })
 
 AutoSellMainSection:AddButton({
-    Title = "⚡ Executar Venda Agora",
-    Description = "Executa um ciclo manual de venda dos itens filtrados",
+    Title = "⚡ Executar Venda Direta Agora",
+    Description = "Dispara a venda instantânea dos itens filtrados",
     Callback = function()
-        pcall(executeAutoSellCycle)
+        pcall(executeDirectAutoSell)
     end
 })
 
 local AutoSellRaritySection = Tabs.AutoSell:AddSection("Filtro de Raridades (Vender)")
-
-AutoSellRaritySection:AddToggle("SellCommonToggle", {
-    Title = "Vender Comum (Common)",
-    Default = Settings.SellCommon,
-    Callback = function(Value)
-        Settings.SellCommon = Value
-        saveConfig()
-    end
-})
 
 AutoSellRaritySection:AddToggle("SellRareToggle", {
     Title = "Vender Raro (Rare)",
@@ -1396,35 +1320,6 @@ AutoSellRaritySection:AddToggle("SellMythicToggle", {
     Default = Settings.SellMythic,
     Callback = function(Value)
         Settings.SellMythic = Value
-        saveConfig()
-    end
-})
-
-local AutoSellTypeSection = Tabs.AutoSell:AddSection("Tipos de Item Permitidos")
-
-AutoSellTypeSection:AddToggle("SellWeaponsToggle", {
-    Title = "Incluir Armas (Weapons)",
-    Default = Settings.SellWeapons,
-    Callback = function(Value)
-        Settings.SellWeapons = Value
-        saveConfig()
-    end
-})
-
-AutoSellTypeSection:AddToggle("SellArmorsToggle", {
-    Title = "Incluir Armaduras (Armors)",
-    Default = Settings.SellArmors,
-    Callback = function(Value)
-        Settings.SellArmors = Value
-        saveConfig()
-    end
-})
-
-AutoSellTypeSection:AddToggle("SellSpellsToggle", {
-    Title = "Incluir Spells (Magias)",
-    Default = Settings.SellSpells,
-    Callback = function(Value)
-        Settings.SellSpells = Value
         saveConfig()
     end
 })
