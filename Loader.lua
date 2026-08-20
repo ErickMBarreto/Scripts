@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (VERSÃO FINAL DEFINITIVA)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (ENGAGE ATIVO + HARDCORE 23s)
 -- ====================================================================
 
 -- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA (Singleton Anti-Duplicação)
@@ -86,13 +86,13 @@ local Settings = {
     AutoStart = true,
     AutoPlayAgain = true,
     AutoEngage = true,
+    HardcoreMode = false,
     StartWaitTime = 3.5,
     SkillCooldown = 0.8,
     SkillMaxDistance = 20,
     HeightAboveEnemy = 8.5,
     TweenSpeed = 50,
     AttackSpeed = 0.15,
-    -- Configurações Desligadas por Padrão
     AutoClaimQuests = false,
     AutoSell = false,
     SellRare = true,
@@ -115,6 +115,7 @@ local function saveConfig()
                 AttackSpeed = Settings.AttackSpeed,
                 SkillCooldown = Settings.SkillCooldown,
                 StartWaitTime = Settings.StartWaitTime,
+                HardcoreMode = Settings.HardcoreMode,
                 AutoClaimQuests = Settings.AutoClaimQuests,
                 AutoSell = Settings.AutoSell,
                 SellRare = Settings.SellRare,
@@ -143,6 +144,7 @@ local function loadConfig()
                 if data.AttackSpeed ~= nil then Settings.AttackSpeed = data.AttackSpeed end
                 if data.SkillCooldown ~= nil then Settings.SkillCooldown = data.SkillCooldown end
                 if data.StartWaitTime ~= nil then Settings.StartWaitTime = data.StartWaitTime end
+                if data.HardcoreMode ~= nil then Settings.HardcoreMode = data.HardcoreMode end
                 if data.AutoClaimQuests ~= nil then Settings.AutoClaimQuests = data.AutoClaimQuests end
                 if data.AutoSell ~= nil then Settings.AutoSell = data.AutoSell end
                 if data.SellRare ~= nil then Settings.SellRare = data.SellRare end
@@ -168,6 +170,7 @@ local VirtualInputManager = game:GetService("VirtualInputManager")
 local isScriptRunning = true
 local currentTween = nil
 local charConnection = nil
+local diedConnection = nil
 
 local equipRemote = ReplicatedStorage:WaitForChild("Remotes", 10) and ReplicatedStorage.Remotes:WaitForChild("Equip", 10)
 local questRemote = ReplicatedStorage:WaitForChild("Remotes", 10) and ReplicatedStorage.Remotes:WaitForChild("Quest", 10)
@@ -210,12 +213,87 @@ local function stopMovement()
     end
 end
 
-charConnection = player.CharacterAdded:Connect(function()
+local function triggerGuiButton(btn)
+    if not btn or not isScriptRunning then return end
+    pcall(function()
+        for _, evName in ipairs({"Activated", "MouseButton1Click", "MouseButton1Down", "MouseButton1Up"}) do
+            if btn[evName] and firesignal then
+                pcall(function() firesignal(btn[evName]) end)
+            end
+            if btn[evName] and getconnections then
+                for _, c in ipairs(getconnections(btn[evName])) do
+                    pcall(function() c:Fire() end)
+                end
+            end
+        end
+    end)
+end
+
+local function findAnyPlayAgainButton()
+    local pguiRef = player:FindFirstChild("PlayerGui")
+    if not pguiRef then return nil end
+
+    local main = pguiRef:FindFirstChild("Main")
+    local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
+    local dungeonStats = dungeonFrame and dungeonFrame:FindFirstChild("DungeonStats")
+    local endActions = dungeonStats and dungeonStats:FindFirstChild("EndActions")
+    local playAgainBtn = endActions and endActions:FindFirstChild("PlayAgain")
+
+    if playAgainBtn and playAgainBtn:IsA("GuiObject") and playAgainBtn.Visible then
+        return playAgainBtn
+    end
+
+    for _, desc in ipairs(pguiRef:GetDescendants()) do
+        if (desc:IsA("TextButton") or desc:IsA("ImageButton")) and desc.Visible then
+            local txt = desc:IsA("TextButton") and desc.Text:lower() or desc.Name:lower()
+            if txt:find("playagain") or txt:find("play again") or txt:find("retry") or txt:find("jogar novamente") then
+                return desc
+            end
+        end
+    end
+
+    return nil
+end
+
+-- Detecção do Modo Hardcore (23s de espera após a morte)
+local function onPlayerDied()
+    if not Settings.HardcoreMode then return end
+
+    task.spawn(function()
+        task.wait(23)
+        if not isScriptRunning or not Settings.HardcoreMode or not Settings.AutoPlayAgain then return end
+
+        local retryBtn = findAnyPlayAgainButton()
+        if retryBtn then
+            queueNextExecution()
+            task.wait(0.5)
+            triggerGuiButton(retryBtn)
+            task.wait(3.0)
+        end
+    end)
+end
+
+local function bindCharacter(char)
+    if not char then return end
+    local hum = char:WaitForChild("Humanoid", 10)
+    if hum then
+        if diedConnection then diedConnection:Disconnect() end
+        diedConnection = hum.Died:Connect(onPlayerDied)
+    end
+end
+
+if player.Character then
+    bindCharacter(player.Character)
+end
+
+charConnection = player.CharacterAdded:Connect(function(newChar)
     isRespawning = true
     isTransitioning = false
     enteringPortal = false
     stopMovement()
     attackRemote = nil
+
+    bindCharacter(newChar)
 
     task.delay(1.2, function()
         isRespawning = false
@@ -237,23 +315,6 @@ local function smoothFlyTo(targetCFrame)
     local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
     currentTween = TweenService:Create(root, tweenInfo, {CFrame = targetCFrame})
     currentTween:Play()
-end
-
--- Acionador limpo sem mover ponteiro do mouse
-local function triggerGuiButton(btn)
-    if not btn or not isScriptRunning then return end
-    pcall(function()
-        for _, evName in ipairs({"Activated", "MouseButton1Click", "MouseButton1Down", "MouseButton1Up"}) do
-            if btn[evName] and firesignal then
-                pcall(function() firesignal(btn[evName]) end)
-            end
-            if btn[evName] and getconnections then
-                for _, c in ipairs(getconnections(btn[evName])) do
-                    pcall(function() c:Fire() end)
-                end
-            end
-        end
-    end)
 end
 
 local function pressKey(keyCode)
@@ -329,7 +390,7 @@ local function getDynamicHotbar()
     return nil
 end
 
--- 7. DETECÇÃO DE INIMIGOS (BLEACH / INCURSÃO / VIRUS)
+-- 7. DETECÇÃO DE INIMIGOS (COM SUPORTE TOTAL A BOSS DE ENGAGE)
 local function getCurrentWaveNumber()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if pguiRef then
@@ -411,7 +472,7 @@ local function getAllLivingEnemiesBleach()
         for _, obj in ipairs(workspace:GetChildren()) do
             if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
                 local name = obj.Name:lower()
-                if name:find("virus") or name:find("secret") or name:find("boss") then
+                if name:find("virus") or name:find("secret") or name:find("boss") or obj:FindFirstChildOfClass("Humanoid") then
                     if isEntityAlive(obj) then table.insert(list, obj) end
                 end
             end
@@ -680,11 +741,9 @@ local function executeAutoClaimQuests()
                         local txt = progressLabel.Text:lower()
 
                         if txt == "claim" or txt == "resgatar" then
-                            -- Seleção na memória interna
                             triggerGuiButton(slot)
                             task.wait(0.1)
 
-                            -- Clique no botão de Claim
                             triggerGuiButton(claimBtn)
                             
                             if questRemote then
@@ -798,7 +857,10 @@ local function isPortalTransitionActive()
     if isRespawning or isTransitioning or enteringPortal or isSellingInProgress or isQuestClaimInProgress then return true end
     if (tick() - dungeonStartTime) < Settings.StartWaitTime then return true end
 
-    if Settings.SelectedPhase == "Bleach (Fase 4)" and not isVirusActive then
+    -- No Engage, libera o combate sem travar em portais
+    if isVirusActive then return false end
+
+    if Settings.SelectedPhase == "Bleach (Fase 4)" then
         local _, root = getCharacter()
         if not root then return true end
 
@@ -915,6 +977,22 @@ local function runBleachPhaseFlow()
     local char, root = getCharacter()
     if not root then return end
 
+    -- MODO ENGAGE / VIRUS BOSS: Mantém o voo até o boss e ataque ativos
+    if isVirusActive then
+        local enemies = getAllLivingEnemiesBleach()
+        if #enemies > 0 then
+            local enemy, enemyPart = getClosestLivingEnemy()
+            if enemy and enemyPart then
+                local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
+                local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
+                smoothFlyTo(targetCFrame)
+            end
+        else
+            stopMovement()
+        end
+        return
+    end
+
     if (tick() - dungeonStartTime) < Settings.StartWaitTime then
         stopMovement()
         return
@@ -938,21 +1016,6 @@ local function runBleachPhaseFlow()
     end
 
     if enteringPortal then return end
-
-    if isVirusActive then
-        local enemies = getAllLivingEnemiesBleach()
-        if #enemies > 0 then
-            local enemy, enemyPart = getClosestLivingEnemy()
-            if enemy and enemyPart then
-                local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
-                local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
-                smoothFlyTo(targetCFrame)
-            end
-        else
-            stopMovement()
-        end
-        return
-    end
 
     local wave = getCurrentWaveNumber()
 
@@ -1013,7 +1076,7 @@ local function runIncursionPhaseFlow()
     end
 end
 
--- LOOP PRINCIPAL (AUTO-SELL AOS 10s E AUTO-CLAIM AOS 13s NO INÍCIO)
+-- LOOP PRINCIPAL
 task.spawn(function()
     while isScriptRunning do
         if Settings.AutoFarm and not isRespawning then
@@ -1023,7 +1086,6 @@ task.spawn(function()
                 if not initialRoutinesScheduled then
                     initialRoutinesScheduled = true
                     
-                    -- 1. Auto-Sell aos 10 segundos
                     task.spawn(function()
                         task.wait(10)
                         if isScriptRunning and Settings.AutoSell and not isDungeonEnded then
@@ -1031,7 +1093,6 @@ task.spawn(function()
                         end
                     end)
 
-                    -- 2. Auto-Claim Quests aos 13 segundos
                     task.spawn(function()
                         task.wait(13)
                         if isScriptRunning and Settings.AutoClaimQuests and not isDungeonEnded then
@@ -1045,7 +1106,7 @@ task.spawn(function()
                 end
 
                 local engaged = false
-                if Settings.AutoEngage then
+                if Settings.AutoEngage and not isVirusActive then
                     engaged = checkAndClickEngageButton()
                 end
 
@@ -1053,7 +1114,7 @@ task.spawn(function()
                     isDungeonEnded = false
                     isVirusActive = true
                     dungeonStartTime = tick()
-                    task.wait(1.5)
+                    task.wait(1.0)
                 else
                     local ended, playAgainBtn = checkDungeonEnd()
                     if ended then
@@ -1070,7 +1131,7 @@ task.spawn(function()
                             isDungeonEnded = false
                             isVirusActive = true
                             dungeonStartTime = tick()
-                            task.wait(1.5)
+                            task.wait(1.0)
                         elseif Settings.AutoPlayAgain and playAgainBtn then
                             queueNextExecution()
                             task.wait(0.8)
@@ -1175,6 +1236,11 @@ local function destroyScript()
         charConnection = nil
     end
 
+    if diedConnection then
+        diedConnection:Disconnect()
+        diedConnection = nil
+    end
+
     if singletonTag and singletonTag.Parent then
         singletonTag:Destroy()
     end
@@ -1269,6 +1335,16 @@ CombatSection:AddToggle("AutoFarmToggle", {
     Callback = function(Value)
         Settings.AutoFarm = Value
         if not Value then stopMovement() end
+    end
+})
+
+CombatSection:AddToggle("HardcoreToggle", {
+    Title = "Modo Hardcore",
+    Description = "Se morrer, aguarda 23s e clica em Play Again para reiniciar",
+    Default = Settings.HardcoreMode,
+    Callback = function(Value)
+        Settings.HardcoreMode = Value
+        saveConfig()
     end
 })
 
