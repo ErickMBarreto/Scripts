@@ -96,8 +96,7 @@ local Settings = {
     HeightAboveEnemy = 8.5,
     TweenSpeed = 50,
     AttackSpeed = 0.15,
-    -- Configurações de Auto-Sell pós-vitória
-    AutoSell = true,
+    AutoSell = false,
     SellCommon = true,
     SellRare = true,
     SellEpic = false,
@@ -536,7 +535,7 @@ local function getClosestLivingEnemy()
 end
 
 -- ====================================================================
--- 8. MOTOR DE AUTO-SELL (SILENCIOSO E VALIDADO POR SUB-ABAS)
+-- 8. MOTOR DE AUTO-SELL COM CONFIRMAÇÃO DE POP-UP (NATIVO)
 -- ====================================================================
 local function getItemRarity(slot)
     local grad = slot:FindFirstChild("RarityGradient", true)
@@ -568,13 +567,13 @@ local function shouldSellItem(slot)
         return false
     end
 
-    -- Trava 1: Equipados (Checa Visible e cor verde)
+    -- Trava: Itens em uso
     local eq = slot:FindFirstChild("EquippedSelection")
     if eq and eq:IsA("ImageLabel") and eq.Visible and eq.ImageColor3 == Color3.fromRGB(0, 255, 0) then
         return false
     end
 
-    -- Trava 2: Favoritos
+    -- Trava: Favoritos
     local fav = slot:FindFirstChild("Favorite", true)
     if fav and fav:IsA("ImageLabel") and fav.Visible and fav.ImageColor3 ~= Color3.fromRGB(255, 255, 255) then
         return false
@@ -601,12 +600,9 @@ local function executeAutoSellCycle()
 
     isSellingInProgress = true
 
-    -- Invisibilidade segura: move para fora do campo de visão durante o ciclo de cliques
-    local originalPos = itemsFrame.Position
     local wasMainVisible = mainFrame.Visible
     local wasItemsVisible = itemsFrame.Visible
 
-    itemsFrame.Position = UDim2.new(50, 0, 50, 0)
     mainFrame.Visible = true
     itemsFrame.Visible = true
 
@@ -627,43 +623,59 @@ local function executeAutoSellCycle()
 
     local totalSelected = 0
 
-    if sellBtn and sellConfirmBtn then
+    if sellBtn then
         triggerGuiButton(sellBtn)
-        task.wait(0.2)
+        task.wait(0.35)
 
         for _, catBtn in ipairs(categories) do
             triggerGuiButton(catBtn)
-            task.wait(0.2)
+            task.wait(0.25)
 
             local scroll = itemsFrame:FindFirstChild("Scroll")
             if scroll then
                 for _, slot in ipairs(scroll:GetChildren()) do
                     if slot:IsA("GuiObject") and slot:GetAttribute("Item") and slot.Visible and shouldSellItem(slot) then
                         local sellSelect = slot:FindFirstChild("SellSelection")
-                        local btn = (sellSelect and sellSelect:IsA("GuiButton") and sellSelect)
+                        local clickTarget = (sellSelect and sellSelect:IsA("GuiButton") and sellSelect)
                             or slot:FindFirstChildWhichIsA("GuiButton", true)
                             or (slot:IsA("GuiButton") and slot)
-                        
-                        if btn then
-                            triggerGuiButton(btn)
+
+                        if clickTarget then
+                            triggerGuiButton(clickTarget)
                             totalSelected = totalSelected + 1
-                            task.wait(0.02)
+                            task.wait(0.04)
                         end
                     end
                 end
             end
         end
 
-        if totalSelected > 0 then
+        task.wait(0.2)
+        if totalSelected > 0 and sellConfirmBtn then
+            -- 1. Clica no primeiro SellConfirm (abre o pop-up)
             triggerGuiButton(sellConfirmBtn)
-            task.wait(0.3)
+            task.wait(0.4)
+
+            -- 2. Clica no botão Confirm definitivo do pop-up de aviso
+            local popup = main and main:FindFirstChild("Popups") and main.Popups:FindFirstChild("Confirmation")
+            local finalConfirm = popup and popup:FindFirstChild("Buttons") and popup.Buttons:FindFirstChild("Confirm")
+            
+            if finalConfirm and finalConfirm:IsA("GuiObject") then
+                triggerGuiButton(finalConfirm)
+                task.wait(0.3)
+            end
+
+            Fluent:Notify({
+                Title = "Auto-Sell Concluído",
+                Content = string.format("Vendidos %d itens com sucesso!", totalSelected),
+                Duration = 3.5
+            })
         else
+            -- Se não havia itens para vender, sai do modo de venda
             triggerGuiButton(sellBtn)
         end
     end
 
-    -- Restaura posição e estados
-    itemsFrame.Position = originalPos
     mainFrame.Visible = wasMainVisible
     itemsFrame.Visible = wasItemsVisible
 
@@ -1003,7 +1015,7 @@ task.spawn(function()
                         isVirusActive = false
                         stopMovement()
                         
-                        -- Executa a venda silenciosa pós-vitória (drops recebidos)
+                        -- Venda automática ao finalizar a partida
                         if Settings.AutoSell then
                             pcall(executeAutoSellCycle)
                             task.wait(0.4)
@@ -1334,8 +1346,8 @@ AutoSellMainSection:AddToggle("AutoSellToggle", {
 })
 
 AutoSellMainSection:AddButton({
-    Title = "⚡ Executar Venda Silenciosa Agora",
-    Description = "Executa um ciclo manual de venda em segundo plano",
+    Title = "⚡ Executar Venda Agora",
+    Description = "Executa um ciclo manual de venda dos itens filtrados",
     Callback = function()
         pcall(executeAutoSellCycle)
     end
