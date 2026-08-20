@@ -947,7 +947,6 @@ task.spawn(function()
                         isVirusActive = false
                         stopMovement()
                         
-                        -- Executa a venda direta via remote ao finalizar a fase
                         if Settings.AutoSell then
                             pcall(executeDirectAutoSell)
                             task.wait(0.3)
@@ -985,7 +984,7 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 12. INTERFACE FLUENT COM TODAS AS ABAS RESTAURADAS
+-- 12. INTERFACE FLUENT (ABAS SEM ÍCONES)
 -- ====================================================================
 local Window = Fluent:CreateWindow({
     Title = "Hub dos Rapazes",
@@ -998,9 +997,9 @@ local Window = Fluent:CreateWindow({
 })
 
 local Tabs = {
-    Farm = Window:AddTab({ Title = "Farm", Icon = "crosshair" }),
-    AutoSell = Window:AddTab({ Title = "Auto Sell", Icon = "coins" }),
-    Settings = Window:AddTab({ Title = "Settings", Icon = "shield" })
+    Farm = Window:AddTab({ Title = "Farm" }),
+    AutoSell = Window:AddTab({ Title = "Auto Sell" }),
+    Settings = Window:AddTab({ Title = "Settings" })
 }
 
 local toggleGui = Instance.new("ScreenGui")
