@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (VERSÃO FINAL CONSOLIDADA)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (VERSÃO COM MODO HARDCORE)
 -- ====================================================================
 
 -- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA (Singleton Anti-Duplicação)
@@ -229,8 +229,7 @@ local function triggerGuiButton(btn)
     end)
 end
 
--- Busca definitiva do Play Again
-local function findPlayAgainButton()
+local function findAnyPlayAgainButton()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef then return nil end
 
@@ -256,16 +255,15 @@ local function findPlayAgainButton()
     return nil
 end
 
--- Detecção do Modo Hardcore (23s após a morte)
 local function onPlayerDied()
     if not Settings.HardcoreMode then return end
 
+    stopMovement()
     task.spawn(function()
-        task.wait(23)
+        task.wait(15)
         if not isScriptRunning or not Settings.HardcoreMode or not Settings.AutoPlayAgain then return end
 
-        stopMovement()
-        local retryBtn = findPlayAgainButton()
+        local retryBtn = findAnyPlayAgainButton()
         if retryBtn then
             queueNextExecution()
             task.wait(0.5)
@@ -392,7 +390,7 @@ local function getDynamicHotbar()
     return nil
 end
 
--- 7. DETECÇÃO DE INIMIGOS (COM SUPORTE A BOSS DE ENGAGE)
+-- 7. DETECÇÃO DE INIMIGOS (BLEACH / INCURSÃO / VIRUS)
 local function getCurrentWaveNumber()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if pguiRef then
@@ -474,7 +472,7 @@ local function getAllLivingEnemiesBleach()
         for _, obj in ipairs(workspace:GetChildren()) do
             if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
                 local name = obj.Name:lower()
-                if name:find("virus") or name:find("secret") or name:find("boss") or obj:FindFirstChildOfClass("Humanoid") then
+                if name:find("virus") or name:find("secret") or name:find("boss") then
                     if isEntityAlive(obj) then table.insert(list, obj) end
                 end
             end
@@ -828,15 +826,38 @@ local function checkAndClickEngageButton()
     return false
 end
 
+local function checkDungeonEnd()
+    local pguiRef = player:FindFirstChild("PlayerGui")
+    if not pguiRef or not isScriptRunning then return false, nil end
+
+    if isVirusActive then
+        local enemies = (Settings.SelectedPhase == "Incursão") and getAllLivingEnemiesIncursion() or getAllLivingEnemiesBleach()
+        if #enemies > 0 then
+            return false, nil
+        else
+            isVirusActive = false
+        end
+    end
+
+    local main = pguiRef:FindFirstChild("Main")
+    local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
+    local dungeonStats = dungeonFrame and dungeonFrame:FindFirstChild("DungeonStats")
+    local endActions = dungeonStats and dungeonStats:FindFirstChild("EndActions")
+    local playAgainBtn = endActions and endActions:FindFirstChild("PlayAgain")
+
+    if playAgainBtn and playAgainBtn:IsA("GuiObject") and playAgainBtn.Visible and dungeonStats.Visible then
+        return true, playAgainBtn
+    end
+
+    return false, nil
+end
+
 -- 11. TRAVA E EXECUÇÃO DE COMBATE
 local function isPortalTransitionActive()
     if isRespawning or isTransitioning or enteringPortal or isSellingInProgress or isQuestClaimInProgress then return true end
     if (tick() - dungeonStartTime) < Settings.StartWaitTime then return true end
 
-    -- No Engage, não trava por portais
-    if isVirusActive then return false end
-
-    if Settings.SelectedPhase == "Bleach (Fase 4)" then
+    if Settings.SelectedPhase == "Bleach (Fase 4)" and not isVirusActive then
         local _, root = getCharacter()
         if not root then return true end
 
@@ -953,22 +974,6 @@ local function runBleachPhaseFlow()
     local char, root = getCharacter()
     if not root then return end
 
-    -- Se o Boss do Engage estiver ativo: persegue e mata direto
-    if isVirusActive then
-        local enemies = getAllLivingEnemiesBleach()
-        if #enemies > 0 then
-            local enemy, enemyPart = getClosestLivingEnemy()
-            if enemy and enemyPart then
-                local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
-                local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
-                smoothFlyTo(targetCFrame)
-            end
-        else
-            stopMovement()
-        end
-        return
-    end
-
     if (tick() - dungeonStartTime) < Settings.StartWaitTime then
         stopMovement()
         return
@@ -992,6 +997,21 @@ local function runBleachPhaseFlow()
     end
 
     if enteringPortal then return end
+
+    if isVirusActive then
+        local enemies = getAllLivingEnemiesBleach()
+        if #enemies > 0 then
+            local enemy, enemyPart = getClosestLivingEnemy()
+            if enemy and enemyPart then
+                local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
+                local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
+                smoothFlyTo(targetCFrame)
+            end
+        else
+            stopMovement()
+        end
+        return
+    end
 
     local wave = getCurrentWaveNumber()
 
@@ -1033,21 +1053,6 @@ local function runBleachPhaseFlow()
 end
 
 local function runIncursionPhaseFlow()
-    if isVirusActive then
-        local enemies = getAllLivingEnemiesIncursion()
-        if #enemies > 0 then
-            local enemy, enemyPart = getClosestLivingEnemy()
-            if enemy and enemyPart then
-                local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
-                local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
-                smoothFlyTo(targetCFrame)
-            end
-        else
-            stopMovement()
-        end
-        return
-    end
-
     if (tick() - dungeonStartTime) < Settings.StartWaitTime then
         stopMovement()
         return
@@ -1067,7 +1072,7 @@ local function runIncursionPhaseFlow()
     end
 end
 
--- LOOP PRINCIPAL (PRIORIDADE CORRIGIDA PARA PLAY AGAIN NO ENGAGE)
+-- LOOP PRINCIPAL
 task.spawn(function()
     while isScriptRunning do
         if Settings.AutoFarm and not isRespawning then
@@ -1077,6 +1082,7 @@ task.spawn(function()
                 if not initialRoutinesScheduled then
                     initialRoutinesScheduled = true
                     
+                    -- 1. Auto-Sell aos 10 segundos
                     task.spawn(function()
                         task.wait(10)
                         if isScriptRunning and Settings.AutoSell and not isDungeonEnded then
@@ -1084,6 +1090,7 @@ task.spawn(function()
                         end
                     end)
 
+                    -- 2. Auto-Claim Quests aos 13 segundos
                     task.spawn(function()
                         task.wait(13)
                         if isScriptRunning and Settings.AutoClaimQuests and not isDungeonEnded then
@@ -1096,45 +1103,42 @@ task.spawn(function()
                     checkDungeonStartButton()
                 end
 
-                -- 1. CHECAGEM PRIORITÁRIA DE FIM DE PARTIDA (PLAY AGAIN)
-                local playAgainBtn = findPlayAgainButton()
-                if playAgainBtn and playAgainBtn.Visible then
-                    isDungeonEnded = true
-                    isVirusActive = false
-                    stopMovement()
+                local engaged = false
+                if Settings.AutoEngage then
+                    engaged = checkAndClickEngageButton()
+                end
 
-                    if Settings.AutoClaimQuests then
-                        pcall(executeAutoClaimQuests)
-                        task.wait(0.2)
-                    end
-
-                    -- Se ainda houver popup de Engage aberto E não clicamos nele antes
-                    if Settings.AutoEngage and checkAndClickEngageButton() then
-                        isDungeonEnded = false
-                        isVirusActive = true
-                        dungeonStartTime = tick()
-                        task.wait(1.0)
-                    elseif Settings.AutoPlayAgain then
-                        queueNextExecution()
-                        task.wait(0.8)
-                        triggerGuiButton(playAgainBtn)
-                        task.wait(3.0)
-                    end
-                else
+                if engaged then
                     isDungeonEnded = false
+                    isVirusActive = true
+                    dungeonStartTime = tick()
+                    task.wait(1.5)
+                else
+                    local ended, playAgainBtn = checkDungeonEnd()
+                    if ended then
+                        isDungeonEnded = true
+                        isVirusActive = false
+                        stopMovement()
+                        
+                        if Settings.AutoClaimQuests then
+                            pcall(executeAutoClaimQuests)
+                            task.wait(0.2)
+                        end
 
-                    -- 2. SE O PLAY AGAIN NÃO ESTIVER NA TELA, VERIFICA ENGAGE
-                    local engaged = false
-                    if Settings.AutoEngage and not isVirusActive then
-                        engaged = checkAndClickEngageButton()
-                    end
-
-                    if engaged then
-                        isDungeonEnded = false
-                        isVirusActive = true
-                        dungeonStartTime = tick()
-                        task.wait(1.0)
+                        if Settings.AutoEngage and checkAndClickEngageButton() then
+                            isDungeonEnded = false
+                            isVirusActive = true
+                            dungeonStartTime = tick()
+                            task.wait(1.5)
+                        elseif Settings.AutoPlayAgain and playAgainBtn then
+                            queueNextExecution()
+                            task.wait(0.8)
+                            triggerGuiButton(playAgainBtn)
+                            task.wait(3.0)
+                        end
                     else
+                        isDungeonEnded = false
+                        
                         if Settings.SelectedPhase == "Bleach (Fase 4)" then
                             runBleachPhaseFlow()
                         elseif Settings.SelectedPhase == "Incursão" then
@@ -1334,7 +1338,7 @@ CombatSection:AddToggle("AutoFarmToggle", {
 
 CombatSection:AddToggle("HardcoreToggle", {
     Title = "Modo Hardcore",
-    Description = "Se morrer, aguarda 23s e clica em Play Again para reiniciar",
+    Description = "Se morrer, aguarda 15s e clica em Play Again para reiniciar",
     Default = Settings.HardcoreMode,
     Callback = function(Value)
         Settings.HardcoreMode = Value
