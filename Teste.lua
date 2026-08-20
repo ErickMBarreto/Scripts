@@ -96,7 +96,6 @@ local Settings = {
     HeightAboveEnemy = 8.5,
     TweenSpeed = 50,
     AttackSpeed = 0.15,
-    -- Configurações de Auto-Sell pós-vitória
     AutoSell = true,
     SellCommon = true,
     SellRare = true,
@@ -241,19 +240,29 @@ local function smoothFlyTo(targetCFrame)
 end
 
 local function triggerGuiButton(btn)
-    if not btn or not btn.Parent or not isScriptRunning then return end
-    if firesignal then
-        pcall(function() firesignal(btn.Activated) end)
-        pcall(function() firesignal(btn.MouseButton1Click) end)
-        pcall(function() firesignal(btn.MouseButton1Down) end)
-        pcall(function() firesignal(btn.MouseButton1Up) end)
-    end
-    if getconnections then
-        for _, c in ipairs(getconnections(btn.Activated)) do pcall(function() c:Fire() end) end
-        for _, c in ipairs(getconnections(btn.MouseButton1Click)) do pcall(function() c:Fire() end) end
-        for _, c in ipairs(getconnections(btn.MouseButton1Down)) do pcall(function() c:Fire() end) end
-        for _, c in ipairs(getconnections(btn.MouseButton1Up)) do pcall(function() c:Fire() end) end
-    end
+    if not btn or not isScriptRunning then return end
+    pcall(function()
+        if firesignal then
+            if btn.Activated then firesignal(btn.Activated) end
+            if btn.MouseButton1Click then firesignal(btn.MouseButton1Click) end
+            if btn.MouseButton1Down then firesignal(btn.MouseButton1Down) end
+            if btn.MouseButton1Up then firesignal(btn.MouseButton1Up) end
+        end
+        if getconnections then
+            if btn.Activated then
+                for _, c in ipairs(getconnections(btn.Activated)) do pcall(function() c:Fire() end) end
+            end
+            if btn.MouseButton1Click then
+                for _, c in ipairs(getconnections(btn.MouseButton1Click)) do pcall(function() c:Fire() end) end
+            end
+            if btn.MouseButton1Down then
+                for _, c in ipairs(getconnections(btn.MouseButton1Down)) do pcall(function() c:Fire() end) end
+            end
+            if btn.MouseButton1Up then
+                for _, c in ipairs(getconnections(btn.MouseButton1Up)) do pcall(function() c:Fire() end) end
+            end
+        end
+    end)
 end
 
 local function pressKey(keyCode)
@@ -526,7 +535,7 @@ local function getClosestLivingEnemy()
 end
 
 -- ====================================================================
--- 8. MOTOR DE AUTO-SELL 100% OCULTO (BACKGROUND)
+-- 8. MOTOR DE AUTO-SELL (EXECUÇÃO DIRETA NO INVENTÁRIO)
 -- ====================================================================
 local function getItemRarity(slot)
     local grad = slot:FindFirstChild("RarityGradient", true)
@@ -539,13 +548,13 @@ local function getItemRarity(slot)
 
     if r >= 230 and g >= 230 and b >= 230 then
         return "Common"
-    elseif r <= 30 and g >= 70 and b >= 200 then
+    elseif r <= 50 and g >= 60 and b >= 190 then
         return "Rare"
-    elseif r >= 90 and r <= 150 and g <= 30 and b >= 200 then
+    elseif r >= 90 and r <= 160 and g <= 50 and b >= 190 then
         return "Epic"
-    elseif r >= 230 and g >= 160 and b <= 30 then
+    elseif r >= 220 and g >= 140 and b <= 50 then
         return "Legendary"
-    elseif r >= 220 and g <= 30 and b <= 30 then
+    elseif r >= 200 and g <= 50 and b <= 50 then
         return "Mythic"
     end
 
@@ -558,13 +567,11 @@ local function shouldSellItem(slot)
         return false
     end
 
-    -- Trava 1: Equipados
     local eq = slot:FindFirstChild("EquippedSelection")
     if eq and eq:IsA("ImageLabel") and eq.ImageColor3 == Color3.fromRGB(0, 255, 0) then
         return false
     end
 
-    -- Trava 2: Favoritos
     local fav = slot:FindFirstChild("Favorite", true)
     if fav and fav:IsA("ImageLabel") and fav.Visible and fav.ImageColor3 ~= Color3.fromRGB(255, 255, 255) then
         return false
@@ -591,14 +598,11 @@ local function executeAutoSellCycle()
 
     isSellingInProgress = true
 
-    -- Ocultamento absoluto: move a interface para fora da tela
-    local originalItemsPos = itemsFrame.Position
-    local originalMainFrameVisible = mainFrame.Visible
-    local originalItemsVisible = itemsFrame.Visible
-
-    itemsFrame.Position = UDim2.new(15, 0, 15, 0)
-    itemsFrame.Visible = false
-    mainFrame.Visible = false
+    -- Garante ativação momentânea para os listeners do jogo responderem aos cliques
+    local wasMainVisible = mainFrame.Visible
+    local wasItemsVisible = itemsFrame.Visible
+    mainFrame.Visible = true
+    itemsFrame.Visible = true
 
     local sellBtn = itemsFrame:FindFirstChild("Sell")
     local sellConfirmBtn = itemsFrame:FindFirstChild("SellConfirm")
@@ -619,21 +623,23 @@ local function executeAutoSellCycle()
 
     if sellBtn and sellConfirmBtn then
         triggerGuiButton(sellBtn)
-        task.wait(0.15)
+        task.wait(0.2)
 
         for _, catBtn in ipairs(categories) do
             triggerGuiButton(catBtn)
-            task.wait(0.15)
+            task.wait(0.2)
 
             local scroll = itemsFrame:FindFirstChild("Scroll")
             if scroll then
                 for _, slot in ipairs(scroll:GetChildren()) do
                     if slot:IsA("GuiObject") and shouldSellItem(slot) then
                         local sellSelect = slot:FindFirstChild("SellSelection")
-                        local clickTarget = (sellSelect and sellSelect:IsA("GuiButton") and sellSelect) or slot
-                        triggerGuiButton(clickTarget)
-                        totalSelected = totalSelected + 1
-                        task.wait(0.02)
+                        local btn = (sellSelect and sellSelect:IsA("GuiButton") and sellSelect) or slot:FindFirstChildWhichIsA("GuiButton", true) or (slot:IsA("GuiButton") and slot)
+                        if btn then
+                            triggerGuiButton(btn)
+                            totalSelected = totalSelected + 1
+                            task.wait(0.03)
+                        end
                     end
                 end
             end
@@ -641,16 +647,14 @@ local function executeAutoSellCycle()
 
         if totalSelected > 0 then
             triggerGuiButton(sellConfirmBtn)
-            task.wait(0.2)
+            task.wait(0.3)
         else
             triggerGuiButton(sellBtn)
         end
     end
 
-    -- Restaura parâmetros
-    itemsFrame.Position = originalItemsPos
-    itemsFrame.Visible = originalItemsVisible
-    mainFrame.Visible = originalMainFrameVisible
+    mainFrame.Visible = wasMainVisible
+    itemsFrame.Visible = wasItemsVisible
 
     isSellingInProgress = false
 end
@@ -959,7 +963,7 @@ local function runIncursionPhaseFlow()
 end
 
 -- ====================================================================
--- LOOP PRINCIPAL (VENDA AUTOMÁTICA PÓS-VITÓRIA/FIM DE PARTIDA)
+-- LOOP PRINCIPAL (VENDA AUTOMÁTICA PÓS-VITÓRIA)
 -- ====================================================================
 task.spawn(function()
     while isScriptRunning do
@@ -988,7 +992,6 @@ task.spawn(function()
                         isVirusActive = false
                         stopMovement()
                         
-                        -- Executa a venda silenciosa pós-vitória (drops recebidos)
                         if Settings.AutoSell then
                             pcall(executeAutoSellCycle)
                             task.wait(0.4)
@@ -1309,8 +1312,8 @@ CombatSection:AddSlider("TweenSpeed", {
 local AutoSellMainSection = Tabs.AutoSell:AddSection("Controle Geral de Venda")
 
 AutoSellMainSection:AddToggle("AutoSellToggle", {
-    Title = "Venda Automática Pós-Vitória (Oculta)",
-    Description = "Limpa os drops filtrados automaticamente ao matar o Boss",
+    Title = "Venda Automática Pós-Vitória",
+    Description = "Vende os drops filtrados automaticamente ao finalizar a partida",
     Default = Settings.AutoSell,
     Callback = function(Value)
         Settings.AutoSell = Value
@@ -1319,8 +1322,8 @@ AutoSellMainSection:AddToggle("AutoSellToggle", {
 })
 
 AutoSellMainSection:AddButton({
-    Title = "⚡ Executar Venda Silenciosa Agora",
-    Description = "Roda um ciclo manual em background agora mesmo",
+    Title = "⚡ Executar Venda Agora",
+    Description = "Executa um ciclo manual de venda dos itens filtrados",
     Callback = function()
         pcall(executeAutoSellCycle)
     end
