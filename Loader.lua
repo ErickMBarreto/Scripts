@@ -147,7 +147,7 @@ local isScriptRunning = true
 local currentTween = nil
 local charConnection = nil
 
--- COORDENADAS REAIS DOS PORTAIS (FASE 4 - BLEACH TRANCADA)
+-- COORDENADAS DOS PORTAIS (FASE 4 - BLEACH)
 local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0)
 local PORTAL_2_BOSS_POS  = CFrame.new(5411.5, -561.0, 2550.0)
 
@@ -303,7 +303,7 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 7. DETECÇÕES DE INIMIGOS (SEPARADAS POR MODO)
+-- 7. DETECÇÕES DE INIMIGOS (COM SUPORTE A VIRUS EM AMBOS OS MODOS)
 -- ====================================================================
 local function getCurrentWaveNumber()
     local pguiRef = player:FindFirstChild("PlayerGui")
@@ -359,18 +359,45 @@ local function isEntityAlive(obj)
     return false
 end
 
--- A. BUSCA EXCLUSIVA: FASE 4 (BLEACH - TRANCADA)
+-- A. BUSCA: FASE 4 (BLEACH - PADRÃO + VIRUS SE ATIVO)
 local function getAllLivingEnemiesBleach()
     local list = {}
     local char = player.Character
+    local registered = {}
+
+    local function addEntity(mob)
+        if mob and mob:IsA("Model") and mob ~= char and not registered[mob] and not Players:GetPlayerFromCharacter(mob) then
+            if isEntityAlive(mob) and getEntityTargetPart(mob) then
+                registered[mob] = true
+                table.insert(list, mob)
+            end
+        end
+    end
 
     local gameFolder = workspace:FindFirstChild("Game")
     local enemiesFolder = (gameFolder and gameFolder:FindFirstChild("Enemies")) or workspace:FindFirstChild("Enemies")
 
     if enemiesFolder then
         for _, enemy in ipairs(enemiesFolder:GetChildren()) do
-            if isEntityAlive(enemy) then
-                table.insert(list, enemy)
+            addEntity(enemy)
+        end
+    end
+
+    -- Se o Boss Secreto estiver ativo na Fase 4, varre as pastas de Virus
+    if isVirusActive then
+        local virusFolder = (gameFolder and (gameFolder:FindFirstChild("Virus") or gameFolder:FindFirstChild("Boss") or gameFolder:FindFirstChild("SecretBoss"))) 
+            or workspace:FindFirstChild("Virus")
+        if virusFolder then
+            for _, enemy in ipairs(virusFolder:GetChildren()) do addEntity(enemy) end
+            if isEntityAlive(virusFolder) then addEntity(virusFolder) end
+        end
+
+        for _, obj in ipairs(workspace:GetChildren()) do
+            if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
+                local name = obj.Name:lower()
+                if name:find("virus") or name:find("boss") then
+                    addEntity(obj)
+                end
             end
         end
     end
@@ -379,9 +406,7 @@ local function getAllLivingEnemiesBleach()
         for _, stage in ipairs(gameFolder.Stages:GetChildren()) do
             local spawns = stage:FindFirstChild("Spawns") or stage
             for _, mob in ipairs(spawns:GetChildren()) do
-                if mob:IsA("Model") and mob ~= char and isEntityAlive(mob) then
-                    table.insert(list, mob)
-                end
+                addEntity(mob)
             end
         end
     end
@@ -389,7 +414,7 @@ local function getAllLivingEnemiesBleach()
     return list
 end
 
--- B. BUSCA EXCLUSIVA: INCURSÃO (SUPORTE A VIRUS / SECRET BOSS / SUMMONS)
+-- B. BUSCA: INCURSÃO (MAPA COMPLETO + SUMMONS + VIRUS)
 local function getAllLivingEnemiesIncursion()
     local list = {}
     local char = player.Character
@@ -436,7 +461,6 @@ local function getAllLivingEnemiesIncursion()
         for _, enemy in ipairs(wsEnemies:GetChildren()) do addEntity(enemy) end
     end
 
-    -- Varredura Global no Workspace
     for _, obj in ipairs(workspace:GetChildren()) do
         if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
             local name = obj.Name:lower()
@@ -533,9 +557,9 @@ local function checkDungeonEnd()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef or not isScriptRunning then return false, nil end
 
-    -- Se o Boss Secreto estiver ativo na Incursão, checa se ainda há inimigos antes de declarar fim
-    if isVirusActive and Settings.SelectedPhase == "Incursão" then
-        local enemies = getAllLivingEnemiesIncursion()
+    -- Se o Boss Secreto estiver ativo (em qualquer fase), não encerra enquanto houver inimigos
+    if isVirusActive then
+        local enemies = (Settings.SelectedPhase == "Incursão") and getAllLivingEnemiesIncursion() or getAllLivingEnemiesBleach()
         if #enemies > 0 then
             return false, nil
         else
@@ -563,7 +587,7 @@ local function isPortalTransitionActive()
     if isRespawning or isTransitioning or enteringPortal then return true end
     if (tick() - dungeonStartTime) < Settings.StartWaitTime then return true end
 
-    if Settings.SelectedPhase == "Bleach (Fase 4)" then
+    if Settings.SelectedPhase == "Bleach (Fase 4)" and not isVirusActive then
         local _, root = getCharacter()
         if not root then return true end
 
@@ -678,7 +702,7 @@ local function passThroughPortalSafely(targetPortalCFrame)
     end
 end
 
--- 1. FASE BLEACH (100% TRANCADA E INTACTA)
+-- 1. FASE BLEACH
 local function runBleachPhaseFlow()
     local char, root = getCharacter()
     if not root then return end
@@ -707,16 +731,19 @@ local function runBleachPhaseFlow()
 
     if enteringPortal then return end
 
-    local wave = getCurrentWaveNumber()
+    -- Se o Virus estiver ativo, prioriza o combate direto ao invés de buscar portais
+    if not isVirusActive then
+        local wave = getCurrentWaveNumber()
 
-    if wave >= 12 and currentRoom ~= "BossRoom" then
-        passThroughPortalSafely(PORTAL_2_BOSS_POS)
-        return
-    end
+        if wave >= 12 and currentRoom ~= "BossRoom" then
+            passThroughPortalSafely(PORTAL_2_BOSS_POS)
+            return
+        end
 
-    if wave >= 8 and currentRoom == "Room1" then
-        passThroughPortalSafely(PORTAL_1_WAVE8_POS)
-        return
+        if wave >= 8 and currentRoom == "Room1" then
+            passThroughPortalSafely(PORTAL_1_WAVE8_POS)
+            return
+        end
     end
 
     local enemies = getAllLivingEnemiesBleach()
@@ -727,12 +754,14 @@ local function runBleachPhaseFlow()
                 local _, currentRoot = getCharacter()
                 if not currentRoot then break end
 
-                local currentWave = getCurrentWaveNumber()
-                local isR1 = currentRoot.Position.Z < 2100 and currentRoot.Position.Y > -450
-                local isBoss = currentRoot.Position.Y > -400 and currentRoot.Position.Z > 2800
+                if not isVirusActive then
+                    local currentWave = getCurrentWaveNumber()
+                    local isR1 = currentRoot.Position.Z < 2100 and currentRoot.Position.Y > -450
+                    local isBoss = currentRoot.Position.Y > -400 and currentRoot.Position.Z > 2800
 
-                if (currentWave >= 8 and isR1) or (currentWave >= 12 and not isBoss) then
-                    break
+                    if (currentWave >= 8 and isR1) or (currentWave >= 12 and not isBoss) then
+                        break
+                    end
                 end
 
                 local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
@@ -746,7 +775,7 @@ local function runBleachPhaseFlow()
     end
 end
 
--- 2. FASE INCURSÃO (TARGETING ATIVO COM SUPORTE A ENGAGE / VIRUS BOSS)
+-- 2. FASE INCURSÃO
 local function runIncursionPhaseFlow()
     if (tick() - dungeonStartTime) < Settings.StartWaitTime then
         stopMovement()
