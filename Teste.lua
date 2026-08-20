@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (VERSÃO TRANCADA + AUTO-CLAIM)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (VERSÃO TRANCADA + AUTO-CLAIM INÍCIO)
 -- ====================================================================
 
 -- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA (Singleton Anti-Duplicação)
@@ -183,11 +183,10 @@ local enteringPortal = false
 local isVirusActive = false
 local isSellingInProgress = false
 local isQuestClaimInProgress = false
-local initialSellScheduled = false
+local initialRoutinesScheduled = false
 local lastRoomState = "Room1"
 
 local lastSkillUse = 0
-local lastQuestCheck = 0
 local comboIndex = 1
 local isDungeonEnded = false
 local attackRemote = nil
@@ -1024,28 +1023,32 @@ local function runIncursionPhaseFlow()
     end
 end
 
--- LOOP PRINCIPAL (AUTO-SELL 10s PÓS-START + AUTO-CLAIM DE MISSÕES PERIÓDICO)
+-- LOOP PRINCIPAL (AUTO-SELL AOS 10s E AUTO-CLAIM AOS 13s NO INÍCIO)
 task.spawn(function()
     while isScriptRunning do
         if Settings.AutoFarm and not isRespawning then
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 
-                -- Auto-Sell agendado para 10s após o início da fase
-                if Settings.AutoSell and not initialSellScheduled then
-                    initialSellScheduled = true
+                -- Agendamento ordenado das automações de início da fase
+                if not initialRoutinesScheduled then
+                    initialRoutinesScheduled = true
+                    
+                    -- 1. Auto-Sell aos 10 segundos
                     task.spawn(function()
                         task.wait(10)
                         if isScriptRunning and Settings.AutoSell and not isDungeonEnded then
                             executeDirectAutoSell()
                         end
                     end)
-                end
 
-                -- Auto-Claim Quests periódico (a cada 60s)
-                if Settings.AutoClaimQuests and (tick() - lastQuestCheck) >= 60 then
-                    lastQuestCheck = tick()
-                    task.spawn(executeAutoClaimQuests)
+                    -- 2. Auto-Claim Quests aos 13 segundos (3s após a venda para evitar conflitos)
+                    task.spawn(function()
+                        task.wait(13)
+                        if isScriptRunning and Settings.AutoClaimQuests and not isDungeonEnded then
+                            executeAutoClaimQuests()
+                        end
+                    end)
                 end
 
                 if Settings.AutoStart then
@@ -1069,7 +1072,7 @@ task.spawn(function()
                         isVirusActive = false
                         stopMovement()
                         
-                        -- Checagem final de missões após vencer a partida
+                        -- Checagem de segurança de missões ao finalizar a partida
                         if Settings.AutoClaimQuests then
                             pcall(executeAutoClaimQuests)
                             task.wait(0.2)
@@ -1477,8 +1480,8 @@ AutoSellTypeSection:AddToggle("SellSpellsToggle", {
 local QuestsSection = Tabs.Settings:AddSection("Automação de Missões (Quests)")
 
 QuestsSection:AddToggle("AutoClaimQuestsToggle", {
-    Title = "Auto-Claim de Missões (Hourly/Daily/Weekly)",
-    Description = "Resgata missões prontas a cada 60s e ao fim da partida",
+    Title = "Auto-Claim de Missões (13s pós-início)",
+    Description = "Resgata missões prontas (Hourly/Daily/Weekly) no início e ao vencer",
     Default = Settings.AutoClaimQuests,
     Callback = function(Value)
         Settings.AutoClaimQuests = Value
