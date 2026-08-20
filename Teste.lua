@@ -96,14 +96,15 @@ local Settings = {
     HeightAboveEnemy = 8.5,
     TweenSpeed = 50,
     AttackSpeed = 0.15,
+    -- Configurações de Auto-Sell (DESLIGADO POR PADRÃO)
     AutoSell = false,
     SellRare = true,
     SellEpic = false,
     SellLegendary = false,
     SellMythic = false,
     SellWeapons = true,
-    SellArmors = true,
-    SellSpells = true
+    SellArmors = false,
+    SellSpells = false
 }
 
 local function saveConfig()
@@ -183,6 +184,7 @@ local isTransitioning = false
 local enteringPortal = false
 local isVirusActive = false
 local isSellingInProgress = false
+local initialSellScheduled = false
 local lastRoomState = "Room1"
 
 local lastSkillUse = 0
@@ -534,7 +536,7 @@ local function getClosestLivingEnemy()
 end
 
 -- ====================================================================
--- 8. MOTOR DE AUTO-SELL DIRETO E INTELIGENTE (100% VALIDADO)
+-- 8. MOTOR DE AUTO-SELL DIRETO COM FILTRO RIGOROSO DE TIPO
 -- ====================================================================
 local function getItemRarity(slot)
     local grad = slot:FindFirstChild("RarityGradient", true)
@@ -552,6 +554,31 @@ local function getItemRarity(slot)
     return "Unknown"
 end
 
+local function getItemTypeFromSlot(slot)
+    local attrType = slot:GetAttribute("Type") or slot:GetAttribute("ItemType") or slot:GetAttribute("Category")
+    if attrType then return tostring(attrType):lower() end
+
+    local typeVal = slot:FindFirstChild("Type") or slot:FindFirstChild("Category")
+    if typeVal and typeVal:IsA("StringValue") then return typeVal.Value:lower() end
+
+    local itemValObj = slot:FindFirstChild("Item")
+    local realItem = (itemValObj and itemValObj:IsA("ObjectValue") and itemValObj.Value)
+        or (itemValObj and typeof(itemValObj.Value) == "Instance" and itemValObj.Value)
+        or (typeof(itemValObj) == "Instance" and itemValObj)
+
+    if realItem and realItem.Parent then
+        local pName = realItem.Parent.Name:lower()
+        if pName:find("weapon") then return "weapon" end
+        if pName:find("armor") then return "armor" end
+        if pName:find("spell") then return "spell" end
+        
+        local itemTypeAttr = realItem:GetAttribute("Type")
+        if itemTypeAttr then return tostring(itemTypeAttr):lower() end
+    end
+
+    return "unknown"
+end
+
 local function executeDirectAutoSell()
     if not Settings.AutoSell or isSellingInProgress or not isScriptRunning or not equipRemote then return end
     
@@ -565,47 +592,54 @@ local function executeDirectAutoSell()
 
     local categoriesToScan = {}
     if Settings.SellWeapons and buttonsFrame and buttonsFrame:FindFirstChild("Weapon") then
-        table.insert(categoriesToScan, buttonsFrame.Weapon)
+        table.insert(categoriesToScan, { Button = buttonsFrame.Weapon, TargetType = "weapon" })
     end
     if Settings.SellArmors and buttonsFrame and buttonsFrame:FindFirstChild("Armor") then
-        table.insert(categoriesToScan, buttonsFrame.Armor)
+        table.insert(categoriesToScan, { Button = buttonsFrame.Armor, TargetType = "armor" })
     end
     if Settings.SellSpells and buttonsFrame and buttonsFrame:FindFirstChild("Spell") then
-        table.insert(categoriesToScan, buttonsFrame.Spell)
+        table.insert(categoriesToScan, { Button = buttonsFrame.Spell, TargetType = "spell" })
     end
 
     local itemsToSell = {}
     local registered = {}
 
-    for _, tabBtn in ipairs(categoriesToScan) do
-        triggerGuiButton(tabBtn)
-        task.wait(0.1)
+    for _, catData in ipairs(categoriesToScan) do
+        triggerGuiButton(catData.Button)
+        task.wait(0.15)
 
         for _, slot in ipairs(scroll:GetChildren()) do
             if slot:IsA("GuiObject") and slot:GetAttribute("Item") and slot.Name ~= "SteelSword" then
-                local eq = slot:FindFirstChild("EquippedSelection")
-                local isEquipped = eq and eq:IsA("ImageLabel") and eq.Visible and eq.ImageColor3 == Color3.fromRGB(0, 255, 0)
-                
-                local fav = slot:FindFirstChild("Favorite", true)
-                local isFav = fav and fav:IsA("ImageLabel") and fav.Visible and fav.ImageColor3 ~= Color3.fromRGB(255, 255, 255)
+                if slot.Visible ~= false then
+                    local eq = slot:FindFirstChild("EquippedSelection")
+                    local isEquipped = eq and eq:IsA("ImageLabel") and eq.Visible and eq.ImageColor3 == Color3.fromRGB(0, 255, 0)
+                    
+                    local fav = slot:FindFirstChild("Favorite", true)
+                    local isFav = fav and fav:IsA("ImageLabel") and fav.Visible and fav.ImageColor3 ~= Color3.fromRGB(255, 255, 255)
 
-                if not isEquipped and not isFav then
-                    local rarity = getItemRarity(slot)
-                    local match = false
-                    if rarity == "Rare" and Settings.SellRare then match = true end
-                    if rarity == "Epic" and Settings.SellEpic then match = true end
-                    if rarity == "Legendary" and Settings.SellLegendary then match = true end
-                    if rarity == "Mythic" and Settings.SellMythic then match = true end
+                    if not isEquipped and not isFav then
+                        local detectedType = getItemTypeFromSlot(slot)
+                        local typeAllowed = (detectedType == catData.TargetType) or (detectedType == "unknown")
 
-                    if match then
-                        local itemValObj = slot:FindFirstChild("Item")
-                        local targetInstance = (itemValObj and itemValObj:IsA("ObjectValue") and itemValObj.Value)
-                            or (itemValObj and typeof(itemValObj.Value) == "Instance" and itemValObj.Value)
-                            or slot
+                        if typeAllowed then
+                            local rarity = getItemRarity(slot)
+                            local rarityMatch = false
+                            if rarity == "Rare" and Settings.SellRare then rarityMatch = true end
+                            if rarity == "Epic" and Settings.SellEpic then rarityMatch = true end
+                            if rarity == "Legendary" and Settings.SellLegendary then rarityMatch = true end
+                            if rarity == "Mythic" and Settings.SellMythic then rarityMatch = true end
 
-                        if targetInstance and not registered[targetInstance] then
-                            registered[targetInstance] = true
-                            table.insert(itemsToSell, targetInstance)
+                            if rarityMatch then
+                                local itemValObj = slot:FindFirstChild("Item")
+                                local targetInstance = (itemValObj and itemValObj:IsA("ObjectValue") and itemValObj.Value)
+                                    or (itemValObj and typeof(itemValObj.Value) == "Instance" and itemValObj.Value)
+                                    or slot
+
+                                if targetInstance and not registered[targetInstance] then
+                                    registered[targetInstance] = true
+                                    table.insert(itemsToSell, targetInstance)
+                                end
+                            end
                         end
                     end
                 end
@@ -613,6 +647,7 @@ local function executeDirectAutoSell()
         end
     end
 
+    -- DISPARO COM VALIDAÇÃO (NÃO DISPARA VAZIO)
     if #itemsToSell > 0 then
         pcall(function()
             equipRemote:FireServer("Sell", itemsToSell)
@@ -931,7 +966,7 @@ local function runIncursionPhaseFlow()
 end
 
 -- ====================================================================
--- LOOP PRINCIPAL (VENDA AUTOMÁTICA DIRETA PÓS-VITÓRIA)
+-- LOOP PRINCIPAL (AUTO-SELL COM DELAY DE 10s PÓS-START)
 -- ====================================================================
 task.spawn(function()
     while isScriptRunning do
@@ -939,6 +974,17 @@ task.spawn(function()
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 
+                -- Agenda e executa o Auto-Sell após 10 segundos do início
+                if Settings.AutoSell and not initialSellScheduled then
+                    initialSellScheduled = true
+                    task.spawn(function()
+                        task.wait(10)
+                        if isScriptRunning and Settings.AutoSell and not isDungeonEnded then
+                            executeDirectAutoSell()
+                        end
+                    end)
+                end
+
                 if Settings.AutoStart then
                     checkDungeonStartButton()
                 end
@@ -960,12 +1006,6 @@ task.spawn(function()
                         isVirusActive = false
                         stopMovement()
                         
-                        -- Disparo direto e silencioso ao terminar a dungeon
-                        if Settings.AutoSell then
-                            pcall(executeDirectAutoSell)
-                            task.wait(0.3)
-                        end
-
                         if Settings.AutoEngage and checkAndClickEngageButton() then
                             isDungeonEnded = false
                             isVirusActive = true
@@ -998,7 +1038,7 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 12. INTERFACE FLUENT (ROBUSTA E COMPLETA)
+-- 12. INTERFACE FLUENT
 -- ====================================================================
 local Window = Fluent:CreateWindow({
     Title = "Hub dos Rapazes",
@@ -1281,8 +1321,8 @@ CombatSection:AddSlider("TweenSpeed", {
 local AutoSellMainSection = Tabs.AutoSell:AddSection("Controle Geral de Venda")
 
 AutoSellMainSection:AddToggle("AutoSellToggle", {
-    Title = "Venda Automática Pós-Vitória (Silenciosa)",
-    Description = "Vende via Remote nativo ao finalizar a partida",
+    Title = "Venda Automática (10s pós-início)",
+    Description = "Aguarda 10 segundos de partida e vende os itens configurados",
     Default = Settings.AutoSell,
     Callback = function(Value)
         Settings.AutoSell = Value
