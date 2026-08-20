@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (VERSÃO COM MODO HARDCORE)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (HARDCORE: 23s DELAY)
 -- ====================================================================
 
 -- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA (Singleton Anti-Duplicação)
@@ -260,7 +260,7 @@ local function onPlayerDied()
 
     stopMovement()
     task.spawn(function()
-        task.wait(15)
+        task.wait(23)
         if not isScriptRunning or not Settings.HardcoreMode or not Settings.AutoPlayAgain then return end
 
         local retryBtn = findAnyPlayAgainButton()
@@ -1338,7 +1338,7 @@ CombatSection:AddToggle("AutoFarmToggle", {
 
 CombatSection:AddToggle("HardcoreToggle", {
     Title = "Modo Hardcore",
-    Description = "Se morrer, aguarda 15s e clica em Play Again para reiniciar",
+    Description = "Se morrer, aguarda 23s e clica em Play Again para reiniciar",
     Default = Settings.HardcoreMode,
     Callback = function(Value)
         Settings.HardcoreMode = Value
