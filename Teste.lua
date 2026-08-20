@@ -96,7 +96,6 @@ local Settings = {
     HeightAboveEnemy = 8.5,
     TweenSpeed = 50,
     AttackSpeed = 0.15,
-    -- Configurações de Auto-Sell
     AutoSell = false,
     SellRare = true,
     SellEpic = false,
@@ -535,7 +534,7 @@ local function getClosestLivingEnemy()
 end
 
 -- ====================================================================
--- 8. MOTOR DE AUTO-SELL DIRETO E INTELIGENTE (100% OCULTO)
+-- 8. MOTOR DE AUTO-SELL DIRETO E INTELIGENTE (100% VALIDADO)
 -- ====================================================================
 local function getItemRarity(slot)
     local grad = slot:FindFirstChild("RarityGradient", true)
@@ -600,13 +599,13 @@ local function executeDirectAutoSell()
 
                     if match then
                         local itemValObj = slot:FindFirstChild("Item")
-                        local rawInstance = (itemValObj and itemValObj:IsA("ValueBase") and itemValObj.Value)
+                        local targetInstance = (itemValObj and itemValObj:IsA("ObjectValue") and itemValObj.Value)
                             or (itemValObj and typeof(itemValObj.Value) == "Instance" and itemValObj.Value)
-                            or (typeof(itemValObj) == "Instance" and itemValObj)
+                            or slot
 
-                        if rawInstance and not registered[rawInstance] then
-                            registered[rawInstance] = true
-                            table.insert(itemsToSell, rawInstance)
+                        if targetInstance and not registered[targetInstance] then
+                            registered[targetInstance] = true
+                            table.insert(itemsToSell, targetInstance)
                         end
                     end
                 end
@@ -932,7 +931,7 @@ local function runIncursionPhaseFlow()
 end
 
 -- ====================================================================
--- LOOP PRINCIPAL (VENDA AUTOMÁTICA PÓS-VITÓRIA)
+-- LOOP PRINCIPAL (VENDA AUTOMÁTICA DIRETA PÓS-VITÓRIA)
 -- ====================================================================
 task.spawn(function()
     while isScriptRunning do
