@@ -1,65 +1,1164 @@
 -- ====================================================================
--- SCANNER DE INVENTÁRIO, RARIDADES E REMOTES DE VENDA (100% NATIVO)
+-- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA (Singleton Anti-Duplicação)
 -- ====================================================================
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local player = Players.LocalPlayer
 
-local pgui = player:WaitForChild("PlayerGui", 20)
-local report = "=== RELATÓRIO DO INVENTÁRIO E REMOTES DE VENDA ===\n\n"
+local UNIQUE_ID = "HubRapazes_Singleton_Tag"
+if CoreGui:FindFirstChild(UNIQUE_ID) then
+    return
+end
 
--- 1. VARREDURA DE REMOTES COM NOMES SUSPEITOS DE VENDA/INVENTÁRIO
-report = report .. "[1] REMOTES ENCONTRADOS NO REPLICATEDSTORAGE:\n"
-local foundRemotes = 0
-for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
-    if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-        local name = obj.Name:lower()
-        if name:find("sell") or name:find("item") or name:find("inventory") or name:find("trash") or name:find("delete") or name:find("equip") then
-            foundRemotes = foundRemotes + 1
-            report = report .. string.format("   -> [%s] %s (Path: %s)\n", obj.ClassName, obj.Name, obj:GetFullName())
+local singletonTag = Instance.new("Folder")
+singletonTag.Name = UNIQUE_ID
+pcall(function() singletonTag.Parent = CoreGui end)
+
+for _, gui in ipairs({CoreGui, Players.LocalPlayer and Players.LocalPlayer:FindFirstChild("PlayerGui")}) do
+    if gui then
+        for _, child in ipairs(gui:GetChildren()) do
+            if child.Name == "IBdihP_PersistentToggle" or child.Name:find("Fluent") then
+                pcall(function() child:Destroy() end)
+            end
         end
     end
 end
-if foundRemotes == 0 then report = report .. "   (Nenhum Remote específico com nome 'Sell' encontrado)\n" end
 
--- 2. VARREDURA DA ESTRUTURA DO INVENTÁRIO (PlayerGui)
-report = report .. "\n[2] ESTRUTURA DE ITENS NO INVENTÁRIO (PlayerGui):\n"
-local scroll = pgui:FindFirstChild("Main")
-    and pgui.Main:FindFirstChild("MainFrame")
-    and pgui.Main.MainFrame:FindFirstChild("Items")
-    and pgui.Main.MainFrame.Items:FindFirstChild("Scroll")
+-- ====================================================================
+-- 2. REEXECUÇÃO AUTOMÁTICA INFINITA (Delta / Mobile)
+-- ====================================================================
+local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Loader.lua"
 
-if scroll then
-    local count = 0
-    for _, itemSlot in ipairs(scroll:GetChildren()) do
-        if itemSlot:IsA("GuiObject") and itemSlot.Name ~= "UIGridLayout" and itemSlot.Name ~= "UIPadding" then
-            count = count + 1
-            if count <= 5 then -- Analisa detalhadamente os 5 primeiros itens
-                report = report .. string.format("\n   • Item Slot: '%s'\n", itemSlot.Name)
-                
-                -- Atributos do Slot
-                for attrName, attrVal in pairs(itemSlot:GetAttributes()) do
-                    report = report .. string.format("      [Attr] %s = %s\n", tostring(attrName), tostring(attrVal))
-                end
+local function queueNextExecution()
+    local queueFunc = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or queueonteleport
+    if queueFunc then
+        pcall(function()
+            queueFunc(string.format([[
+                repeat task.wait(0.5) until game:IsLoaded() and game.Players.LocalPlayer
+                task.wait(1.5)
+                loadstring(game:HttpGet("%s"))()
+            ]], scriptURL))
+        end)
+    end
+end
 
-                -- Filhos / Labels / Cores
-                for _, child in ipairs(itemSlot:GetDescendants()) do
-                    if child:IsA("TextLabel") and child.Text ~= "" then
-                        report = report .. string.format("      [TextLabel] %s: '%s'\n", child.Name, child.Text)
-                    elseif child:IsA("UIStroke") then
-                        report = report .. string.format("      [Borda/Cor] %s = %s\n", child.Name, tostring(child.Color))
+queueNextExecution()
+
+-- ====================================================================
+-- 3. ESPERA DE CARREGAMENTO E TRAVA DO LOBBY
+-- ====================================================================
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+
+local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
+local pgui = player:WaitForChild("PlayerGui", 20)
+
+local function isInsideDungeon()
+    local main = pgui and pgui:FindFirstChild("Main")
+    if main and (main:FindFirstChild("DungeonFrame") or main:FindFirstChild("VirusFrame")) then return true end
+    if workspace:FindFirstChild("Game") and (workspace.Game:FindFirstChild("Enemies") or workspace.Game:FindFirstChild("Teleports") or workspace.Game:FindFirstChild("Stages")) then return true end
+    if workspace:FindFirstChild("Enemies") then return true end
+    return false
+end
+
+local inDungeon = false
+for i = 1, 15 do
+    if isInsideDungeon() then
+        inDungeon = true
+        break
+    end
+    task.wait(0.5)
+end
+
+if not inDungeon then
+    pcall(function() singletonTag:Destroy() end)
+    return
+end
+
+-- ====================================================================
+-- 4. SISTEMA DE SALVAMENTO DE CONFIGURAÇÃO / PRESET
+-- ====================================================================
+local HttpService = game:GetService("HttpService")
+local CONFIG_FILE = "HubRapazes_Config.json"
+
+local Settings = {
+    SelectedPhase = "Bleach (Fase 4)",
+    CustomWeaponName = "VoidRods",
+    AutoFarm = true,
+    AutoAttack = true,
+    AutoSkills = true,
+    AutoStart = true,
+    AutoPlayAgain = true,
+    AutoEngage = true,
+    StartWaitTime = 3.5,
+    SkillCooldown = 0.8,
+    SkillMaxDistance = 20,
+    HeightAboveEnemy = 8.5,
+    TweenSpeed = 50,
+    AttackSpeed = 0.15
+}
+
+local function saveConfig()
+    pcall(function()
+        if writefile then
+            local data = HttpService:JSONEncode({
+                SelectedPhase = Settings.SelectedPhase,
+                CustomWeaponName = Settings.CustomWeaponName,
+                HeightAboveEnemy = Settings.HeightAboveEnemy,
+                TweenSpeed = Settings.TweenSpeed,
+                AttackSpeed = Settings.AttackSpeed,
+                SkillCooldown = Settings.SkillCooldown,
+                StartWaitTime = Settings.StartWaitTime
+            })
+            writefile(CONFIG_FILE, data)
+        end
+    end)
+end
+
+local function loadConfig()
+    pcall(function()
+        if readfile and isfile and isfile(CONFIG_FILE) then
+            local raw = readfile(CONFIG_FILE)
+            local data = HttpService:JSONDecode(raw)
+            if data then
+                if data.SelectedPhase then Settings.SelectedPhase = data.SelectedPhase end
+                if data.CustomWeaponName then Settings.CustomWeaponName = data.CustomWeaponName end
+                if data.HeightAboveEnemy then Settings.HeightAboveEnemy = data.HeightAboveEnemy end
+                if data.TweenSpeed then Settings.TweenSpeed = data.TweenSpeed end
+                if data.AttackSpeed then Settings.AttackSpeed = data.AttackSpeed end
+                if data.SkillCooldown then Settings.SkillCooldown = data.SkillCooldown end
+                if data.StartWaitTime then Settings.StartWaitTime = data.StartWaitTime end
+            end
+        end
+    end)
+end
+
+loadConfig()
+
+-- ====================================================================
+-- 5. SERVIÇOS E ESTADOS GLOBAIS
+-- ====================================================================
+local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+local isScriptRunning = true
+local currentTween = nil
+local charConnection = nil
+
+-- COORDENADAS DOS PORTAIS (FASE 4 - BLEACH)
+local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0)
+local PORTAL_2_BOSS_POS  = CFrame.new(5411.5, -561.0, 2550.0)
+
+local dungeonStartTime = tick()
+local isRespawning = false
+local isTransitioning = false
+local enteringPortal = false
+local isVirusActive = false
+local lastRoomState = "Room1"
+
+local lastSkillUse = 0
+local comboIndex = 1
+local isDungeonEnded = false
+local attackRemote = nil
+
+local function getCharacter()
+    local char = player.Character
+    if char and char:FindFirstChild("HumanoidRootPart") and char:FindFirstChild("Humanoid") and char.Humanoid.Health > 0 then
+        return char, char.HumanoidRootPart, char.Humanoid
+    end
+    return nil, nil, nil
+end
+
+local function stopMovement()
+    if currentTween then
+        currentTween:Cancel()
+        currentTween = nil
+    end
+    local _, root = getCharacter()
+    if root and root.Parent then
+        root.AssemblyLinearVelocity = Vector3.zero
+    end
+end
+
+charConnection = player.CharacterAdded:Connect(function()
+    isRespawning = true
+    isTransitioning = false
+    enteringPortal = false
+    stopMovement()
+    attackRemote = nil
+
+    task.delay(1.2, function()
+        isRespawning = false
+    end)
+end)
+
+local function smoothFlyTo(targetCFrame)
+    if isDungeonEnded or isRespawning or isTransitioning or not isScriptRunning then return end
+    local _, root = getCharacter()
+    if not root or not root.Parent then return end
+    
+    local distance = (root.Position - targetCFrame.Position).Magnitude
+    local duration = math.clamp(distance / math.max(Settings.TweenSpeed, 5), 0.1, 10)
+
+    if currentTween then
+        currentTween:Cancel()
+    end
+
+    local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
+    currentTween = TweenService:Create(root, tweenInfo, {CFrame = targetCFrame})
+    currentTween:Play()
+end
+
+local function triggerGuiButton(btn)
+    if not btn or not btn.Parent or not isScriptRunning then return end
+    if firesignal then
+        pcall(function() firesignal(btn.Activated) end)
+        pcall(function() firesignal(btn.MouseButton1Click) end)
+        pcall(function() firesignal(btn.MouseButton1Down) end)
+        pcall(function() firesignal(btn.MouseButton1Up) end)
+    end
+    if getconnections then
+        for _, c in ipairs(getconnections(btn.Activated)) do pcall(function() c:Fire() end) end
+        for _, c in ipairs(getconnections(btn.MouseButton1Click)) do pcall(function() c:Fire() end) end
+        for _, c in ipairs(getconnections(btn.MouseButton1Down)) do pcall(function() c:Fire() end) end
+        for _, c in ipairs(getconnections(btn.MouseButton1Up)) do pcall(function() c:Fire() end) end
+    end
+end
+
+local function pressKey(keyCode)
+    if not isScriptRunning then return end
+    pcall(function()
+        VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+        task.wait(0.02)
+        VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+    end)
+end
+
+-- ====================================================================
+-- 6. MOTOR DE COMBATE DIRETO E SCANNER DE ARMA
+-- ====================================================================
+local function findAttackRemote()
+    if attackRemote and attackRemote.Parent then return attackRemote end
+    for _, container in ipairs({ReplicatedStorage, ReplicatedStorage:FindFirstChild("Remotes"), ReplicatedStorage:FindFirstChild("Events")}) do
+        if container then
+            local rem = container:FindFirstChild("Attack") or container:FindFirstChild("M1") or container:FindFirstChild("Combat")
+            if rem and rem:IsA("RemoteEvent") then
+                attackRemote = rem
+                return attackRemote
+            end
+        end
+    end
+    return nil
+end
+
+local function detectCurrentWeaponDetailed()
+    local pguiRef = player:FindFirstChild("PlayerGui")
+    if pguiRef then
+        for _, desc in ipairs(pguiRef:GetDescendants()) do
+            if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Visible then
+                local txt = desc.Text:lower()
+                if txt:find("unequip") or txt:find("desequipar") or txt:find("equipped") then
+                    local parentSlot = desc:FindFirstAncestorWhichIsA("Frame") or desc:FindFirstAncestorWhichIsA("ImageLabel") or desc.Parent
+                    if parentSlot and parentSlot.Name ~= "Items" and parentSlot.Name ~= "Scroll" then
+                        return parentSlot.Name
                     end
                 end
             end
         end
     end
-    report = report .. string.format("\nTotal de slots detectados: %d\n", count)
-else
-    report = report .. "   (Container MainFrame.Items.Scroll não encontrado ou inventário fechado)\n"
+
+    local char = player.Character
+    if char then
+        local tool = char:FindFirstChildOfClass("Tool")
+        if tool then return tool.Name end
+    end
+    local bp = player:FindFirstChild("Backpack")
+    if bp then
+        local tool = bp:FindFirstChildOfClass("Tool")
+        if tool then return tool.Name end
+    end
+
+    return nil
 end
 
-print("\n" .. report .. "\n")
-if setclipboard then
-    setclipboard(report)
+local function getEffectiveWeaponName()
+    if Settings.CustomWeaponName and Settings.CustomWeaponName ~= "" then
+        return Settings.CustomWeaponName
+    end
+    local found = detectCurrentWeaponDetailed()
+    return found or "VoidRods"
 end
+
+local function getDynamicHotbar()
+    local pguiRef = player:FindFirstChild("PlayerGui")
+    if not pguiRef then return nil end
+
+    local mainGui = pguiRef:FindFirstChild("Main")
+    if mainGui and mainGui:FindFirstChild("FrontFrame") and mainGui.FrontFrame:FindFirstChild("Hotbar") then
+        return mainGui.FrontFrame.Hotbar:FindFirstChild("List") or mainGui.FrontFrame.Hotbar
+    end
+    return nil
+end
+
+-- ====================================================================
+-- 7. DETECÇÕES DE INIMIGOS (COM SUPORTE A VIRUS EM AMBOS OS MODOS)
+-- ====================================================================
+local function getCurrentWaveNumber()
+    local pguiRef = player:FindFirstChild("PlayerGui")
+    if pguiRef then
+        local stageAmountLabel = pguiRef:FindFirstChild("Main")
+            and pguiRef.Main:FindFirstChild("DungeonFrame")
+            and pguiRef.Main.DungeonFrame:FindFirstChild("StatsHolder")
+            and pguiRef.Main.DungeonFrame.StatsHolder:FindFirstChild("Stage")
+            and pguiRef.Main.DungeonFrame.StatsHolder.Stage:FindFirstChild("Amount")
+
+        if stageAmountLabel and stageAmountLabel:IsA("TextLabel") and stageAmountLabel.Visible and stageAmountLabel.Text ~= "" then
+            local cur = stageAmountLabel.Text:match("(%d+)%s*/%s*%d+") or stageAmountLabel.Text:match("(%d+)")
+            if cur then
+                local n = tonumber(cur)
+                if n and n >= 1 and n <= 15 then
+                    return n
+                end
+            end
+        end
+    end
+    return 1
+end
+
+local function getEntityTargetPart(obj)
+    if not obj or not obj.Parent then return nil end
+    return obj:FindFirstChild("HumanoidRootPart")
+        or obj:FindFirstChild("RootPart")
+        or obj:FindFirstChild("Hitbox")
+        or obj:FindFirstChild("HitBox")
+        or obj:FindFirstChild("Bot")
+        or obj:FindFirstChild("Torso")
+        or obj:FindFirstChild("UpperTorso")
+        or obj:FindFirstChild("Head")
+        or (obj:IsA("Model") and obj.PrimaryPart)
+        or (obj:IsA("BasePart") and obj)
+        or obj:FindFirstChildWhichIsA("BasePart")
+end
+
+local function isEntityAlive(obj)
+    if not obj or not obj.Parent then return false end
+    
+    local hum = obj:FindFirstChildOfClass("Humanoid")
+    if hum then 
+        return (hum.Health > 0 and hum:GetState() ~= Enum.HumanoidStateType.Dead)
+    end
+
+    local hpAttr = obj:GetAttribute("Health") or obj:GetAttribute("HP")
+    if hpAttr then return tonumber(hpAttr) > 0 end
+
+    local hpVal = obj:FindFirstChild("Health") or obj:FindFirstChild("HP")
+    if hpVal and hpVal:IsA("ValueBase") then return tonumber(hpVal.Value) > 0 end
+
+    return false
+end
+
+-- A. BUSCA: FASE 4 (BLEACH - PADRÃO + VIRUS SE ATIVO)
+local function getAllLivingEnemiesBleach()
+    local list = {}
+    local char = player.Character
+    local registered = {}
+
+    local function addEntity(mob)
+        if mob and mob:IsA("Model") and mob ~= char and not registered[mob] and not Players:GetPlayerFromCharacter(mob) then
+            if isEntityAlive(mob) and getEntityTargetPart(mob) then
+                registered[mob] = true
+                table.insert(list, mob)
+            end
+        end
+    end
+
+    local gameFolder = workspace:FindFirstChild("Game")
+    local enemiesFolder = (gameFolder and gameFolder:FindFirstChild("Enemies")) or workspace:FindFirstChild("Enemies")
+
+    if enemiesFolder then
+        for _, enemy in ipairs(enemiesFolder:GetChildren()) do
+            addEntity(enemy)
+        end
+    end
+
+    -- Se o Boss Secreto estiver ativo na Fase 4, varre as pastas de Virus
+    if isVirusActive then
+        local virusFolder = (gameFolder and (gameFolder:FindFirstChild("Virus") or gameFolder:FindFirstChild("Boss") or gameFolder:FindFirstChild("SecretBoss"))) 
+            or workspace:FindFirstChild("Virus")
+        if virusFolder then
+            for _, enemy in ipairs(virusFolder:GetChildren()) do addEntity(enemy) end
+            if isEntityAlive(virusFolder) then addEntity(virusFolder) end
+        end
+
+        for _, obj in ipairs(workspace:GetChildren()) do
+            if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
+                local name = obj.Name:lower()
+                if name:find("virus") or name:find("boss") then
+                    addEntity(obj)
+                end
+            end
+        end
+    end
+
+    if #list == 0 and gameFolder and gameFolder:FindFirstChild("Stages") then
+        for _, stage in ipairs(gameFolder.Stages:GetChildren()) do
+            local spawns = stage:FindFirstChild("Spawns") or stage
+            for _, mob in ipairs(spawns:GetChildren()) do
+                addEntity(mob)
+            end
+        end
+    end
+
+    return list
+end
+
+-- B. BUSCA: INCURSÃO (MAPA COMPLETO + SUMMONS + VIRUS)
+local function getAllLivingEnemiesIncursion()
+    local list = {}
+    local char = player.Character
+    local registered = {}
+
+    local function addEntity(mob)
+        if mob and mob:IsA("Model") and mob ~= char and not registered[mob] and not Players:GetPlayerFromCharacter(mob) then
+            if isEntityAlive(mob) and getEntityTargetPart(mob) then
+                registered[mob] = true
+                table.insert(list, mob)
+            end
+        end
+    end
+
+    local gameFolder = workspace:FindFirstChild("Game")
+    if gameFolder then
+        local enemiesFolder = gameFolder:FindFirstChild("Enemies")
+        if enemiesFolder then
+            for _, enemy in ipairs(enemiesFolder:GetChildren()) do addEntity(enemy) end
+        end
+
+        local virusFolder = gameFolder:FindFirstChild("Virus") or gameFolder:FindFirstChild("Boss") or gameFolder:FindFirstChild("SecretBoss")
+        if virusFolder then
+            for _, enemy in ipairs(virusFolder:GetChildren()) do addEntity(enemy) end
+            if isEntityAlive(virusFolder) then addEntity(virusFolder) end
+        end
+
+        local summonsFolder = gameFolder:FindFirstChild("Summons") or gameFolder:FindFirstChild("Minions") or gameFolder:FindFirstChild("Clones")
+        if summonsFolder then
+            for _, summon in ipairs(summonsFolder:GetChildren()) do addEntity(summon) end
+        end
+
+        local stagesFolder = gameFolder:FindFirstChild("Stages")
+        if stagesFolder then
+            for _, stage in ipairs(stagesFolder:GetChildren()) do
+                local spawns = stage:FindFirstChild("Spawns") or stage
+                for _, mob in ipairs(spawns:GetChildren()) do addEntity(mob) end
+            end
+        end
+    end
+
+    local wsEnemies = workspace:FindFirstChild("Enemies") or workspace:FindFirstChild("Virus")
+    if wsEnemies then
+        for _, enemy in ipairs(wsEnemies:GetChildren()) do addEntity(enemy) end
+    end
+
+    for _, obj in ipairs(workspace:GetChildren()) do
+        if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
+            local name = obj.Name:lower()
+            if name:find("mob") or name:find("enemy") or name:find("clone") or name:find("summon") or name:find("minion") or name:find("boss") or name:find("virus") or obj:FindFirstChildOfClass("Humanoid") then
+                addEntity(obj)
+            end
+        end
+    end
+
+    return list
+end
+
+local function getClosestLivingEnemy()
+    local _, root = getCharacter()
+    if not root then return nil, nil end
+
+    local enemies
+    if Settings.SelectedPhase == "Incursão" then
+        enemies = getAllLivingEnemiesIncursion()
+    else
+        enemies = getAllLivingEnemiesBleach()
+    end
+
+    local closestEnemy, closestPart = nil, nil
+    local minDistance = math.huge
+
+    for _, enemy in ipairs(enemies) do
+        local targetPart = getEntityTargetPart(enemy)
+        if targetPart and targetPart:IsA("BasePart") then
+            local dist = (root.Position - targetPart.Position).Magnitude
+            if dist < minDistance then
+                minDistance = dist
+                closestEnemy = enemy
+                closestPart = targetPart
+            end
+        end
+    end
+
+    return closestEnemy, closestPart
+end
+
+-- ====================================================================
+-- 8. CONTROLES DE INTERFACE (PRIORIDADE ENGAGE > PLAY AGAIN)
+-- ====================================================================
+local function checkDungeonStartButton()
+    local pguiRef = player:FindFirstChild("PlayerGui")
+    if not pguiRef then return end
+    local main = pguiRef:FindFirstChild("Main")
+    local df = main and main:FindFirstChild("DungeonFrame")
+    if df and df.Visible then
+        local startBtn = df:FindFirstChild("Start") or df:FindFirstChild("Play")
+        if startBtn and startBtn:IsA("GuiObject") and startBtn.Visible then
+            triggerGuiButton(startBtn)
+            dungeonStartTime = tick()
+            isVirusActive = false
+        end
+    end
+end
+
+local function checkAndClickEngageButton()
+    local pguiRef = player:FindFirstChild("PlayerGui")
+    if not pguiRef or not isScriptRunning then return false end
+
+    local main = pguiRef:FindFirstChild("Main")
+    local virusFrame = main and main:FindFirstChild("VirusFrame")
+    if virusFrame and virusFrame.Visible then
+        local confirmBtn = virusFrame:FindFirstChild("Confirm", true) or virusFrame:FindFirstChild("Engage", true)
+        if confirmBtn and confirmBtn:IsA("GuiObject") and confirmBtn.Visible then
+            triggerGuiButton(confirmBtn)
+            dungeonStartTime = tick()
+            isVirusActive = true
+            isDungeonEnded = false
+            return true
+        end
+    end
+
+    for _, desc in ipairs(pguiRef:GetDescendants()) do
+        if (desc:IsA("TextButton") or desc:IsA("ImageButton")) and desc.Visible then
+            local txt = desc:IsA("TextButton") and desc.Text:lower() or desc.Name:lower()
+            if txt:find("engage") or (txt:find("confirm") and desc:FindFirstAncestorWhichIsA("Frame") and desc:FindFirstAncestorWhichIsA("Frame").Name:lower():find("virus")) then
+                triggerGuiButton(desc)
+                dungeonStartTime = tick()
+                isVirusActive = true
+                isDungeonEnded = false
+                return true
+            end
+        end
+    end
+
+    return false
+end
+
+local function checkDungeonEnd()
+    local pguiRef = player:FindFirstChild("PlayerGui")
+    if not pguiRef or not isScriptRunning then return false, nil end
+
+    -- Se o Boss Secreto estiver ativo (em qualquer fase), não encerra enquanto houver inimigos
+    if isVirusActive then
+        local enemies = (Settings.SelectedPhase == "Incursão") and getAllLivingEnemiesIncursion() or getAllLivingEnemiesBleach()
+        if #enemies > 0 then
+            return false, nil
+        else
+            isVirusActive = false
+        end
+    end
+
+    local main = pguiRef:FindFirstChild("Main")
+    local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
+    local dungeonStats = dungeonFrame and dungeonFrame:FindFirstChild("DungeonStats")
+    local endActions = dungeonStats and dungeonStats:FindFirstChild("EndActions")
+    local playAgainBtn = endActions and endActions:FindFirstChild("PlayAgain")
+
+    if playAgainBtn and playAgainBtn:IsA("GuiObject") and playAgainBtn.Visible and dungeonStats.Visible then
+        return true, playAgainBtn
+    end
+
+    return false, nil
+end
+
+-- ====================================================================
+-- 9. TRAVA E EXECUÇÃO DE COMBATE
+-- ====================================================================
+local function isPortalTransitionActive()
+    if isRespawning or isTransitioning or enteringPortal then return true end
+    if (tick() - dungeonStartTime) < Settings.StartWaitTime then return true end
+
+    if Settings.SelectedPhase == "Bleach (Fase 4)" and not isVirusActive then
+        local _, root = getCharacter()
+        if not root then return true end
+
+        local wave = getCurrentWaveNumber()
+        local inRoom1 = root.Position.Z < 2100 and root.Position.Y > -450
+        local inBossRoom = root.Position.Y > -400 and root.Position.Z > 2800
+
+        if wave >= 8 and inRoom1 then return true end
+        if wave >= 12 and not inBossRoom then return true end
+    end
+    return false
+end
+
+local function executeNativeAttack()
+    if isDungeonEnded or isRespawning or isTransitioning or enteringPortal or not isScriptRunning or isPortalTransitionActive() then return end
+    
+    comboIndex = (comboIndex % 4) + 1
+    local weapon = getEffectiveWeaponName()
+
+    local rem = findAttackRemote()
+    if rem then
+        pcall(function()
+            rem:FireServer("M1", weapon, comboIndex, 0, 0, 2)
+        end)
+    end
+
+    local char = player.Character
+    if char then
+        local tool = char:FindFirstChildOfClass("Tool")
+        if tool then 
+            pcall(function() tool:Activate() end) 
+        end
+    end
+end
+
+task.spawn(function()
+    while isScriptRunning do
+        if Settings.AutoAttack and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and not isPortalTransitionActive() then
+            local char, _, hum = getCharacter()
+            if char and hum and hum.Health > 0 then
+                executeNativeAttack()
+            end
+        end
+        task.wait(Settings.AttackSpeed)
+    end
+end)
+
+task.spawn(function()
+    while isScriptRunning do
+        if Settings.AutoSkills and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and not isPortalTransitionActive() then
+            local char, root, hum = getCharacter()
+            if char and root and hum and hum.Health > 0 then
+                if (tick() - lastSkillUse) >= Settings.SkillCooldown then
+                    local _, enemyPart = getClosestLivingEnemy()
+                    if enemyPart and enemyPart.Parent then
+                        local distance = (root.Position - enemyPart.Position).Magnitude
+                        if distance <= Settings.SkillMaxDistance then
+                            lastSkillUse = tick()
+                            local hotbarList = getDynamicHotbar()
+                            if hotbarList then
+                                local spell1 = hotbarList:FindFirstChild("Spell1", true) or hotbarList:FindFirstChild("Z", true)
+                                local spell2 = hotbarList:FindFirstChild("Spell2", true) or hotbarList:FindFirstChild("X", true)
+                                local ultimateBtn = hotbarList:FindFirstChild("Ultimate", true) or hotbarList:FindFirstChild("Spell3", true) or hotbarList:FindFirstChild("C", true)
+
+                                if spell1 then triggerGuiButton(spell1) else pressKey(Enum.KeyCode.Z) end
+                                task.wait(0.06)
+                                if spell2 then triggerGuiButton(spell2) else pressKey(Enum.KeyCode.X) end
+                                task.wait(0.06)
+                                if ultimateBtn then triggerGuiButton(ultimateBtn) end
+                                pressKey(Enum.KeyCode.C)
+                            else
+                                pressKey(Enum.KeyCode.Z)
+                                task.wait(0.06)
+                                pressKey(Enum.KeyCode.X)
+                                task.wait(0.06)
+                                pressKey(Enum.KeyCode.C)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        task.wait(0.1)
+    end
+end)
+
+-- ====================================================================
+-- 10. MÁQUINAS DE ESTADOS
+-- ====================================================================
+local function passThroughPortalSafely(targetPortalCFrame)
+    local char, root, hum = getCharacter()
+    if not root or not hum or enteringPortal then return end
+
+    local dist = (root.Position - targetPortalCFrame.Position).Magnitude
+
+    if dist > 8 then
+        smoothFlyTo(targetPortalCFrame)
+    else
+        enteringPortal = true
+        stopMovement()
+        
+        root.CFrame = targetPortalCFrame * CFrame.new(0, 0, 2)
+        local forwardDir = (targetPortalCFrame.LookVector * 16)
+        root.AssemblyLinearVelocity = forwardDir
+        
+        if hum then
+            hum:MoveTo(targetPortalCFrame.Position + (targetPortalCFrame.LookVector * 6))
+        end
+
+        task.wait(0.8)
+        enteringPortal = false
+    end
+end
+
+-- 1. FASE BLEACH
+local function runBleachPhaseFlow()
+    local char, root = getCharacter()
+    if not root then return end
+
+    if (tick() - dungeonStartTime) < Settings.StartWaitTime then
+        stopMovement()
+        return
+    end
+
+    local currentRoom = "Room1"
+    if root.Position.Y < -450 then
+        currentRoom = "Room2"
+    elseif root.Position.Y > -400 and root.Position.Z > 2800 then
+        currentRoom = "BossRoom"
+    end
+
+    if currentRoom ~= lastRoomState then
+        lastRoomState = currentRoom
+        stopMovement()
+        enteringPortal = false
+        isTransitioning = true
+        task.wait(0.6)
+        isTransitioning = false
+        return
+    end
+
+    if enteringPortal then return end
+
+    -- Se o Virus estiver ativo, prioriza o combate direto ao invés de buscar portais
+    if not isVirusActive then
+        local wave = getCurrentWaveNumber()
+
+        if wave >= 12 and currentRoom ~= "BossRoom" then
+            passThroughPortalSafely(PORTAL_2_BOSS_POS)
+            return
+        end
+
+        if wave >= 8 and currentRoom == "Room1" then
+            passThroughPortalSafely(PORTAL_1_WAVE8_POS)
+            return
+        end
+    end
+
+    local enemies = getAllLivingEnemiesBleach()
+    if #enemies > 0 then
+        local enemy, enemyPart = getClosestLivingEnemy()
+        if enemy and enemyPart then
+            while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) and not isPortalTransitionActive() do
+                local _, currentRoot = getCharacter()
+                if not currentRoot then break end
+
+                if not isVirusActive then
+                    local currentWave = getCurrentWaveNumber()
+                    local isR1 = currentRoot.Position.Z < 2100 and currentRoot.Position.Y > -450
+                    local isBoss = currentRoot.Position.Y > -400 and currentRoot.Position.Z > 2800
+
+                    if (currentWave >= 8 and isR1) or (currentWave >= 12 and not isBoss) then
+                        break
+                    end
+                end
+
+                local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
+                local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
+                smoothFlyTo(targetCFrame)
+                task.wait(0.05)
+            end
+        end
+    else
+        stopMovement()
+    end
+end
+
+-- 2. FASE INCURSÃO
+local function runIncursionPhaseFlow()
+    if (tick() - dungeonStartTime) < Settings.StartWaitTime then
+        stopMovement()
+        return
+    end
+
+    local enemies = getAllLivingEnemiesIncursion()
+
+    if #enemies > 0 then
+        local enemy, enemyPart = getClosestLivingEnemy()
+        if enemy and enemyPart then
+            local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
+            local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
+            smoothFlyTo(targetCFrame)
+        end
+    else
+        stopMovement()
+    end
+end
+
+-- ====================================================================
+-- LOOP PRINCIPAL
+-- ====================================================================
+task.spawn(function()
+    while isScriptRunning do
+        if Settings.AutoFarm and not isRespawning then
+            local char, root, hum = getCharacter()
+            if char and root and hum and hum.Health > 0 then
+                
+                if Settings.AutoStart then
+                    checkDungeonStartButton()
+                end
+
+                local engaged = false
+                if Settings.AutoEngage then
+                    engaged = checkAndClickEngageButton()
+                end
+
+                if engaged then
+                    isDungeonEnded = false
+                    isVirusActive = true
+                    dungeonStartTime = tick()
+                    task.wait(1.5)
+                else
+                    local ended, playAgainBtn = checkDungeonEnd()
+                    if ended then
+                        isDungeonEnded = true
+                        isVirusActive = false
+                        stopMovement()
+                        
+                        if Settings.AutoEngage and checkAndClickEngageButton() then
+                            isDungeonEnded = false
+                            isVirusActive = true
+                            dungeonStartTime = tick()
+                            task.wait(1.5)
+                        elseif Settings.AutoPlayAgain and playAgainBtn then
+                            queueNextExecution()
+                            task.wait(0.8)
+                            triggerGuiButton(playAgainBtn)
+                            task.wait(3.0)
+                        end
+                    else
+                        isDungeonEnded = false
+                        
+                        if Settings.SelectedPhase == "Bleach (Fase 4)" then
+                            runBleachPhaseFlow()
+                        elseif Settings.SelectedPhase == "Incursão" then
+                            runIncursionPhaseFlow()
+                        end
+                    end
+                end
+            else
+                stopMovement()
+            end
+        else
+            stopMovement()
+        end
+        task.wait(0.05)
+    end
+end)
+
+-- ====================================================================
+-- 11. INTERFACE FLUENT COM CONTROLE DE VELOCIDADE
+-- ====================================================================
+local Window = Fluent:CreateWindow({
+    Title = "Hub dos Rapazes",
+    SubTitle = "Anime Dungeons",
+    TabWidth = 140,
+    Size = UDim2.fromOffset(520, 420),
+    Acrylic = false,
+    Theme = "Dark",
+    MinimizeKey = Enum.KeyCode.RightControl
+})
+
+local Tabs = {
+    Farm = Window:AddTab({ Title = "Farm", Icon = "crosshair" }),
+    Settings = Window:AddTab({ Title = "Settings", Icon = "settings" })
+}
+
+local toggleGui = Instance.new("ScreenGui")
+toggleGui.Name = "IBdihP_PersistentToggle"
+toggleGui.ResetOnSpawn = false
+toggleGui.DisplayOrder = 999999
+toggleGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+pcall(function() toggleGui.Parent = CoreGui end)
+if not toggleGui.Parent then toggleGui.Parent = player:WaitForChild("PlayerGui") end
+
+local floatBtn = Instance.new("TextButton")
+floatBtn.Name = "FloatButton"
+floatBtn.Parent = toggleGui
+floatBtn.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+floatBtn.Position = UDim2.new(0.02, 0, 0.35, 0)
+floatBtn.Size = UDim2.new(0, 48, 0, 48)
+floatBtn.Text = "HUB"
+floatBtn.TextColor3 = Color3.fromRGB(0, 255, 170)
+floatBtn.TextSize = 12
+floatBtn.Font = Enum.Font.GothamBold
+floatBtn.Active = true
+floatBtn.Draggable = true
+floatBtn.Visible = false
+
+local uiCorner = Instance.new("UICorner", floatBtn)
+uiCorner.CornerRadius = UDim.new(0, 10)
+
+local uiStroke = Instance.new("UIStroke", floatBtn)
+uiStroke.Color = Color3.fromRGB(0, 255, 170)
+uiStroke.Thickness = 1.6
+uiStroke.Parent = floatBtn
+
+local function toggleUI(show)
+    floatBtn.Visible = not show
+    for _, gui in ipairs({CoreGui, player.PlayerGui}) do
+        for _, child in ipairs(gui:GetChildren()) do
+            if child:IsA("ScreenGui") and child ~= toggleGui and (child.Name:find("Fluent") or child.Name:find("ScreenGui")) then
+                child.Enabled = show
+            end
+        end
+    end
+end
+
+floatBtn.MouseButton1Click:Connect(function()
+    toggleUI(true)
+end)
+
+local function destroyScript()
+    isScriptRunning = false
+    Settings.AutoFarm = false
+    Settings.AutoAttack = false
+    Settings.AutoSkills = false
+    
+    stopMovement()
+    
+    if charConnection then
+        charConnection:Disconnect()
+        charConnection = nil
+    end
+
+    if singletonTag and singletonTag.Parent then
+        singletonTag:Destroy()
+    end
+    local st = CoreGui:FindFirstChild(UNIQUE_ID)
+    if st then st:Destroy() end
+
+    if toggleGui and toggleGui.Parent then
+        toggleGui:Destroy()
+    end
+    for _, gui in ipairs({CoreGui, player.PlayerGui}) do
+        for _, child in ipairs(gui:GetChildren()) do
+            if child.Name == "IBdihP_PersistentToggle" or child.Name:find("Fluent") then
+                pcall(function() child:Destroy() end)
+            end
+        end
+    end
+end
+
+task.spawn(function()
+    task.wait(0.8)
+    for _, gui in ipairs({CoreGui, player.PlayerGui}) do
+        for _, btn in ipairs(gui:GetDescendants()) do
+            if (btn:IsA("ImageButton") or btn:IsA("TextButton")) then
+                if btn.Name:lower():find("close") then
+                    btn.MouseButton1Click:Connect(function()
+                        destroyScript()
+                    end)
+                elseif btn.Name:lower():find("min") then
+                    btn.MouseButton1Click:Connect(function()
+                        toggleUI(false)
+                    end)
+                end
+            end
+        end
+    end
+end)
+
+local PhaseSection = Tabs.Farm:AddSection("Fase Ativa")
+
+PhaseSection:AddDropdown("PhaseSelector", {
+    Title = "Selecionar Fase",
+    Values = { "Bleach (Fase 4)", "Incursão" },
+    Default = Settings.SelectedPhase,
+    Callback = function(Value)
+        Settings.SelectedPhase = Value
+        saveConfig()
+    end
+})
+
+local WeaponSection = Tabs.Farm:AddSection("Configuração de Arma")
+
+local WeaponInput = WeaponSection:AddInput("WeaponInputBox", {
+    Title = "Arma Equipada / Nome",
+    Default = Settings.CustomWeaponName,
+    Placeholder = "Ex: VoidRods, Katana...",
+    Numeric = false,
+    Finished = true,
+    Callback = function(Value)
+        Settings.CustomWeaponName = Value
+        saveConfig()
+    end
+})
+
+WeaponSection:AddButton({
+    Title = "🔍 Detectar Arma da Mão",
+    Description = "Lê automaticamente o nome da arma do personagem/inventário",
+    Callback = function()
+        local detected = detectCurrentWeaponDetailed()
+        if detected and detected ~= "" then
+            Settings.CustomWeaponName = detected
+            WeaponInput:SetValue(detected)
+            saveConfig()
+            Fluent:Notify({
+                Title = "Arma Detectada!",
+                Content = "Arma identificada: " .. tostring(detected),
+                Duration = 4
+            })
+        else
+            Fluent:Notify({
+                Title = "Nenhuma Arma Encontrada",
+                Content = "Digite o nome exato da arma na caixa de texto.",
+                Duration = 4
+            })
+        end
+    end
+})
+
+local CombatSection = Tabs.Farm:AddSection("Controles de Farm")
+
+CombatSection:AddToggle("AutoFarmToggle", {
+    Title = "Iniciar Auto Farm",
+    Description = "Executa a rota mapeada da fase selecionada",
+    Default = true,
+    Callback = function(Value)
+        Settings.AutoFarm = Value
+        if not Value then
+            stopMovement()
+        end
+    end
+})
+
+CombatSection:AddToggle("AutoEngageToggle", {
+    Title = "Auto Engage (Boss Secreto)",
+    Description = "Prioridade: Clica em Engage antes do Play Again",
+    Default = true,
+    Callback = function(Value)
+        Settings.AutoEngage = Value
+    end
+})
+
+CombatSection:AddToggle("AutoPlayAgainToggle", {
+    Title = "Auto Play Again",
+    Description = "Reinicia a partida automaticamente ao vencer/perder",
+    Default = true,
+    Callback = function(Value)
+        Settings.AutoPlayAgain = Value
+    end
+})
+
+CombatSection:AddToggle("AutoStartToggle", {
+    Title = "Auto Start Dungeon",
+    Description = "Inicia a fase sozinho",
+    Default = true,
+    Callback = function(Value)
+        Settings.AutoStart = Value
+    end
+})
+
+CombatSection:AddSlider("StartWaitTimeSlider", {
+    Title = "Espera Inicial (segundos)",
+    Default = Settings.StartWaitTime,
+    Min = 1.0,
+    Max = 8.0,
+    Rounding = 1,
+    Callback = function(Value)
+        Settings.StartWaitTime = Value
+        saveConfig()
+    end
+})
+
+CombatSection:AddToggle("AutoAttackToggle", {
+    Title = "Auto Attack (M1)",
+    Description = "Dispara os ataques básicos continuamente",
+    Default = true,
+    Callback = function(Value)
+        Settings.AutoAttack = Value
+    end
+})
+
+CombatSection:AddToggle("AutoSkillsToggle", {
+    Title = "Auto Skills (Z, X e Ultimate)",
+    Description = "Dispara skills apenas perto de inimigos",
+    Default = true,
+    Callback = function(Value)
+        Settings.AutoSkills = Value
+    end
+})
+
+CombatSection:AddSlider("SkillMaxDistSlider", {
+    Title = "Distância das Skills (studs)",
+    Default = Settings.SkillMaxDistance,
+    Min = 8,
+    Max = 40,
+    Rounding = 0,
+    Callback = function(Value)
+        Settings.SkillMaxDistance = Value
+    end
+})
+
+CombatSection:AddSlider("AttackSpeedSlider", {
+    Title = "Velocidade do Ataque (segundos)",
+    Default = Settings.AttackSpeed,
+    Min = 0.04,
+    Max = 0.35,
+    Rounding = 2,
+    Callback = function(Value)
+        Settings.AttackSpeed = Value
+        saveConfig()
+    end
+})
+
+CombatSection:AddSlider("SkillCooldownSlider", {
+    Title = "Intervalo das Skills (segundos)",
+    Default = Settings.SkillCooldown,
+    Min = 0.2,
+    Max = 4,
+    Rounding = 1,
+    Callback = function(Value)
+        Settings.SkillCooldown = Value
+        saveConfig()
+    end
+})
+
+CombatSection:AddSlider("HeightAboveEnemy", {
+    Title = "Altura acima do Inimigo",
+    Default = Settings.HeightAboveEnemy,
+    Min = 1,
+    Max = 20,
+    Rounding = 1,
+    Callback = function(Value)
+        Settings.HeightAboveEnemy = Value
+        saveConfig()
+    end
+})
+
+CombatSection:AddSlider("TweenSpeed", {
+    Title = "Velocidade do Voo",
+    Default = Settings.TweenSpeed,
+    Min = 20,
+    Max = 120,
+    Rounding = 0,
+    Callback = function(Value)
+        Settings.TweenSpeed = Value
+        saveConfig()
+    end
+})
+
+local SettingsSection = Tabs.Settings:AddSection("Gerenciamento do Script")
+
+SettingsSection:AddButton({
+    Title = "Encerrar Script por Completo",
+    Description = "Para todos os loops e libera o carregamento de uma nova versão",
+    Callback = function()
+        destroyScript()
+    end
+})
+
+Window:SelectTab(Tabs.Farm)
