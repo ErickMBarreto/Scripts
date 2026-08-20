@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES
+-- HUB DOS RAPAZES - ANIME DUNGEONS (VERSÃO FINAL DEFINITIVA)
 -- ====================================================================
 
 -- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA (Singleton Anti-Duplicação)
@@ -239,27 +239,18 @@ local function smoothFlyTo(targetCFrame)
     currentTween:Play()
 end
 
+-- Acionador limpo sem mover ponteiro do mouse
 local function triggerGuiButton(btn)
     if not btn or not isScriptRunning then return end
     pcall(function()
-        if firesignal then
-            if btn.Activated then firesignal(btn.Activated) end
-            if btn.MouseButton1Click then firesignal(btn.MouseButton1Click) end
-            if btn.MouseButton1Down then firesignal(btn.MouseButton1Down) end
-            if btn.MouseButton1Up then firesignal(btn.MouseButton1Up) end
-        end
-        if getconnections then
-            if btn.Activated then
-                for _, c in ipairs(getconnections(btn.Activated)) do pcall(function() c:Fire() end) end
+        for _, evName in ipairs({"Activated", "MouseButton1Click", "MouseButton1Down", "MouseButton1Up"}) do
+            if btn[evName] and firesignal then
+                pcall(function() firesignal(btn[evName]) end)
             end
-            if btn.MouseButton1Click then
-                for _, c in ipairs(getconnections(btn.MouseButton1Click)) do pcall(function() c:Fire() end) end
-            end
-            if btn.MouseButton1Down then
-                for _, c in ipairs(getconnections(btn.MouseButton1Down)) do pcall(function() c:Fire() end) end
-            end
-            if btn.MouseButton1Up then
-                for _, c in ipairs(getconnections(btn.MouseButton1Up)) do pcall(function() c:Fire() end) end
+            if btn[evName] and getconnections then
+                for _, c in ipairs(getconnections(btn[evName])) do
+                    pcall(function() c:Fire() end)
+                end
             end
         end
     end)
@@ -652,7 +643,7 @@ local function executeDirectAutoSell()
     isSellingInProgress = false
 end
 
--- 9. MOTOR DE AUTO-CLAIM 100% INVISÍVEL (SEM ABRIR JANELA)
+-- 9. MOTOR DE AUTO-CLAIM SILENCIOSO (SEM MOVER MOUSE / SEM ABRIR JANELA)
 local function executeAutoClaimQuests()
     if not Settings.AutoClaimQuests or isQuestClaimInProgress or not isScriptRunning then return end
 
@@ -666,7 +657,6 @@ local function executeAutoClaimQuests()
 
     isQuestClaimInProgress = true
 
-    -- Trava para manter a interface invisível para o jogador
     local originalVisible = questsFrame.Visible
     questsFrame.Visible = false
 
@@ -690,18 +680,19 @@ local function executeAutoClaimQuests()
                         local txt = progressLabel.Text:lower()
 
                         if txt == "claim" or txt == "resgatar" then
-                            -- 1. Seleciona a missão na memória
+                            -- Seleção na memória interna
                             triggerGuiButton(slot)
                             task.wait(0.1)
 
-                            -- 2. Clica no botão Claim do painel invisível
+                            -- Clique no botão de Claim
                             triggerGuiButton(claimBtn)
                             
-                            -- 3. Disparo de segurança no Remote
                             if questRemote then
                                 pcall(function()
                                     questRemote:FireServer("Claim", slot.Name)
                                     questRemote:FireServer(slot.Name)
+                                    local num = tonumber(slot.Name:match("%d+"))
+                                    if num then questRemote:FireServer(num) end
                                 end)
                             end
 
@@ -714,7 +705,6 @@ local function executeAutoClaimQuests()
         end
     end
 
-    -- Restaura o estado de visibilidade
     questsFrame.Visible = originalVisible
 
     if claimedTotal > 0 then
@@ -1030,7 +1020,6 @@ task.spawn(function()
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 
-                -- Agendamento ordenado das automações de início de fase
                 if not initialRoutinesScheduled then
                     initialRoutinesScheduled = true
                     
@@ -1042,7 +1031,7 @@ task.spawn(function()
                         end
                     end)
 
-                    -- 2. Auto-Claim Quests aos 13 segundos (3s após a venda, 100% invisível)
+                    -- 2. Auto-Claim Quests aos 13 segundos (sem mover mouse, 100% invisível)
                     task.spawn(function()
                         task.wait(13)
                         if isScriptRunning and Settings.AutoClaimQuests and not isDungeonEnded then
@@ -1072,7 +1061,6 @@ task.spawn(function()
                         isVirusActive = false
                         stopMovement()
                         
-                        -- Checagem de segurança de missões ao finalizar a partida
                         if Settings.AutoClaimQuests then
                             pcall(executeAutoClaimQuests)
                             task.wait(0.2)
