@@ -1,6 +1,8 @@
 -- ====================================================================
--- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA (Singleton Anti-Duplicação)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (VERSÃO TRANCADA + AUTO-CLAIM)
 -- ====================================================================
+
+-- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA (Singleton Anti-Duplicação)
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
 
@@ -23,9 +25,7 @@ for _, gui in ipairs({CoreGui, Players.LocalPlayer and Players.LocalPlayer:FindF
     end
 end
 
--- ====================================================================
 -- 2. REEXECUÇÃO AUTOMÁTICA INFINITA (Delta / Mobile)
--- ====================================================================
 local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Teste.lua"
 
 local function queueNextExecution()
@@ -43,9 +43,7 @@ end
 
 queueNextExecution()
 
--- ====================================================================
 -- 3. ESPERA DE CARREGAMENTO E TRAVA DO LOBBY
--- ====================================================================
 if not game:IsLoaded() then
     game.Loaded:Wait()
 end
@@ -75,9 +73,7 @@ if not inDungeon then
     return
 end
 
--- ====================================================================
--- 4. SISTEMA DE SALVAMENTO DE CONFIGURAÇÃO / PRESET
--- ====================================================================
+-- 4. SISTEMA DE CONFIGURAÇÃO / PERSISTÊNCIA JSON
 local HttpService = game:GetService("HttpService")
 local CONFIG_FILE = "HubRapazes_Config.json"
 
@@ -90,6 +86,7 @@ local Settings = {
     AutoStart = true,
     AutoPlayAgain = true,
     AutoEngage = true,
+    AutoClaimQuests = true,
     StartWaitTime = 3.5,
     SkillCooldown = 0.8,
     SkillMaxDistance = 20,
@@ -118,6 +115,7 @@ local function saveConfig()
                 AttackSpeed = Settings.AttackSpeed,
                 SkillCooldown = Settings.SkillCooldown,
                 StartWaitTime = Settings.StartWaitTime,
+                AutoClaimQuests = Settings.AutoClaimQuests,
                 AutoSell = Settings.AutoSell,
                 SellRare = Settings.SellRare,
                 SellEpic = Settings.SellEpic,
@@ -145,6 +143,7 @@ local function loadConfig()
                 if data.AttackSpeed ~= nil then Settings.AttackSpeed = data.AttackSpeed end
                 if data.SkillCooldown ~= nil then Settings.SkillCooldown = data.SkillCooldown end
                 if data.StartWaitTime ~= nil then Settings.StartWaitTime = data.StartWaitTime end
+                if data.AutoClaimQuests ~= nil then Settings.AutoClaimQuests = data.AutoClaimQuests end
                 if data.AutoSell ~= nil then Settings.AutoSell = data.AutoSell end
                 if data.SellRare ~= nil then Settings.SellRare = data.SellRare end
                 if data.SellEpic ~= nil then Settings.SellEpic = data.SellEpic end
@@ -160,9 +159,7 @@ end
 
 loadConfig()
 
--- ====================================================================
 -- 5. SERVIÇOS E ESTADOS GLOBAIS
--- ====================================================================
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
 local TweenService = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -173,8 +170,9 @@ local currentTween = nil
 local charConnection = nil
 
 local equipRemote = ReplicatedStorage:WaitForChild("Remotes", 10) and ReplicatedStorage.Remotes:WaitForChild("Equip", 10)
+local questRemote = ReplicatedStorage:WaitForChild("Remotes", 10) and ReplicatedStorage.Remotes:WaitForChild("Quest", 10)
 
--- COORDENADAS REAIS DOS PORTAIS (FASE 4 - BLEACH TRANCADA)
+-- COORDENADAS DOS PORTAIS (FASE 4 - BLEACH)
 local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0)
 local PORTAL_2_BOSS_POS  = CFrame.new(5411.5, -561.0, 2550.0)
 
@@ -184,10 +182,12 @@ local isTransitioning = false
 local enteringPortal = false
 local isVirusActive = false
 local isSellingInProgress = false
+local isQuestClaimInProgress = false
 local initialSellScheduled = false
 local lastRoomState = "Room1"
 
 local lastSkillUse = 0
+local lastQuestCheck = 0
 local comboIndex = 1
 local isDungeonEnded = false
 local attackRemote = nil
@@ -275,9 +275,7 @@ local function pressKey(keyCode)
     end)
 end
 
--- ====================================================================
 -- 6. MOTOR DE COMBATE DIRETO E SCANNER DE ARMA
--- ====================================================================
 local function findAttackRemote()
     if attackRemote and attackRemote.Parent then return attackRemote end
     for _, container in ipairs({ReplicatedStorage, ReplicatedStorage:FindFirstChild("Remotes"), ReplicatedStorage:FindFirstChild("Events")}) do
@@ -341,9 +339,7 @@ local function getDynamicHotbar()
     return nil
 end
 
--- ====================================================================
--- 7. DETECÇÕES DE INIMIGOS (SEPARADAS POR MODO)
--- ====================================================================
+-- 7. DETECÇÃO DE INIMIGOS (BLEACH / INCURSÃO / VIRUS)
 local function getCurrentWaveNumber()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if pguiRef then
@@ -398,7 +394,6 @@ local function isEntityAlive(obj)
     return false
 end
 
--- A. BUSCA: FASE 4 (BLEACH COM SUPORTE A VIRUS APÓS ENGAGE)
 local function getAllLivingEnemiesBleach()
     local list = {}
     local char = player.Character
@@ -447,7 +442,6 @@ local function getAllLivingEnemiesBleach()
     return list
 end
 
--- B. BUSCA: INCURSÃO (SUPORTE A VIRUS / SECRET BOSS / SUMMONS)
 local function getAllLivingEnemiesIncursion()
     local list = {}
     local char = player.Character
@@ -535,9 +529,7 @@ local function getClosestLivingEnemy()
     return closestEnemy, closestPart
 end
 
--- ====================================================================
--- 8. MOTOR DE AUTO-SELL DIRETO COM FILTRO RIGOROSO DE TIPO
--- ====================================================================
+-- 8. MOTOR DE AUTO-SELL TRANCADO (FILTRO DE TIPO E RARIDADE)
 local function getItemRarity(slot)
     local grad = slot:FindFirstChild("RarityGradient", true)
     if not grad or not grad:IsA("UIGradient") then return "Unknown" end
@@ -647,7 +639,6 @@ local function executeDirectAutoSell()
         end
     end
 
-    -- DISPARO COM VALIDAÇÃO (NÃO DISPARA VAZIO)
     if #itemsToSell > 0 then
         pcall(function()
             equipRemote:FireServer("Sell", itemsToSell)
@@ -662,9 +653,83 @@ local function executeDirectAutoSell()
     isSellingInProgress = false
 end
 
--- ====================================================================
--- 9. CONTROLES DE INTERFACE (PRIORIDADE ENGAGE > PLAY AGAIN)
--- ====================================================================
+-- 9. MOTOR DE AUTO-CLAIM DE MISSÕES (SILENCIOSO E COMPLETO)
+local function executeAutoClaimQuests()
+    if not Settings.AutoClaimQuests or isQuestClaimInProgress or not isScriptRunning then return end
+
+    local main = pgui:FindFirstChild("Main")
+    local sideBtn = main and main:FindFirstChild("SideBarFrame") and main.SideBarFrame:FindFirstChild("Buttons") and main.SideBarFrame.Buttons:FindFirstChild("Quests")
+    local questsFrame = main and main:FindFirstChild("MainFrame") and main.MainFrame:FindFirstChild("Quests")
+    local questsHolder = questsFrame and questsFrame:FindFirstChild("QuestsHolder")
+
+    if not sideBtn and not questsFrame then return end
+
+    isQuestClaimInProgress = true
+
+    local wasClosed = false
+    if questsFrame and not questsFrame.Visible and sideBtn then
+        wasClosed = true
+        triggerGuiButton(sideBtn)
+        task.wait(0.35)
+    end
+
+    questsFrame = main and main:FindFirstChild("MainFrame") and main.MainFrame:FindFirstChild("Quests")
+    questsHolder = questsFrame and questsFrame:FindFirstChild("QuestsHolder")
+
+    if questsFrame and questsHolder then
+        local tabs = {
+            questsFrame:FindFirstChild("Buttons") and questsFrame.Buttons:FindFirstChild("Hourly"),
+            questsFrame:FindFirstChild("Buttons") and questsFrame.Buttons:FindFirstChild("Daily"),
+            questsFrame:FindFirstChild("Buttons") and questsFrame.Buttons:FindFirstChild("Weekly")
+        }
+
+        local claimedTotal = 0
+
+        for _, tabBtn in ipairs(tabs) do
+            if tabBtn then
+                triggerGuiButton(tabBtn)
+                task.wait(0.12)
+
+                for _, slot in ipairs(questsHolder:GetChildren()) do
+                    if slot:IsA("GuiButton") and slot.Visible ~= false then
+                        local progressLabel = slot:FindFirstChild("QuestProgress", true)
+                        if progressLabel and progressLabel:IsA("TextLabel") then
+                            local txt = progressLabel.Text:lower()
+
+                            if txt == "claim" or txt == "resgatar" then
+                                claimedTotal = claimedTotal + 1
+                                triggerGuiButton(slot)
+                                if questRemote then
+                                    pcall(function()
+                                        questRemote:FireServer("Claim", slot.Name)
+                                        questRemote:FireServer(slot.Name)
+                                    end)
+                                end
+                                task.wait(0.12)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        if claimedTotal > 0 then
+            Fluent:Notify({
+                Title = "Missões Resgatadas!",
+                Content = string.format("%d recompensa(s) de missão coletada(s) com sucesso!", claimedTotal),
+                Duration = 3.5
+            })
+        end
+    end
+
+    if wasClosed and sideBtn then
+        triggerGuiButton(sideBtn)
+    end
+
+    isQuestClaimInProgress = false
+end
+
+-- 10. CONTROLES DE INTERFACE (ENGAGE > PLAY AGAIN)
 local function checkDungeonStartButton()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef then return end
@@ -739,11 +804,9 @@ local function checkDungeonEnd()
     return false, nil
 end
 
--- ====================================================================
--- 10. TRAVA E EXECUÇÃO DE COMBATE
--- ====================================================================
+-- 11. TRAVA E EXECUÇÃO DE COMBATE
 local function isPortalTransitionActive()
-    if isRespawning or isTransitioning or enteringPortal or isSellingInProgress then return true end
+    if isRespawning or isTransitioning or enteringPortal or isSellingInProgress or isQuestClaimInProgress then return true end
     if (tick() - dungeonStartTime) < Settings.StartWaitTime then return true end
 
     if Settings.SelectedPhase == "Bleach (Fase 4)" and not isVirusActive then
@@ -761,7 +824,7 @@ local function isPortalTransitionActive()
 end
 
 local function executeNativeAttack()
-    if isDungeonEnded or isRespawning or isTransitioning or enteringPortal or isSellingInProgress or not isScriptRunning or isPortalTransitionActive() then return end
+    if isDungeonEnded or isRespawning or isTransitioning or enteringPortal or isSellingInProgress or isQuestClaimInProgress or not isScriptRunning or isPortalTransitionActive() then return end
     
     comboIndex = (comboIndex % 4) + 1
     local weapon = getEffectiveWeaponName()
@@ -784,7 +847,7 @@ end
 
 task.spawn(function()
     while isScriptRunning do
-        if Settings.AutoAttack and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and not isSellingInProgress and not isPortalTransitionActive() then
+        if Settings.AutoAttack and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and not isSellingInProgress and not isQuestClaimInProgress and not isPortalTransitionActive() then
             local char, _, hum = getCharacter()
             if char and hum and hum.Health > 0 then
                 executeNativeAttack()
@@ -796,7 +859,7 @@ end)
 
 task.spawn(function()
     while isScriptRunning do
-        if Settings.AutoSkills and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and not isSellingInProgress and not isPortalTransitionActive() then
+        if Settings.AutoSkills and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and not isSellingInProgress and not isQuestClaimInProgress and not isPortalTransitionActive() then
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 if (tick() - lastSkillUse) >= Settings.SkillCooldown then
@@ -833,9 +896,7 @@ task.spawn(function()
     end
 end)
 
--- ====================================================================
--- 11. MÁQUINAS DE ESTADOS
--- ====================================================================
+-- 12. MÁQUINAS DE ESTADOS & NAVEGAÇÃO
 local function passThroughPortalSafely(targetPortalCFrame)
     local char, root, hum = getCharacter()
     if not root or not hum or enteringPortal then return end
@@ -861,7 +922,6 @@ local function passThroughPortalSafely(targetPortalCFrame)
     end
 end
 
--- 1. FASE BLEACH
 local function runBleachPhaseFlow()
     local char, root = getCharacter()
     if not root then return end
@@ -921,7 +981,7 @@ local function runBleachPhaseFlow()
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
-            while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and not isSellingInProgress and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) and not isPortalTransitionActive() do
+            while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and not isSellingInProgress and not isQuestClaimInProgress and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) and not isPortalTransitionActive() do
                 local _, currentRoot = getCharacter()
                 if not currentRoot then break end
 
@@ -944,7 +1004,6 @@ local function runBleachPhaseFlow()
     end
 end
 
--- 2. FASE INCURSÃO
 local function runIncursionPhaseFlow()
     if (tick() - dungeonStartTime) < Settings.StartWaitTime then
         stopMovement()
@@ -965,16 +1024,14 @@ local function runIncursionPhaseFlow()
     end
 end
 
--- ====================================================================
--- LOOP PRINCIPAL (AUTO-SELL COM DELAY DE 10s PÓS-START)
--- ====================================================================
+-- LOOP PRINCIPAL (AUTO-SELL 10s PÓS-START + AUTO-CLAIM DE MISSÕES PERIÓDICO)
 task.spawn(function()
     while isScriptRunning do
         if Settings.AutoFarm and not isRespawning then
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 
-                -- Agenda e executa o Auto-Sell após 10 segundos do início
+                -- Auto-Sell agendado para 10s após o início da fase
                 if Settings.AutoSell and not initialSellScheduled then
                     initialSellScheduled = true
                     task.spawn(function()
@@ -983,6 +1040,12 @@ task.spawn(function()
                             executeDirectAutoSell()
                         end
                     end)
+                end
+
+                -- Auto-Claim Quests periódico (a cada 60s)
+                if Settings.AutoClaimQuests and (tick() - lastQuestCheck) >= 60 then
+                    lastQuestCheck = tick()
+                    task.spawn(executeAutoClaimQuests)
                 end
 
                 if Settings.AutoStart then
@@ -1006,6 +1069,12 @@ task.spawn(function()
                         isVirusActive = false
                         stopMovement()
                         
+                        -- Checagem final de missões após vencer a partida
+                        if Settings.AutoClaimQuests then
+                            pcall(executeAutoClaimQuests)
+                            task.wait(0.2)
+                        end
+
                         if Settings.AutoEngage and checkAndClickEngageButton() then
                             isDungeonEnded = false
                             isVirusActive = true
@@ -1037,9 +1106,7 @@ task.spawn(function()
     end
 end)
 
--- ====================================================================
--- 12. INTERFACE FLUENT
--- ====================================================================
+-- 13. INTERFACE FLUENT
 local Window = Fluent:CreateWindow({
     Title = "Hub dos Rapazes",
     SubTitle = "Anime Dungeons",
@@ -1108,6 +1175,7 @@ local function destroyScript()
     Settings.AutoAttack = false
     Settings.AutoSkills = false
     Settings.AutoSell = false
+    Settings.AutoClaimQuests = false
     
     stopMovement()
     
@@ -1406,6 +1474,26 @@ AutoSellTypeSection:AddToggle("SellSpellsToggle", {
 })
 
 -- ABA SETTINGS
+local QuestsSection = Tabs.Settings:AddSection("Automação de Missões (Quests)")
+
+QuestsSection:AddToggle("AutoClaimQuestsToggle", {
+    Title = "Auto-Claim de Missões (Hourly/Daily/Weekly)",
+    Description = "Resgata missões prontas a cada 60s e ao fim da partida",
+    Default = Settings.AutoClaimQuests,
+    Callback = function(Value)
+        Settings.AutoClaimQuests = Value
+        saveConfig()
+    end
+})
+
+QuestsSection:AddButton({
+    Title = "⚡ Resgatar Missões Agora",
+    Description = "Verifica e resgata imediatamente todas as abas",
+    Callback = function()
+        pcall(executeAutoClaimQuests)
+    end
+})
+
 local SettingsSection = Tabs.Settings:AddSection("Gerenciamento do Script")
 SettingsSection:AddButton({
     Title = "Encerrar Script por Completo",
