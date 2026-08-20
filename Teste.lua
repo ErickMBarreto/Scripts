@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (VERSÃO TRANCADA + AUTO-CLAIM INÍCIO)
+-- HUB DOS RAPAZES
 -- ====================================================================
 
 -- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA (Singleton Anti-Duplicação)
@@ -652,77 +652,77 @@ local function executeDirectAutoSell()
     isSellingInProgress = false
 end
 
--- 9. MOTOR DE AUTO-CLAIM DE MISSÕES (SILENCIOSO E COMPLETO)
+-- 9. MOTOR DE AUTO-CLAIM 100% INVISÍVEL (SEM ABRIR JANELA)
 local function executeAutoClaimQuests()
     if not Settings.AutoClaimQuests or isQuestClaimInProgress or not isScriptRunning then return end
 
     local main = pgui:FindFirstChild("Main")
-    local sideBtn = main and main:FindFirstChild("SideBarFrame") and main.SideBarFrame:FindFirstChild("Buttons") and main.SideBarFrame.Buttons:FindFirstChild("Quests")
     local questsFrame = main and main:FindFirstChild("MainFrame") and main.MainFrame:FindFirstChild("Quests")
     local questsHolder = questsFrame and questsFrame:FindFirstChild("QuestsHolder")
+    local infoPanel = questsFrame and questsFrame:FindFirstChild("Information")
+    local claimBtn = infoPanel and infoPanel:FindFirstChild("Claim")
 
-    if not sideBtn and not questsFrame then return end
+    if not questsFrame or not questsHolder or not claimBtn then return end
 
     isQuestClaimInProgress = true
 
-    local wasClosed = false
-    if questsFrame and not questsFrame.Visible and sideBtn then
-        wasClosed = true
-        triggerGuiButton(sideBtn)
-        task.wait(0.35)
-    end
+    -- Trava para manter a interface invisível para o jogador
+    local originalVisible = questsFrame.Visible
+    questsFrame.Visible = false
 
-    questsFrame = main and main:FindFirstChild("MainFrame") and main.MainFrame:FindFirstChild("Quests")
-    questsHolder = questsFrame and questsFrame:FindFirstChild("QuestsHolder")
+    local tabs = {
+        questsFrame:FindFirstChild("Buttons") and questsFrame.Buttons:FindFirstChild("Hourly"),
+        questsFrame:FindFirstChild("Buttons") and questsFrame.Buttons:FindFirstChild("Daily"),
+        questsFrame:FindFirstChild("Buttons") and questsFrame.Buttons:FindFirstChild("Weekly")
+    }
 
-    if questsFrame and questsHolder then
-        local tabs = {
-            questsFrame:FindFirstChild("Buttons") and questsFrame.Buttons:FindFirstChild("Hourly"),
-            questsFrame:FindFirstChild("Buttons") and questsFrame.Buttons:FindFirstChild("Daily"),
-            questsFrame:FindFirstChild("Buttons") and questsFrame.Buttons:FindFirstChild("Weekly")
-        }
+    local claimedTotal = 0
 
-        local claimedTotal = 0
+    for _, tabBtn in ipairs(tabs) do
+        if tabBtn then
+            triggerGuiButton(tabBtn)
+            task.wait(0.12)
 
-        for _, tabBtn in ipairs(tabs) do
-            if tabBtn then
-                triggerGuiButton(tabBtn)
-                task.wait(0.12)
+            for _, slot in ipairs(questsHolder:GetChildren()) do
+                if slot:IsA("GuiButton") then
+                    local progressLabel = slot:FindFirstChild("QuestProgress", true)
+                    if progressLabel and progressLabel:IsA("TextLabel") then
+                        local txt = progressLabel.Text:lower()
 
-                for _, slot in ipairs(questsHolder:GetChildren()) do
-                    if slot:IsA("GuiButton") and slot.Visible ~= false then
-                        local progressLabel = slot:FindFirstChild("QuestProgress", true)
-                        if progressLabel and progressLabel:IsA("TextLabel") then
-                            local txt = progressLabel.Text:lower()
+                        if txt == "claim" or txt == "resgatar" then
+                            -- 1. Seleciona a missão na memória
+                            triggerGuiButton(slot)
+                            task.wait(0.1)
 
-                            if txt == "claim" or txt == "resgatar" then
-                                claimedTotal = claimedTotal + 1
-                                triggerGuiButton(slot)
-                                if questRemote then
-                                    pcall(function()
-                                        questRemote:FireServer("Claim", slot.Name)
-                                        questRemote:FireServer(slot.Name)
-                                    end)
-                                end
-                                task.wait(0.12)
+                            -- 2. Clica no botão Claim do painel invisível
+                            triggerGuiButton(claimBtn)
+                            
+                            -- 3. Disparo de segurança no Remote
+                            if questRemote then
+                                pcall(function()
+                                    questRemote:FireServer("Claim", slot.Name)
+                                    questRemote:FireServer(slot.Name)
+                                end)
                             end
+
+                            claimedTotal = claimedTotal + 1
+                            task.wait(0.12)
                         end
                     end
                 end
             end
         end
-
-        if claimedTotal > 0 then
-            Fluent:Notify({
-                Title = "Missões Resgatadas!",
-                Content = string.format("%d recompensa(s) de missão coletada(s) com sucesso!", claimedTotal),
-                Duration = 3.5
-            })
-        end
     end
 
-    if wasClosed and sideBtn then
-        triggerGuiButton(sideBtn)
+    -- Restaura o estado de visibilidade
+    questsFrame.Visible = originalVisible
+
+    if claimedTotal > 0 then
+        Fluent:Notify({
+            Title = "Missões Resgatadas!",
+            Content = string.format("%d recompensa(s) de missão coletada(s) em segundo plano!", claimedTotal),
+            Duration = 3.5
+        })
     end
 
     isQuestClaimInProgress = false
@@ -1030,7 +1030,7 @@ task.spawn(function()
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 
-                -- Agendamento ordenado das automações de início da fase
+                -- Agendamento ordenado das automações de início de fase
                 if not initialRoutinesScheduled then
                     initialRoutinesScheduled = true
                     
@@ -1042,7 +1042,7 @@ task.spawn(function()
                         end
                     end)
 
-                    -- 2. Auto-Claim Quests aos 13 segundos (3s após a venda para evitar conflitos)
+                    -- 2. Auto-Claim Quests aos 13 segundos (3s após a venda, 100% invisível)
                     task.spawn(function()
                         task.wait(13)
                         if isScriptRunning and Settings.AutoClaimQuests and not isDungeonEnded then
