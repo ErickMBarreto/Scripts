@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (VERSÃO FINAL DEFINITIVA)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (VERSÃO COM MODO HARDCORE)
 -- ====================================================================
 
 -- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA (Singleton Anti-Duplicação)
@@ -26,7 +26,7 @@ for _, gui in ipairs({CoreGui, Players.LocalPlayer and Players.LocalPlayer:FindF
 end
 
 -- 2. REEXECUÇÃO AUTOMÁTICA INFINITA (Delta / Mobile)
-local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Teste.lua"
+local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Loader.lua"
 
 local function queueNextExecution()
     local queueFunc = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or queueonteleport
@@ -86,14 +86,14 @@ local Settings = {
     AutoStart = true,
     AutoPlayAgain = true,
     AutoEngage = true,
-    AutoClaimQuests = true,
+    HardcoreMode = false,
     StartWaitTime = 3.5,
     SkillCooldown = 0.8,
     SkillMaxDistance = 20,
     HeightAboveEnemy = 8.5,
     TweenSpeed = 50,
     AttackSpeed = 0.15,
-    -- Configurações de Auto-Sell (DESLIGADO POR PADRÃO)
+    AutoClaimQuests = false,
     AutoSell = false,
     SellRare = true,
     SellEpic = false,
@@ -115,6 +115,7 @@ local function saveConfig()
                 AttackSpeed = Settings.AttackSpeed,
                 SkillCooldown = Settings.SkillCooldown,
                 StartWaitTime = Settings.StartWaitTime,
+                HardcoreMode = Settings.HardcoreMode,
                 AutoClaimQuests = Settings.AutoClaimQuests,
                 AutoSell = Settings.AutoSell,
                 SellRare = Settings.SellRare,
@@ -143,6 +144,7 @@ local function loadConfig()
                 if data.AttackSpeed ~= nil then Settings.AttackSpeed = data.AttackSpeed end
                 if data.SkillCooldown ~= nil then Settings.SkillCooldown = data.SkillCooldown end
                 if data.StartWaitTime ~= nil then Settings.StartWaitTime = data.StartWaitTime end
+                if data.HardcoreMode ~= nil then Settings.HardcoreMode = data.HardcoreMode end
                 if data.AutoClaimQuests ~= nil then Settings.AutoClaimQuests = data.AutoClaimQuests end
                 if data.AutoSell ~= nil then Settings.AutoSell = data.AutoSell end
                 if data.SellRare ~= nil then Settings.SellRare = data.SellRare end
@@ -168,6 +170,7 @@ local VirtualInputManager = game:GetService("VirtualInputManager")
 local isScriptRunning = true
 local currentTween = nil
 local charConnection = nil
+local diedConnection = nil
 
 local equipRemote = ReplicatedStorage:WaitForChild("Remotes", 10) and ReplicatedStorage.Remotes:WaitForChild("Equip", 10)
 local questRemote = ReplicatedStorage:WaitForChild("Remotes", 10) and ReplicatedStorage.Remotes:WaitForChild("Quest", 10)
@@ -210,12 +213,87 @@ local function stopMovement()
     end
 end
 
-charConnection = player.CharacterAdded:Connect(function()
+local function triggerGuiButton(btn)
+    if not btn or not isScriptRunning then return end
+    pcall(function()
+        for _, evName in ipairs({"Activated", "MouseButton1Click", "MouseButton1Down", "MouseButton1Up"}) do
+            if btn[evName] and firesignal then
+                pcall(function() firesignal(btn[evName]) end)
+            end
+            if btn[evName] and getconnections then
+                for _, c in ipairs(getconnections(btn[evName])) do
+                    pcall(function() c:Fire() end)
+                end
+            end
+        end
+    end)
+end
+
+local function findAnyPlayAgainButton()
+    local pguiRef = player:FindFirstChild("PlayerGui")
+    if not pguiRef then return nil end
+
+    local main = pguiRef:FindFirstChild("Main")
+    local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
+    local dungeonStats = dungeonFrame and dungeonFrame:FindFirstChild("DungeonStats")
+    local endActions = dungeonStats and dungeonStats:FindFirstChild("EndActions")
+    local playAgainBtn = endActions and endActions:FindFirstChild("PlayAgain")
+
+    if playAgainBtn and playAgainBtn:IsA("GuiObject") and playAgainBtn.Visible then
+        return playAgainBtn
+    end
+
+    for _, desc in ipairs(pguiRef:GetDescendants()) do
+        if (desc:IsA("TextButton") or desc:IsA("ImageButton")) and desc.Visible then
+            local txt = desc:IsA("TextButton") and desc.Text:lower() or desc.Name:lower()
+            if txt:find("playagain") or txt:find("play again") or txt:find("retry") or txt:find("jogar novamente") then
+                return desc
+            end
+        end
+    end
+
+    return nil
+end
+
+local function onPlayerDied()
+    if not Settings.HardcoreMode then return end
+
+    stopMovement()
+    task.spawn(function()
+        task.wait(15)
+        if not isScriptRunning or not Settings.HardcoreMode or not Settings.AutoPlayAgain then return end
+
+        local retryBtn = findAnyPlayAgainButton()
+        if retryBtn then
+            queueNextExecution()
+            task.wait(0.5)
+            triggerGuiButton(retryBtn)
+            task.wait(3.0)
+        end
+    end)
+end
+
+local function bindCharacter(char)
+    if not char then return end
+    local hum = char:WaitForChild("Humanoid", 10)
+    if hum then
+        if diedConnection then diedConnection:Disconnect() end
+        diedConnection = hum.Died:Connect(onPlayerDied)
+    end
+end
+
+if player.Character then
+    bindCharacter(player.Character)
+end
+
+charConnection = player.CharacterAdded:Connect(function(newChar)
     isRespawning = true
     isTransitioning = false
     enteringPortal = false
     stopMovement()
     attackRemote = nil
+
+    bindCharacter(newChar)
 
     task.delay(1.2, function()
         isRespawning = false
@@ -237,23 +315,6 @@ local function smoothFlyTo(targetCFrame)
     local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
     currentTween = TweenService:Create(root, tweenInfo, {CFrame = targetCFrame})
     currentTween:Play()
-end
-
--- Acionador limpo sem mover ponteiro do mouse
-local function triggerGuiButton(btn)
-    if not btn or not isScriptRunning then return end
-    pcall(function()
-        for _, evName in ipairs({"Activated", "MouseButton1Click", "MouseButton1Down", "MouseButton1Up"}) do
-            if btn[evName] and firesignal then
-                pcall(function() firesignal(btn[evName]) end)
-            end
-            if btn[evName] and getconnections then
-                for _, c in ipairs(getconnections(btn[evName])) do
-                    pcall(function() c:Fire() end)
-                end
-            end
-        end
-    end)
 end
 
 local function pressKey(keyCode)
@@ -680,11 +741,9 @@ local function executeAutoClaimQuests()
                         local txt = progressLabel.Text:lower()
 
                         if txt == "claim" or txt == "resgatar" then
-                            -- Seleção na memória interna
                             triggerGuiButton(slot)
                             task.wait(0.1)
 
-                            -- Clique no botão de Claim
                             triggerGuiButton(claimBtn)
                             
                             if questRemote then
@@ -1013,7 +1072,7 @@ local function runIncursionPhaseFlow()
     end
 end
 
--- LOOP PRINCIPAL (AUTO-SELL AOS 10s E AUTO-CLAIM AOS 13s NO INÍCIO)
+-- LOOP PRINCIPAL
 task.spawn(function()
     while isScriptRunning do
         if Settings.AutoFarm and not isRespawning then
@@ -1031,7 +1090,7 @@ task.spawn(function()
                         end
                     end)
 
-                    -- 2. Auto-Claim Quests aos 13 segundos (sem mover mouse, 100% invisível)
+                    -- 2. Auto-Claim Quests aos 13 segundos
                     task.spawn(function()
                         task.wait(13)
                         if isScriptRunning and Settings.AutoClaimQuests and not isDungeonEnded then
@@ -1175,6 +1234,11 @@ local function destroyScript()
         charConnection = nil
     end
 
+    if diedConnection then
+        diedConnection:Disconnect()
+        diedConnection = nil
+    end
+
     if singletonTag and singletonTag.Parent then
         singletonTag:Destroy()
     end
@@ -1269,6 +1333,16 @@ CombatSection:AddToggle("AutoFarmToggle", {
     Callback = function(Value)
         Settings.AutoFarm = Value
         if not Value then stopMovement() end
+    end
+})
+
+CombatSection:AddToggle("HardcoreToggle", {
+    Title = "Modo Hardcore",
+    Description = "Se morrer, aguarda 15s e clica em Play Again para reiniciar",
+    Default = Settings.HardcoreMode,
+    Callback = function(Value)
+        Settings.HardcoreMode = Value
+        saveConfig()
     end
 })
 
