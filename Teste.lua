@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (HARDCORE: 23s DELAY)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (ENGAGE ATIVO + HARDCORE 23s)
 -- ====================================================================
 
 -- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA (Singleton Anti-Duplicação)
@@ -255,10 +255,10 @@ local function findAnyPlayAgainButton()
     return nil
 end
 
+-- Detecção do Modo Hardcore (23s de espera após a morte)
 local function onPlayerDied()
     if not Settings.HardcoreMode then return end
 
-    stopMovement()
     task.spawn(function()
         task.wait(23)
         if not isScriptRunning or not Settings.HardcoreMode or not Settings.AutoPlayAgain then return end
@@ -390,7 +390,7 @@ local function getDynamicHotbar()
     return nil
 end
 
--- 7. DETECÇÃO DE INIMIGOS (BLEACH / INCURSÃO / VIRUS)
+-- 7. DETECÇÃO DE INIMIGOS (COM SUPORTE TOTAL A BOSS DE ENGAGE)
 local function getCurrentWaveNumber()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if pguiRef then
@@ -472,7 +472,7 @@ local function getAllLivingEnemiesBleach()
         for _, obj in ipairs(workspace:GetChildren()) do
             if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
                 local name = obj.Name:lower()
-                if name:find("virus") or name:find("secret") or name:find("boss") then
+                if name:find("virus") or name:find("secret") or name:find("boss") or obj:FindFirstChildOfClass("Humanoid") then
                     if isEntityAlive(obj) then table.insert(list, obj) end
                 end
             end
@@ -857,7 +857,10 @@ local function isPortalTransitionActive()
     if isRespawning or isTransitioning or enteringPortal or isSellingInProgress or isQuestClaimInProgress then return true end
     if (tick() - dungeonStartTime) < Settings.StartWaitTime then return true end
 
-    if Settings.SelectedPhase == "Bleach (Fase 4)" and not isVirusActive then
+    -- No Engage, libera o combate sem travar em portais
+    if isVirusActive then return false end
+
+    if Settings.SelectedPhase == "Bleach (Fase 4)" then
         local _, root = getCharacter()
         if not root then return true end
 
@@ -974,6 +977,22 @@ local function runBleachPhaseFlow()
     local char, root = getCharacter()
     if not root then return end
 
+    -- MODO ENGAGE / VIRUS BOSS: Mantém o voo até o boss e ataque ativos
+    if isVirusActive then
+        local enemies = getAllLivingEnemiesBleach()
+        if #enemies > 0 then
+            local enemy, enemyPart = getClosestLivingEnemy()
+            if enemy and enemyPart then
+                local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
+                local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
+                smoothFlyTo(targetCFrame)
+            end
+        else
+            stopMovement()
+        end
+        return
+    end
+
     if (tick() - dungeonStartTime) < Settings.StartWaitTime then
         stopMovement()
         return
@@ -997,21 +1016,6 @@ local function runBleachPhaseFlow()
     end
 
     if enteringPortal then return end
-
-    if isVirusActive then
-        local enemies = getAllLivingEnemiesBleach()
-        if #enemies > 0 then
-            local enemy, enemyPart = getClosestLivingEnemy()
-            if enemy and enemyPart then
-                local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
-                local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
-                smoothFlyTo(targetCFrame)
-            end
-        else
-            stopMovement()
-        end
-        return
-    end
 
     local wave = getCurrentWaveNumber()
 
@@ -1082,7 +1086,6 @@ task.spawn(function()
                 if not initialRoutinesScheduled then
                     initialRoutinesScheduled = true
                     
-                    -- 1. Auto-Sell aos 10 segundos
                     task.spawn(function()
                         task.wait(10)
                         if isScriptRunning and Settings.AutoSell and not isDungeonEnded then
@@ -1090,7 +1093,6 @@ task.spawn(function()
                         end
                     end)
 
-                    -- 2. Auto-Claim Quests aos 13 segundos
                     task.spawn(function()
                         task.wait(13)
                         if isScriptRunning and Settings.AutoClaimQuests and not isDungeonEnded then
@@ -1104,7 +1106,7 @@ task.spawn(function()
                 end
 
                 local engaged = false
-                if Settings.AutoEngage then
+                if Settings.AutoEngage and not isVirusActive then
                     engaged = checkAndClickEngageButton()
                 end
 
@@ -1112,7 +1114,7 @@ task.spawn(function()
                     isDungeonEnded = false
                     isVirusActive = true
                     dungeonStartTime = tick()
-                    task.wait(1.5)
+                    task.wait(1.0)
                 else
                     local ended, playAgainBtn = checkDungeonEnd()
                     if ended then
@@ -1129,7 +1131,7 @@ task.spawn(function()
                             isDungeonEnded = false
                             isVirusActive = true
                             dungeonStartTime = tick()
-                            task.wait(1.5)
+                            task.wait(1.0)
                         elseif Settings.AutoPlayAgain and playAgainBtn then
                             queueNextExecution()
                             task.wait(0.8)
