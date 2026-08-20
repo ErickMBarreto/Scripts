@@ -594,7 +594,6 @@ local function executeDirectAutoSell()
             local itemValObj = slot:FindFirstChild("Item")
             local rawInstance = itemValObj and (itemValObj:IsA("ValueBase") and itemValObj.Value or itemValObj)
             
-            -- Passa o ponteiro Instance exato
             if rawInstance and typeof(rawInstance) == "Instance" then
                 table.insert(itemsToSell, rawInstance)
             end
@@ -919,7 +918,7 @@ local function runIncursionPhaseFlow()
 end
 
 -- ====================================================================
--- LOOP PRINCIPAL (VENDA AUTOMÁTICA PÓS-VITÓRIA)
+-- LOOP PRINCIPAL (VENDA AUTOMÁTICA DIRETA PÓS-VITÓRIA)
 -- ====================================================================
 task.spawn(function()
     while isScriptRunning do
@@ -948,7 +947,7 @@ task.spawn(function()
                         isVirusActive = false
                         stopMovement()
                         
-                        -- Venda direta em background ao terminar a dungeon
+                        -- Executa a venda direta via remote ao finalizar a fase
                         if Settings.AutoSell then
                             pcall(executeDirectAutoSell)
                             task.wait(0.3)
@@ -986,7 +985,7 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 12. INTERFACE FLUENT COM ABA AUTO-SELL
+-- 12. INTERFACE FLUENT COM TODAS AS ABAS RESTAURADAS
 -- ====================================================================
 local Window = Fluent:CreateWindow({
     Title = "Hub dos Rapazes",
@@ -1000,8 +999,8 @@ local Window = Fluent:CreateWindow({
 
 local Tabs = {
     Farm = Window:AddTab({ Title = "Farm", Icon = "crosshair" }),
-    AutoSell = Window:AddTab({ Title = "Auto Sell", Icon = "shopping-cart" }),
-    Settings = Window:AddTab({ Title = "Settings", Icon = "settings" })
+    AutoSell = Window:AddTab({ Title = "Auto Sell", Icon = "coins" }),
+    Settings = Window:AddTab({ Title = "Settings", Icon = "shield" })
 }
 
 local toggleGui = Instance.new("ScreenGui")
@@ -1270,7 +1269,7 @@ local AutoSellMainSection = Tabs.AutoSell:AddSection("Controle de Venda Direta")
 
 AutoSellMainSection:AddToggle("AutoSellToggle", {
     Title = "Venda Automática Pós-Vitória (Silenciosa)",
-    Description = "Vende os drops via Remote nativo ao finalizar a partida",
+    Description = "Vende via Remote nativo ao finalizar a partida",
     Default = Settings.AutoSell,
     Callback = function(Value)
         Settings.AutoSell = Value
