@@ -26,7 +26,7 @@ end
 -- ====================================================================
 -- 2. REEXECUÇÃO AUTOMÁTICA INFINITA (Delta / Mobile)
 -- ====================================================================
-local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Teste.lua"
+local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Loader.lua"
 
 local function queueNextExecution()
     local queueFunc = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or queueonteleport
@@ -96,6 +96,7 @@ local Settings = {
     HeightAboveEnemy = 8.5,
     TweenSpeed = 50,
     AttackSpeed = 0.15,
+    -- Configurações de Auto-Sell pós-vitória
     AutoSell = true,
     SellCommon = true,
     SellRare = true,
@@ -535,7 +536,7 @@ local function getClosestLivingEnemy()
 end
 
 -- ====================================================================
--- 8. MOTOR DE AUTO-SELL (EXECUÇÃO DIRETA NO INVENTÁRIO)
+-- 8. MOTOR DE AUTO-SELL (SILENCIOSO E VALIDADO POR SUB-ABAS)
 -- ====================================================================
 local function getItemRarity(slot)
     local grad = slot:FindFirstChild("RarityGradient", true)
@@ -567,11 +568,13 @@ local function shouldSellItem(slot)
         return false
     end
 
+    -- Trava 1: Equipados (Checa Visible e cor verde)
     local eq = slot:FindFirstChild("EquippedSelection")
-    if eq and eq:IsA("ImageLabel") and eq.ImageColor3 == Color3.fromRGB(0, 255, 0) then
+    if eq and eq:IsA("ImageLabel") and eq.Visible and eq.ImageColor3 == Color3.fromRGB(0, 255, 0) then
         return false
     end
 
+    -- Trava 2: Favoritos
     local fav = slot:FindFirstChild("Favorite", true)
     if fav and fav:IsA("ImageLabel") and fav.Visible and fav.ImageColor3 ~= Color3.fromRGB(255, 255, 255) then
         return false
@@ -598,9 +601,12 @@ local function executeAutoSellCycle()
 
     isSellingInProgress = true
 
-    -- Garante ativação momentânea para os listeners do jogo responderem aos cliques
+    -- Invisibilidade segura: move para fora do campo de visão durante o ciclo de cliques
+    local originalPos = itemsFrame.Position
     local wasMainVisible = mainFrame.Visible
     local wasItemsVisible = itemsFrame.Visible
+
+    itemsFrame.Position = UDim2.new(50, 0, 50, 0)
     mainFrame.Visible = true
     itemsFrame.Visible = true
 
@@ -632,13 +638,16 @@ local function executeAutoSellCycle()
             local scroll = itemsFrame:FindFirstChild("Scroll")
             if scroll then
                 for _, slot in ipairs(scroll:GetChildren()) do
-                    if slot:IsA("GuiObject") and shouldSellItem(slot) then
+                    if slot:IsA("GuiObject") and slot:GetAttribute("Item") and slot.Visible and shouldSellItem(slot) then
                         local sellSelect = slot:FindFirstChild("SellSelection")
-                        local btn = (sellSelect and sellSelect:IsA("GuiButton") and sellSelect) or slot:FindFirstChildWhichIsA("GuiButton", true) or (slot:IsA("GuiButton") and slot)
+                        local btn = (sellSelect and sellSelect:IsA("GuiButton") and sellSelect)
+                            or slot:FindFirstChildWhichIsA("GuiButton", true)
+                            or (slot:IsA("GuiButton") and slot)
+                        
                         if btn then
                             triggerGuiButton(btn)
                             totalSelected = totalSelected + 1
-                            task.wait(0.03)
+                            task.wait(0.02)
                         end
                     end
                 end
@@ -653,6 +662,8 @@ local function executeAutoSellCycle()
         end
     end
 
+    -- Restaura posição e estados
+    itemsFrame.Position = originalPos
     mainFrame.Visible = wasMainVisible
     itemsFrame.Visible = wasItemsVisible
 
@@ -992,6 +1003,7 @@ task.spawn(function()
                         isVirusActive = false
                         stopMovement()
                         
+                        -- Executa a venda silenciosa pós-vitória (drops recebidos)
                         if Settings.AutoSell then
                             pcall(executeAutoSellCycle)
                             task.wait(0.4)
@@ -1322,8 +1334,8 @@ AutoSellMainSection:AddToggle("AutoSellToggle", {
 })
 
 AutoSellMainSection:AddButton({
-    Title = "⚡ Executar Venda Agora",
-    Description = "Executa um ciclo manual de venda dos itens filtrados",
+    Title = "⚡ Executar Venda Silenciosa Agora",
+    Description = "Executa um ciclo manual de venda em segundo plano",
     Callback = function()
         pcall(executeAutoSellCycle)
     end
