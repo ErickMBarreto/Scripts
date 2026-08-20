@@ -95,7 +95,16 @@ local Settings = {
     SkillMaxDistance = 20,
     HeightAboveEnemy = 8.5,
     TweenSpeed = 50,
-    AttackSpeed = 0.15
+    AttackSpeed = 0.15,
+    -- Configurações de Auto-Sell (DESLIGADO POR PADRÃO)
+    AutoSell = false,
+    SellRare = true,
+    SellEpic = false,
+    SellLegendary = false,
+    SellMythic = false,
+    SellWeapons = true,
+    SellArmors = false,
+    SellSpells = false
 }
 
 local function saveConfig()
@@ -108,7 +117,15 @@ local function saveConfig()
                 TweenSpeed = Settings.TweenSpeed,
                 AttackSpeed = Settings.AttackSpeed,
                 SkillCooldown = Settings.SkillCooldown,
-                StartWaitTime = Settings.StartWaitTime
+                StartWaitTime = Settings.StartWaitTime,
+                AutoSell = Settings.AutoSell,
+                SellRare = Settings.SellRare,
+                SellEpic = Settings.SellEpic,
+                SellLegendary = Settings.SellLegendary,
+                SellMythic = Settings.SellMythic,
+                SellWeapons = Settings.SellWeapons,
+                SellArmors = Settings.SellArmors,
+                SellSpells = Settings.SellSpells
             })
             writefile(CONFIG_FILE, data)
         end
@@ -121,13 +138,21 @@ local function loadConfig()
             local raw = readfile(CONFIG_FILE)
             local data = HttpService:JSONDecode(raw)
             if data then
-                if data.SelectedPhase then Settings.SelectedPhase = data.SelectedPhase end
-                if data.CustomWeaponName then Settings.CustomWeaponName = data.CustomWeaponName end
-                if data.HeightAboveEnemy then Settings.HeightAboveEnemy = data.HeightAboveEnemy end
-                if data.TweenSpeed then Settings.TweenSpeed = data.TweenSpeed end
-                if data.AttackSpeed then Settings.AttackSpeed = data.AttackSpeed end
-                if data.SkillCooldown then Settings.SkillCooldown = data.SkillCooldown end
-                if data.StartWaitTime then Settings.StartWaitTime = data.StartWaitTime end
+                if data.SelectedPhase ~= nil then Settings.SelectedPhase = data.SelectedPhase end
+                if data.CustomWeaponName ~= nil then Settings.CustomWeaponName = data.CustomWeaponName end
+                if data.HeightAboveEnemy ~= nil then Settings.HeightAboveEnemy = data.HeightAboveEnemy end
+                if data.TweenSpeed ~= nil then Settings.TweenSpeed = data.TweenSpeed end
+                if data.AttackSpeed ~= nil then Settings.AttackSpeed = data.AttackSpeed end
+                if data.SkillCooldown ~= nil then Settings.SkillCooldown = data.SkillCooldown end
+                if data.StartWaitTime ~= nil then Settings.StartWaitTime = data.StartWaitTime end
+                if data.AutoSell ~= nil then Settings.AutoSell = data.AutoSell end
+                if data.SellRare ~= nil then Settings.SellRare = data.SellRare end
+                if data.SellEpic ~= nil then Settings.SellEpic = data.SellEpic end
+                if data.SellLegendary ~= nil then Settings.SellLegendary = data.SellLegendary end
+                if data.SellMythic ~= nil then Settings.SellMythic = data.SellMythic end
+                if data.SellWeapons ~= nil then Settings.SellWeapons = data.SellWeapons end
+                if data.SellArmors ~= nil then Settings.SellArmors = data.SellArmors end
+                if data.SellSpells ~= nil then Settings.SellSpells = data.SellSpells end
             end
         end
     end)
@@ -147,7 +172,9 @@ local isScriptRunning = true
 local currentTween = nil
 local charConnection = nil
 
--- COORDENADAS DOS PORTAIS (FASE 4 - BLEACH)
+local equipRemote = ReplicatedStorage:WaitForChild("Remotes", 10) and ReplicatedStorage.Remotes:WaitForChild("Equip", 10)
+
+-- COORDENADAS REAIS DOS PORTAIS (FASE 4 - BLEACH TRANCADA)
 local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0)
 local PORTAL_2_BOSS_POS  = CFrame.new(5411.5, -561.0, 2550.0)
 
@@ -156,6 +183,8 @@ local isRespawning = false
 local isTransitioning = false
 local enteringPortal = false
 local isVirusActive = false
+local isSellingInProgress = false
+local initialSellScheduled = false
 local lastRoomState = "Room1"
 
 local lastSkillUse = 0
@@ -195,7 +224,7 @@ charConnection = player.CharacterAdded:Connect(function()
 end)
 
 local function smoothFlyTo(targetCFrame)
-    if isDungeonEnded or isRespawning or isTransitioning or not isScriptRunning then return end
+    if isDungeonEnded or isRespawning or isTransitioning or isSellingInProgress or not isScriptRunning then return end
     local _, root = getCharacter()
     if not root or not root.Parent then return end
     
@@ -212,19 +241,29 @@ local function smoothFlyTo(targetCFrame)
 end
 
 local function triggerGuiButton(btn)
-    if not btn or not btn.Parent or not isScriptRunning then return end
-    if firesignal then
-        pcall(function() firesignal(btn.Activated) end)
-        pcall(function() firesignal(btn.MouseButton1Click) end)
-        pcall(function() firesignal(btn.MouseButton1Down) end)
-        pcall(function() firesignal(btn.MouseButton1Up) end)
-    end
-    if getconnections then
-        for _, c in ipairs(getconnections(btn.Activated)) do pcall(function() c:Fire() end) end
-        for _, c in ipairs(getconnections(btn.MouseButton1Click)) do pcall(function() c:Fire() end) end
-        for _, c in ipairs(getconnections(btn.MouseButton1Down)) do pcall(function() c:Fire() end) end
-        for _, c in ipairs(getconnections(btn.MouseButton1Up)) do pcall(function() c:Fire() end) end
-    end
+    if not btn or not isScriptRunning then return end
+    pcall(function()
+        if firesignal then
+            if btn.Activated then firesignal(btn.Activated) end
+            if btn.MouseButton1Click then firesignal(btn.MouseButton1Click) end
+            if btn.MouseButton1Down then firesignal(btn.MouseButton1Down) end
+            if btn.MouseButton1Up then firesignal(btn.MouseButton1Up) end
+        end
+        if getconnections then
+            if btn.Activated then
+                for _, c in ipairs(getconnections(btn.Activated)) do pcall(function() c:Fire() end) end
+            end
+            if btn.MouseButton1Click then
+                for _, c in ipairs(getconnections(btn.MouseButton1Click)) do pcall(function() c:Fire() end) end
+            end
+            if btn.MouseButton1Down then
+                for _, c in ipairs(getconnections(btn.MouseButton1Down)) do pcall(function() c:Fire() end) end
+            end
+            if btn.MouseButton1Up then
+                for _, c in ipairs(getconnections(btn.MouseButton1Up)) do pcall(function() c:Fire() end) end
+            end
+        end
+    end)
 end
 
 local function pressKey(keyCode)
@@ -303,7 +342,7 @@ local function getDynamicHotbar()
 end
 
 -- ====================================================================
--- 7. DETECÇÕES DE INIMIGOS (COM SUPORTE A VIRUS EM AMBOS OS MODOS)
+-- 7. DETECÇÕES DE INIMIGOS (SEPARADAS POR MODO)
 -- ====================================================================
 local function getCurrentWaveNumber()
     local pguiRef = player:FindFirstChild("PlayerGui")
@@ -359,44 +398,36 @@ local function isEntityAlive(obj)
     return false
 end
 
--- A. BUSCA: FASE 4 (BLEACH - PADRÃO + VIRUS SE ATIVO)
+-- A. BUSCA: FASE 4 (BLEACH COM SUPORTE A VIRUS APÓS ENGAGE)
 local function getAllLivingEnemiesBleach()
     local list = {}
     local char = player.Character
-    local registered = {}
-
-    local function addEntity(mob)
-        if mob and mob:IsA("Model") and mob ~= char and not registered[mob] and not Players:GetPlayerFromCharacter(mob) then
-            if isEntityAlive(mob) and getEntityTargetPart(mob) then
-                registered[mob] = true
-                table.insert(list, mob)
-            end
-        end
-    end
 
     local gameFolder = workspace:FindFirstChild("Game")
     local enemiesFolder = (gameFolder and gameFolder:FindFirstChild("Enemies")) or workspace:FindFirstChild("Enemies")
 
     if enemiesFolder then
         for _, enemy in ipairs(enemiesFolder:GetChildren()) do
-            addEntity(enemy)
+            if isEntityAlive(enemy) then
+                table.insert(list, enemy)
+            end
         end
     end
 
-    -- Se o Boss Secreto estiver ativo na Fase 4, varre as pastas de Virus
     if isVirusActive then
-        local virusFolder = (gameFolder and (gameFolder:FindFirstChild("Virus") or gameFolder:FindFirstChild("Boss") or gameFolder:FindFirstChild("SecretBoss"))) 
-            or workspace:FindFirstChild("Virus")
+        local virusFolder = (gameFolder and (gameFolder:FindFirstChild("Virus") or gameFolder:FindFirstChild("Boss") or gameFolder:FindFirstChild("SecretBoss"))) or workspace:FindFirstChild("Virus")
         if virusFolder then
-            for _, enemy in ipairs(virusFolder:GetChildren()) do addEntity(enemy) end
-            if isEntityAlive(virusFolder) then addEntity(virusFolder) end
+            for _, mob in ipairs(virusFolder:GetChildren()) do
+                if isEntityAlive(mob) then table.insert(list, mob) end
+            end
+            if isEntityAlive(virusFolder) then table.insert(list, virusFolder) end
         end
 
         for _, obj in ipairs(workspace:GetChildren()) do
             if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
                 local name = obj.Name:lower()
-                if name:find("virus") or name:find("boss") then
-                    addEntity(obj)
+                if name:find("virus") or name:find("secret") or name:find("boss") then
+                    if isEntityAlive(obj) then table.insert(list, obj) end
                 end
             end
         end
@@ -406,7 +437,9 @@ local function getAllLivingEnemiesBleach()
         for _, stage in ipairs(gameFolder.Stages:GetChildren()) do
             local spawns = stage:FindFirstChild("Spawns") or stage
             for _, mob in ipairs(spawns:GetChildren()) do
-                addEntity(mob)
+                if mob:IsA("Model") and mob ~= char and isEntityAlive(mob) then
+                    table.insert(list, mob)
+                end
             end
         end
     end
@@ -414,7 +447,7 @@ local function getAllLivingEnemiesBleach()
     return list
 end
 
--- B. BUSCA: INCURSÃO (MAPA COMPLETO + SUMMONS + VIRUS)
+-- B. BUSCA: INCURSÃO (SUPORTE A VIRUS / SECRET BOSS / SUMMONS)
 local function getAllLivingEnemiesIncursion()
     local list = {}
     local char = player.Character
@@ -503,7 +536,134 @@ local function getClosestLivingEnemy()
 end
 
 -- ====================================================================
--- 8. CONTROLES DE INTERFACE (PRIORIDADE ENGAGE > PLAY AGAIN)
+-- 8. MOTOR DE AUTO-SELL DIRETO COM FILTRO RIGOROSO DE TIPO
+-- ====================================================================
+local function getItemRarity(slot)
+    local grad = slot:FindFirstChild("RarityGradient", true)
+    if not grad or not grad:IsA("UIGradient") then return "Unknown" end
+
+    local color = grad.Color.Keypoints[1].Value
+    local r = math.round(color.R * 255)
+    local g = math.round(color.G * 255)
+    local b = math.round(color.B * 255)
+
+    if r <= 50 and g >= 60 and b >= 190 then return "Rare" end
+    if r >= 90 and r <= 160 and g <= 50 and b >= 190 then return "Epic" end
+    if r >= 220 and g >= 140 and b <= 50 then return "Legendary" end
+    if r >= 200 and g <= 50 and b <= 50 then return "Mythic" end
+    return "Unknown"
+end
+
+local function getItemTypeFromSlot(slot)
+    local attrType = slot:GetAttribute("Type") or slot:GetAttribute("ItemType") or slot:GetAttribute("Category")
+    if attrType then return tostring(attrType):lower() end
+
+    local typeVal = slot:FindFirstChild("Type") or slot:FindFirstChild("Category")
+    if typeVal and typeVal:IsA("StringValue") then return typeVal.Value:lower() end
+
+    local itemValObj = slot:FindFirstChild("Item")
+    local realItem = (itemValObj and itemValObj:IsA("ObjectValue") and itemValObj.Value)
+        or (itemValObj and typeof(itemValObj.Value) == "Instance" and itemValObj.Value)
+        or (typeof(itemValObj) == "Instance" and itemValObj)
+
+    if realItem and realItem.Parent then
+        local pName = realItem.Parent.Name:lower()
+        if pName:find("weapon") then return "weapon" end
+        if pName:find("armor") then return "armor" end
+        if pName:find("spell") then return "spell" end
+        
+        local itemTypeAttr = realItem:GetAttribute("Type")
+        if itemTypeAttr then return tostring(itemTypeAttr):lower() end
+    end
+
+    return "unknown"
+end
+
+local function executeDirectAutoSell()
+    if not Settings.AutoSell or isSellingInProgress or not isScriptRunning or not equipRemote then return end
+    
+    local main = pgui:FindFirstChild("Main")
+    local itemsFrame = main and main:FindFirstChild("MainFrame") and main.MainFrame:FindFirstChild("Items")
+    local buttonsFrame = itemsFrame and itemsFrame:FindFirstChild("Buttons")
+    local scroll = itemsFrame and itemsFrame:FindFirstChild("Scroll")
+    if not itemsFrame or not scroll then return end
+
+    isSellingInProgress = true
+
+    local categoriesToScan = {}
+    if Settings.SellWeapons and buttonsFrame and buttonsFrame:FindFirstChild("Weapon") then
+        table.insert(categoriesToScan, { Button = buttonsFrame.Weapon, TargetType = "weapon" })
+    end
+    if Settings.SellArmors and buttonsFrame and buttonsFrame:FindFirstChild("Armor") then
+        table.insert(categoriesToScan, { Button = buttonsFrame.Armor, TargetType = "armor" })
+    end
+    if Settings.SellSpells and buttonsFrame and buttonsFrame:FindFirstChild("Spell") then
+        table.insert(categoriesToScan, { Button = buttonsFrame.Spell, TargetType = "spell" })
+    end
+
+    local itemsToSell = {}
+    local registered = {}
+
+    for _, catData in ipairs(categoriesToScan) do
+        triggerGuiButton(catData.Button)
+        task.wait(0.15)
+
+        for _, slot in ipairs(scroll:GetChildren()) do
+            if slot:IsA("GuiObject") and slot:GetAttribute("Item") and slot.Name ~= "SteelSword" then
+                if slot.Visible ~= false then
+                    local eq = slot:FindFirstChild("EquippedSelection")
+                    local isEquipped = eq and eq:IsA("ImageLabel") and eq.Visible and eq.ImageColor3 == Color3.fromRGB(0, 255, 0)
+                    
+                    local fav = slot:FindFirstChild("Favorite", true)
+                    local isFav = fav and fav:IsA("ImageLabel") and fav.Visible and fav.ImageColor3 ~= Color3.fromRGB(255, 255, 255)
+
+                    if not isEquipped and not isFav then
+                        local detectedType = getItemTypeFromSlot(slot)
+                        local typeAllowed = (detectedType == catData.TargetType) or (detectedType == "unknown")
+
+                        if typeAllowed then
+                            local rarity = getItemRarity(slot)
+                            local rarityMatch = false
+                            if rarity == "Rare" and Settings.SellRare then rarityMatch = true end
+                            if rarity == "Epic" and Settings.SellEpic then rarityMatch = true end
+                            if rarity == "Legendary" and Settings.SellLegendary then rarityMatch = true end
+                            if rarity == "Mythic" and Settings.SellMythic then rarityMatch = true end
+
+                            if rarityMatch then
+                                local itemValObj = slot:FindFirstChild("Item")
+                                local targetInstance = (itemValObj and itemValObj:IsA("ObjectValue") and itemValObj.Value)
+                                    or (itemValObj and typeof(itemValObj.Value) == "Instance" and itemValObj.Value)
+                                    or slot
+
+                                if targetInstance and not registered[targetInstance] then
+                                    registered[targetInstance] = true
+                                    table.insert(itemsToSell, targetInstance)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- DISPARO COM VALIDAÇÃO (NÃO DISPARA VAZIO)
+    if #itemsToSell > 0 then
+        pcall(function()
+            equipRemote:FireServer("Sell", itemsToSell)
+        end)
+        Fluent:Notify({
+            Title = "Auto-Sell Concluído",
+            Content = string.format("Vendidos %d itens filtrados com sucesso!", #itemsToSell),
+            Duration = 3.5
+        })
+    end
+
+    isSellingInProgress = false
+end
+
+-- ====================================================================
+-- 9. CONTROLES DE INTERFACE (PRIORIDADE ENGAGE > PLAY AGAIN)
 -- ====================================================================
 local function checkDungeonStartButton()
     local pguiRef = player:FindFirstChild("PlayerGui")
@@ -557,7 +717,6 @@ local function checkDungeonEnd()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef or not isScriptRunning then return false, nil end
 
-    -- Se o Boss Secreto estiver ativo (em qualquer fase), não encerra enquanto houver inimigos
     if isVirusActive then
         local enemies = (Settings.SelectedPhase == "Incursão") and getAllLivingEnemiesIncursion() or getAllLivingEnemiesBleach()
         if #enemies > 0 then
@@ -581,10 +740,10 @@ local function checkDungeonEnd()
 end
 
 -- ====================================================================
--- 9. TRAVA E EXECUÇÃO DE COMBATE
+-- 10. TRAVA E EXECUÇÃO DE COMBATE
 -- ====================================================================
 local function isPortalTransitionActive()
-    if isRespawning or isTransitioning or enteringPortal then return true end
+    if isRespawning or isTransitioning or enteringPortal or isSellingInProgress then return true end
     if (tick() - dungeonStartTime) < Settings.StartWaitTime then return true end
 
     if Settings.SelectedPhase == "Bleach (Fase 4)" and not isVirusActive then
@@ -602,7 +761,7 @@ local function isPortalTransitionActive()
 end
 
 local function executeNativeAttack()
-    if isDungeonEnded or isRespawning or isTransitioning or enteringPortal or not isScriptRunning or isPortalTransitionActive() then return end
+    if isDungeonEnded or isRespawning or isTransitioning or enteringPortal or isSellingInProgress or not isScriptRunning or isPortalTransitionActive() then return end
     
     comboIndex = (comboIndex % 4) + 1
     local weapon = getEffectiveWeaponName()
@@ -625,7 +784,7 @@ end
 
 task.spawn(function()
     while isScriptRunning do
-        if Settings.AutoAttack and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and not isPortalTransitionActive() then
+        if Settings.AutoAttack and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and not isSellingInProgress and not isPortalTransitionActive() then
             local char, _, hum = getCharacter()
             if char and hum and hum.Health > 0 then
                 executeNativeAttack()
@@ -637,7 +796,7 @@ end)
 
 task.spawn(function()
     while isScriptRunning do
-        if Settings.AutoSkills and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and not isPortalTransitionActive() then
+        if Settings.AutoSkills and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and not isSellingInProgress and not isPortalTransitionActive() then
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 if (tick() - lastSkillUse) >= Settings.SkillCooldown then
@@ -675,7 +834,7 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 10. MÁQUINAS DE ESTADOS
+-- 11. MÁQUINAS DE ESTADOS
 -- ====================================================================
 local function passThroughPortalSafely(targetPortalCFrame)
     local char, root, hum = getCharacter()
@@ -731,37 +890,47 @@ local function runBleachPhaseFlow()
 
     if enteringPortal then return end
 
-    -- Se o Virus estiver ativo, prioriza o combate direto ao invés de buscar portais
-    if not isVirusActive then
-        local wave = getCurrentWaveNumber()
-
-        if wave >= 12 and currentRoom ~= "BossRoom" then
-            passThroughPortalSafely(PORTAL_2_BOSS_POS)
-            return
+    if isVirusActive then
+        local enemies = getAllLivingEnemiesBleach()
+        if #enemies > 0 then
+            local enemy, enemyPart = getClosestLivingEnemy()
+            if enemy and enemyPart then
+                local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
+                local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
+                smoothFlyTo(targetCFrame)
+            end
+        else
+            stopMovement()
         end
+        return
+    end
 
-        if wave >= 8 and currentRoom == "Room1" then
-            passThroughPortalSafely(PORTAL_1_WAVE8_POS)
-            return
-        end
+    local wave = getCurrentWaveNumber()
+
+    if wave >= 12 and currentRoom ~= "BossRoom" then
+        passThroughPortalSafely(PORTAL_2_BOSS_POS)
+        return
+    end
+
+    if wave >= 8 and currentRoom == "Room1" then
+        passThroughPortalSafely(PORTAL_1_WAVE8_POS)
+        return
     end
 
     local enemies = getAllLivingEnemiesBleach()
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
-            while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) and not isPortalTransitionActive() do
+            while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and not isSellingInProgress and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) and not isPortalTransitionActive() do
                 local _, currentRoot = getCharacter()
                 if not currentRoot then break end
 
-                if not isVirusActive then
-                    local currentWave = getCurrentWaveNumber()
-                    local isR1 = currentRoot.Position.Z < 2100 and currentRoot.Position.Y > -450
-                    local isBoss = currentRoot.Position.Y > -400 and currentRoot.Position.Z > 2800
+                local currentWave = getCurrentWaveNumber()
+                local isR1 = currentRoot.Position.Z < 2100 and currentRoot.Position.Y > -450
+                local isBoss = currentRoot.Position.Y > -400 and currentRoot.Position.Z > 2800
 
-                    if (currentWave >= 8 and isR1) or (currentWave >= 12 and not isBoss) then
-                        break
-                    end
+                if (currentWave >= 8 and isR1) or (currentWave >= 12 and not isBoss) then
+                    break
                 end
 
                 local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
@@ -797,7 +966,7 @@ local function runIncursionPhaseFlow()
 end
 
 -- ====================================================================
--- LOOP PRINCIPAL
+-- LOOP PRINCIPAL (AUTO-SELL COM DELAY DE 10s PÓS-START)
 -- ====================================================================
 task.spawn(function()
     while isScriptRunning do
@@ -805,6 +974,17 @@ task.spawn(function()
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 
+                -- Agenda e executa o Auto-Sell após 10 segundos do início
+                if Settings.AutoSell and not initialSellScheduled then
+                    initialSellScheduled = true
+                    task.spawn(function()
+                        task.wait(10)
+                        if isScriptRunning and Settings.AutoSell and not isDungeonEnded then
+                            executeDirectAutoSell()
+                        end
+                    end)
+                end
+
                 if Settings.AutoStart then
                     checkDungeonStartButton()
                 end
@@ -858,21 +1038,22 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- 11. INTERFACE FLUENT COM CONTROLE DE VELOCIDADE
+-- 12. INTERFACE FLUENT
 -- ====================================================================
 local Window = Fluent:CreateWindow({
     Title = "Hub dos Rapazes",
     SubTitle = "Anime Dungeons",
     TabWidth = 140,
-    Size = UDim2.fromOffset(520, 420),
+    Size = UDim2.fromOffset(530, 430),
     Acrylic = false,
     Theme = "Dark",
     MinimizeKey = Enum.KeyCode.RightControl
 })
 
 local Tabs = {
-    Farm = Window:AddTab({ Title = "Farm", Icon = "crosshair" }),
-    Settings = Window:AddTab({ Title = "Settings", Icon = "settings" })
+    Farm = Window:AddTab({ Title = "Farm" }),
+    AutoSell = Window:AddTab({ Title = "Auto Sell" }),
+    Settings = Window:AddTab({ Title = "Settings" })
 }
 
 local toggleGui = Instance.new("ScreenGui")
@@ -926,6 +1107,7 @@ local function destroyScript()
     Settings.AutoFarm = false
     Settings.AutoAttack = false
     Settings.AutoSkills = false
+    Settings.AutoSell = false
     
     stopMovement()
     
@@ -971,8 +1153,8 @@ task.spawn(function()
     end
 end)
 
+-- ABA FARM
 local PhaseSection = Tabs.Farm:AddSection("Fase Ativa")
-
 PhaseSection:AddDropdown("PhaseSelector", {
     Title = "Selecionar Fase",
     Values = { "Bleach (Fase 4)", "Incursão" },
@@ -984,7 +1166,6 @@ PhaseSection:AddDropdown("PhaseSelector", {
 })
 
 local WeaponSection = Tabs.Farm:AddSection("Configuração de Arma")
-
 local WeaponInput = WeaponSection:AddInput("WeaponInputBox", {
     Title = "Arma Equipada / Nome",
     Default = Settings.CustomWeaponName,
@@ -1022,16 +1203,13 @@ WeaponSection:AddButton({
 })
 
 local CombatSection = Tabs.Farm:AddSection("Controles de Farm")
-
 CombatSection:AddToggle("AutoFarmToggle", {
     Title = "Iniciar Auto Farm",
     Description = "Executa a rota mapeada da fase selecionada",
     Default = true,
     Callback = function(Value)
         Settings.AutoFarm = Value
-        if not Value then
-            stopMovement()
-        end
+        if not Value then stopMovement() end
     end
 })
 
@@ -1039,27 +1217,21 @@ CombatSection:AddToggle("AutoEngageToggle", {
     Title = "Auto Engage (Boss Secreto)",
     Description = "Prioridade: Clica em Engage antes do Play Again",
     Default = true,
-    Callback = function(Value)
-        Settings.AutoEngage = Value
-    end
+    Callback = function(Value) Settings.AutoEngage = Value end
 })
 
 CombatSection:AddToggle("AutoPlayAgainToggle", {
     Title = "Auto Play Again",
     Description = "Reinicia a partida automaticamente ao vencer/perder",
     Default = true,
-    Callback = function(Value)
-        Settings.AutoPlayAgain = Value
-    end
+    Callback = function(Value) Settings.AutoPlayAgain = Value end
 })
 
 CombatSection:AddToggle("AutoStartToggle", {
     Title = "Auto Start Dungeon",
     Description = "Inicia a fase sozinho",
     Default = true,
-    Callback = function(Value)
-        Settings.AutoStart = Value
-    end
+    Callback = function(Value) Settings.AutoStart = Value end
 })
 
 CombatSection:AddSlider("StartWaitTimeSlider", {
@@ -1078,18 +1250,14 @@ CombatSection:AddToggle("AutoAttackToggle", {
     Title = "Auto Attack (M1)",
     Description = "Dispara os ataques básicos continuamente",
     Default = true,
-    Callback = function(Value)
-        Settings.AutoAttack = Value
-    end
+    Callback = function(Value) Settings.AutoAttack = Value end
 })
 
 CombatSection:AddToggle("AutoSkillsToggle", {
     Title = "Auto Skills (Z, X e Ultimate)",
     Description = "Dispara skills apenas perto de inimigos",
     Default = true,
-    Callback = function(Value)
-        Settings.AutoSkills = Value
-    end
+    Callback = function(Value) Settings.AutoSkills = Value end
 })
 
 CombatSection:AddSlider("SkillMaxDistSlider", {
@@ -1098,9 +1266,7 @@ CombatSection:AddSlider("SkillMaxDistSlider", {
     Min = 8,
     Max = 40,
     Rounding = 0,
-    Callback = function(Value)
-        Settings.SkillMaxDistance = Value
-    end
+    Callback = function(Value) Settings.SkillMaxDistance = Value end
 })
 
 CombatSection:AddSlider("AttackSpeedSlider", {
@@ -1151,8 +1317,96 @@ CombatSection:AddSlider("TweenSpeed", {
     end
 })
 
-local SettingsSection = Tabs.Settings:AddSection("Gerenciamento do Script")
+-- ABA AUTO-SELL
+local AutoSellMainSection = Tabs.AutoSell:AddSection("Controle Geral de Venda")
 
+AutoSellMainSection:AddToggle("AutoSellToggle", {
+    Title = "Venda Automática (10s pós-início)",
+    Description = "Aguarda 10 segundos de partida e vende os itens configurados",
+    Default = Settings.AutoSell,
+    Callback = function(Value)
+        Settings.AutoSell = Value
+        saveConfig()
+    end
+})
+
+AutoSellMainSection:AddButton({
+    Title = "⚡ Executar Venda Direta Agora",
+    Description = "Dispara a venda instantânea dos itens filtrados",
+    Callback = function()
+        pcall(executeDirectAutoSell)
+    end
+})
+
+local AutoSellRaritySection = Tabs.AutoSell:AddSection("Filtro de Raridades (Vender)")
+
+AutoSellRaritySection:AddToggle("SellRareToggle", {
+    Title = "Vender Raro (Rare)",
+    Default = Settings.SellRare,
+    Callback = function(Value)
+        Settings.SellRare = Value
+        saveConfig()
+    end
+})
+
+AutoSellRaritySection:AddToggle("SellEpicToggle", {
+    Title = "Vender Épico (Epic)",
+    Default = Settings.SellEpic,
+    Callback = function(Value)
+        Settings.SellEpic = Value
+        saveConfig()
+    end
+})
+
+AutoSellRaritySection:AddToggle("SellLegendaryToggle", {
+    Title = "Vender Lendário (Legendary)",
+    Default = Settings.SellLegendary,
+    Callback = function(Value)
+        Settings.SellLegendary = Value
+        saveConfig()
+    end
+})
+
+AutoSellRaritySection:AddToggle("SellMythicToggle", {
+    Title = "Vender Mítico (Mythic)",
+    Default = Settings.SellMythic,
+    Callback = function(Value)
+        Settings.SellMythic = Value
+        saveConfig()
+    end
+})
+
+local AutoSellTypeSection = Tabs.AutoSell:AddSection("Tipos de Item Permitidos")
+
+AutoSellTypeSection:AddToggle("SellWeaponsToggle", {
+    Title = "Incluir Armas (Weapons)",
+    Default = Settings.SellWeapons,
+    Callback = function(Value)
+        Settings.SellWeapons = Value
+        saveConfig()
+    end
+})
+
+AutoSellTypeSection:AddToggle("SellArmorsToggle", {
+    Title = "Incluir Armaduras (Armors)",
+    Default = Settings.SellArmors,
+    Callback = function(Value)
+        Settings.SellArmors = Value
+        saveConfig()
+    end
+})
+
+AutoSellTypeSection:AddToggle("SellSpellsToggle", {
+    Title = "Incluir Spells (Magias)",
+    Default = Settings.SellSpells,
+    Callback = function(Value)
+        Settings.SellSpells = Value
+        saveConfig()
+    end
+})
+
+-- ABA SETTINGS
+local SettingsSection = Tabs.Settings:AddSection("Gerenciamento do Script")
 SettingsSection:AddButton({
     Title = "Encerrar Script por Completo",
     Description = "Para todos os loops e libera o carregamento de uma nova versão",
