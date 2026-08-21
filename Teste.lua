@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (ONE PIECE PORTAL 2 FIX)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (SELETOR DE MODOS DE POSICIONAMENTO)
 -- ====================================================================
 
 -- [[ 1. SINGLETON & BOOTSTRAP ]]
@@ -79,10 +79,11 @@ local SharedState = {
     CurrentTargetPos = nil
 }
 
--- [[ 2. MÓDULO DE CONFIGURAÇÃO ]]
+-- [[ 2. CONFIGURAÇÕES ]]
 local ConfigModule = {}
 ConfigModule.Settings = {
     SelectedPhase = "One Piece",
+    PositionMode = "Em Cima da Cabeça", -- "Em Cima da Cabeça", "Nas Costas", "Padrão (Anterior)"
     CustomWeaponName = "VoidRods",
     AutoFarm = true,
     AutoAttack = true,
@@ -93,9 +94,10 @@ ConfigModule.Settings = {
     HardcoreMode = false,
     StartWaitTime = 2.0,
     SkillCooldown = 0.8,
-    SkillMaxDistance = 20,
+    SkillMaxDistance = 22,
     HeightAboveEnemy = 8.5,
-    TweenSpeed = 50,
+    BackDistance = 6.0,
+    TweenSpeed = 55,
     AttackSpeed = 0.15,
     AutoClaimQuests = false
 }
@@ -130,7 +132,7 @@ ConfigModule.Load()
 local CharacterModule = {}
 local diedConnection = nil
 local charConnection = nil
-local antiFlingConnection = nil
+local hoverConnection = nil
 
 function CharacterModule.Get()
     local char = player.Character
@@ -167,6 +169,16 @@ function CharacterModule.ApplyPhysicsStabilizers(char)
     end
 end
 
+hoverConnection = RunService.Heartbeat:Connect(function()
+    if SharedState.IsRunning and ConfigModule.Settings.AutoFarm and not SharedState.IsRespawning and not SharedState.EnteringPortal then
+        local _, root, hum = CharacterModule.Get()
+        if root and hum and hum.Health > 0 then
+            root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+            root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+        end
+    end
+end)
+
 function CharacterModule.GetSafeCFrame(targetPosition, lookAtPosition)
     local char = player.Character
     local rayOrigin = targetPosition + Vector3.new(0, 20, 0)
@@ -192,42 +204,66 @@ function CharacterModule.GetSafeCFrame(targetPosition, lookAtPosition)
     return CFrame.new(safePos, lookAtPosition)
 end
 
-function CharacterModule.FlyTo(targetCFrame)
-    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or not SharedState.IsRunning then return end
+-- Posicionamento Adaptativo Conforme o Dropdown
+function CharacterModule.FlyToEnemy(targetPart)
+    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning then return end
     local _, root = CharacterModule.Get()
-    if not root or not root.Parent then return end
+    if not root or not targetPart or not targetPart.Parent then return end
+
+    local mode = ConfigModule.Settings.PositionMode
+    local targetCFrame
+
+    if mode == "Em Cima da Cabeça" then
+        local abovePos = targetPart.Position + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0)
+        targetCFrame = CFrame.lookAt(abovePos, targetPart.Position)
+    elseif mode == "Nas Costas" then
+        local backOffset = -targetPart.CFrame.LookVector * ConfigModule.Settings.BackDistance + Vector3.new(0, 2.5, 0)
+        local backPos = targetPart.Position + backOffset
+        targetCFrame = CFrame.lookAt(backPos, targetPart.Position)
+    else -- "Padrão (Anterior)"
+        local abovePos = targetPart.Position + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0)
+        targetCFrame = CharacterModule.GetSafeCFrame(abovePos, targetPart.Position)
+    end
 
     local targetPos = targetCFrame.Position
-    if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 3.0 and SharedState.CurrentTween then
+    local distance = (root.Position - targetPos).Magnitude
+
+    if distance <= 2.5 then
+        root.CFrame = targetCFrame
+        return
+    end
+
+    if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 2.0 and SharedState.CurrentTween then
         return
     end
 
     SharedState.CurrentTargetPos = targetPos
-    local distance = (root.Position - targetPos).Magnitude
-    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 5), 0.08, 8)
+    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 10), 0.05, 5)
 
     if SharedState.CurrentTween then 
         SharedState.CurrentTween:Cancel() 
     end
 
-    root.AssemblyLinearVelocity = Vector3.zero
-    root.AssemblyAngularVelocity = Vector3.zero
-
     SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out), {CFrame = targetCFrame})
     SharedState.CurrentTween:Play()
 end
 
-antiFlingConnection = RunService.Heartbeat:Connect(function()
-    if SharedState.IsRunning and ConfigModule.Settings.AutoFarm and not SharedState.IsRespawning then
-        local _, root, hum = CharacterModule.Get()
-        if root and hum then
-            if math.abs(root.AssemblyLinearVelocity.Y) > 60 or root.AssemblyLinearVelocity.Magnitude > 130 then
-                root.AssemblyLinearVelocity = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-            end
-        end
+function CharacterModule.FlyToPortal(targetCFrame)
+    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or not SharedState.IsRunning then return end
+    local _, root = CharacterModule.Get()
+    if not root or not root.Parent then return end
+
+    local targetPos = targetCFrame.Position
+    local distance = (root.Position - targetPos).Magnitude
+    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 10), 0.08, 6)
+
+    if SharedState.CurrentTween then 
+        SharedState.CurrentTween:Cancel() 
     end
-end)
+
+    SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out), {CFrame = targetCFrame})
+    SharedState.CurrentTween:Play()
+end
 
 function CharacterModule.TriggerButton(btn)
     if not btn or not SharedState.IsRunning then return end
@@ -270,12 +306,9 @@ function TargetingModule.GetTargetPart(obj)
         or obj:FindFirstChild("RootPart")
         or obj:FindFirstChild("Hitbox")
         or obj:FindFirstChild("HitBox")
-        or obj:FindFirstChild("Bot")
-        or obj:FindFirstChild("Torso")
-        or obj:FindFirstChild("UpperTorso")
         or obj:FindFirstChild("Head")
+        or obj:FindFirstChild("Torso")
         or (obj:IsA("Model") and obj.PrimaryPart)
-        or (obj:IsA("BasePart") and obj)
         or obj:FindFirstChildWhichIsA("BasePart")
 end
 
@@ -496,14 +529,12 @@ function QuestModule.ClaimAll()
     SharedState.IsClaiming = false
 end
 
--- [[ 7. MÓDULO DE FLUXO E NAVEGAÇÃO DA FASE ]]
+-- [[ 7. MÓDULO DE FLUXO E NAVEGAÇÃO ]]
 local FlowModule = {}
 
--- Bleach
 local BLEACH_PORTAL_1 = CFrame.new(4557.2, -305.5, 1925.0)
 local BLEACH_PORTAL_2 = CFrame.new(5411.5, -561.0, 2550.0)
 
--- One Piece (Coordenadas reais de teleporte)
 local OP_PORTAL_1_WAVE7  = CFrame.new(1196.6, -240.9, 1855.1)
 local OP_PORTAL_2_WAVE12 = CFrame.new(2909.3, -105.7, 2151.7)
 
@@ -531,12 +562,11 @@ function FlowModule.PassPortal(targetCFrame)
     local dist = (root.Position - targetCFrame.Position).Magnitude
 
     if dist > 6 then
-        CharacterModule.FlyTo(targetCFrame)
+        CharacterModule.FlyToPortal(targetCFrame)
     else
         SharedState.EnteringPortal = true
         CharacterModule.StopMovement()
 
-        -- Pisa diretamente na coordenada exata da área de teleporte
         local tweenInfo = TweenInfo.new(0.4, Enum.EasingStyle.Linear)
         local passTween = TweenService:Create(root, tweenInfo, {CFrame = targetCFrame})
         passTween:Play()
@@ -554,11 +584,9 @@ function FlowModule.RunBleach()
     if not root then return end
 
     if SharedState.IsVirusActive then
-        local enemy, enemyPart = TargetingModule.GetClosestEnemy("Bleach (Fase 4)")
-        if enemy and enemyPart then
-            local abovePos = enemyPart.Position + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0)
-            local safeCFrame = CharacterModule.GetSafeCFrame(abovePos, enemyPart.Position)
-            CharacterModule.FlyTo(safeCFrame)
+        local _, enemyPart = TargetingModule.GetClosestEnemy("Bleach (Fase 4)")
+        if enemyPart then
+            CharacterModule.FlyToEnemy(enemyPart)
         else
             CharacterModule.StopMovement()
         end
@@ -594,11 +622,9 @@ function FlowModule.RunBleach()
         return
     end
 
-    local enemy, enemyPart = TargetingModule.GetClosestEnemy("Bleach (Fase 4)")
-    if enemy and enemyPart then
-        local abovePos = enemyPart.Position + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0)
-        local safeCFrame = CharacterModule.GetSafeCFrame(abovePos, enemyPart.Position)
-        CharacterModule.FlyTo(safeCFrame)
+    local _, enemyPart = TargetingModule.GetClosestEnemy("Bleach (Fase 4)")
+    if enemyPart then
+        CharacterModule.FlyToEnemy(enemyPart)
     else
         CharacterModule.StopMovement()
     end
@@ -610,23 +636,20 @@ function FlowModule.RunOnePiece()
     if not root then return end
 
     if SharedState.IsVirusActive then
-        local enemy, enemyPart = TargetingModule.GetClosestEnemy("One Piece")
-        if enemy and enemyPart then
-            local abovePos = enemyPart.Position + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0)
-            local safeCFrame = CharacterModule.GetSafeCFrame(abovePos, enemyPart.Position)
-            CharacterModule.FlyTo(safeCFrame)
+        local _, enemyPart = TargetingModule.GetClosestEnemy("One Piece")
+        if enemyPart then
+            CharacterModule.FlyToEnemy(enemyPart)
         else
             CharacterModule.StopMovement()
         end
         return
     end
 
-    -- Detecção precisa das 3 salas de One Piece
     local currentRoom = "Room1"
     if root.Position.X >= 2200 and root.Position.X <= 2650 and root.Position.Z >= 1950 then
-        currentRoom = "BossRoom" -- Sala 3 Spawn: 2457.1, -77.1, 2104.8
+        currentRoom = "BossRoom"
     elseif root.Position.X >= 1400 then
-        currentRoom = "Room2" -- Sala 2 Spawn: 1638.9, -94.8, 1299.7
+        currentRoom = "Room2"
     end
 
     if currentRoom ~= SharedState.LastRoomState then
@@ -642,24 +665,19 @@ function FlowModule.RunOnePiece()
     if SharedState.EnteringPortal then return end
     local wave = FlowModule.GetWave()
 
-    -- 1. Na Wave 12, se ainda não estiver na BossRoom, foca 100% no Portal 2 (sem distrações)
     if wave >= 12 and currentRoom ~= "BossRoom" then
         FlowModule.PassPortal(OP_PORTAL_2_WAVE12)
         return
     end
 
-    -- 2. Na Wave 7 a 11, se estiver na Sala 1, força a ida ao Portal 1
     if wave >= 7 and currentRoom == "Room1" then
         FlowModule.PassPortal(OP_PORTAL_1_WAVE7)
         return
     end
 
-    -- 3. Combate normal de mobs e Boss
-    local enemy, enemyPart = TargetingModule.GetClosestEnemy("One Piece")
-    if enemy and enemyPart then
-        local abovePos = enemyPart.Position + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0)
-        local safeCFrame = CharacterModule.GetSafeCFrame(abovePos, enemyPart.Position)
-        CharacterModule.FlyTo(safeCFrame)
+    local _, enemyPart = TargetingModule.GetClosestEnemy("One Piece")
+    if enemyPart then
+        CharacterModule.FlyToEnemy(enemyPart)
     else
         CharacterModule.StopMovement()
     end
@@ -667,11 +685,9 @@ end
 
 -- Rota Incursão
 function FlowModule.RunIncursion()
-    local enemy, enemyPart = TargetingModule.GetClosestEnemy("Incursão")
-    if enemy and enemyPart then
-        local abovePos = enemyPart.Position + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0)
-        local safeCFrame = CharacterModule.GetSafeCFrame(abovePos, enemyPart.Position)
-        CharacterModule.FlyTo(safeCFrame)
+    local _, enemyPart = TargetingModule.GetClosestEnemy("Incursão")
+    if enemyPart then
+        CharacterModule.FlyToEnemy(enemyPart)
     else
         CharacterModule.StopMovement()
     end
@@ -842,7 +858,7 @@ task.spawn(function()
         else
             CharacterModule.StopMovement()
         end
-        task.wait(0.05)
+        task.wait(0.04)
     end
 end)
 
@@ -908,7 +924,7 @@ function UIModule.Shutdown()
     CharacterModule.StopMovement()
     if charConnection then charConnection:Disconnect() end
     if diedConnection then diedConnection:Disconnect() end
-    if antiFlingConnection then antiFlingConnection:Disconnect() end
+    if hoverConnection then hoverConnection:Disconnect() end
     if singletonTag and singletonTag.Parent then singletonTag:Destroy() end
     if toggleGui and toggleGui.Parent then toggleGui:Destroy() end
     for _, gui in ipairs({CoreGui, player.PlayerGui}) do
@@ -936,12 +952,19 @@ task.spawn(function()
 end)
 
 -- Componentes da UI
-local PhaseSection = Tabs.Farm:AddSection("Fase Ativa")
+local PhaseSection = Tabs.Farm:AddSection("Configurações de Fase & Posição")
 PhaseSection:AddDropdown("PhaseSelector", {
     Title = "Selecionar Fase",
     Values = { "One Piece", "Bleach (Fase 4)", "Incursão" },
     Default = ConfigModule.Settings.SelectedPhase,
     Callback = function(Value) ConfigModule.Settings.SelectedPhase = Value ConfigModule.Save() end
+})
+
+PhaseSection:AddDropdown("PositionModeSelector", {
+    Title = "Modo de Posicionamento",
+    Values = { "Em Cima da Cabeça", "Nas Costas", "Padrão (Anterior)" },
+    Default = ConfigModule.Settings.PositionMode,
+    Callback = function(Value) ConfigModule.Settings.PositionMode = Value ConfigModule.Save() end
 })
 
 local WeaponSection = Tabs.Farm:AddSection("Configuração de Arma")
@@ -969,11 +992,29 @@ WeaponSection:AddButton({
     end
 })
 
-local CombatSection = Tabs.Farm:AddSection("Controles de Farm")
+local CombatSection = Tabs.Farm:AddSection("Controles de Combate & Movimento")
 CombatSection:AddToggle("AutoFarmToggle", {
     Title = "Iniciar Auto Farm",
     Default = true,
     Callback = function(Value) ConfigModule.Settings.AutoFarm = Value if not Value then CharacterModule.StopMovement() end end
+})
+CombatSection:AddSlider("HeightAboveEnemy", {
+    Title = "Altura Vertical (Y)",
+    Default = ConfigModule.Settings.HeightAboveEnemy,
+    Min = 2, Max = 18, Rounding = 1,
+    Callback = function(Value) ConfigModule.Settings.HeightAboveEnemy = Value ConfigModule.Save() end
+})
+CombatSection:AddSlider("BackDistance", {
+    Title = "Distância das Costas (Studs)",
+    Default = ConfigModule.Settings.BackDistance,
+    Min = 2, Max = 15, Rounding = 1,
+    Callback = function(Value) ConfigModule.Settings.BackDistance = Value ConfigModule.Save() end
+})
+CombatSection:AddSlider("TweenSpeed", {
+    Title = "Velocidade do Voo",
+    Default = ConfigModule.Settings.TweenSpeed,
+    Min = 20, Max = 120, Rounding = 0,
+    Callback = function(Value) ConfigModule.Settings.TweenSpeed = Value ConfigModule.Save() end
 })
 CombatSection:AddToggle("HardcoreToggle", {
     Title = "Modo Hardcore",
@@ -1029,18 +1070,6 @@ CombatSection:AddSlider("SkillCooldownSlider", {
     Default = ConfigModule.Settings.SkillCooldown,
     Min = 0.2, Max = 4, Rounding = 1,
     Callback = function(Value) ConfigModule.Settings.SkillCooldown = Value ConfigModule.Save() end
-})
-CombatSection:AddSlider("HeightAboveEnemy", {
-    Title = "Altura acima do Inimigo",
-    Default = ConfigModule.Settings.HeightAboveEnemy,
-    Min = 1, Max = 20, Rounding = 1,
-    Callback = function(Value) ConfigModule.Settings.HeightAboveEnemy = Value ConfigModule.Save() end
-})
-CombatSection:AddSlider("TweenSpeed", {
-    Title = "Velocidade do Voo",
-    Default = ConfigModule.Settings.TweenSpeed,
-    Min = 20, Max = 120, Rounding = 0,
-    Callback = function(Value) ConfigModule.Settings.TweenSpeed = Value ConfigModule.Save() end
 })
 
 -- ABA SETTINGS
