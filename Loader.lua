@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (AUTO FARM & ATTACK FULL RESTORED)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (ANTI-SUSPICIOUS MOVEMENT FIX)
 -- ====================================================================
 
 -- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA (Singleton Anti-Duplicação)
@@ -91,7 +91,7 @@ local Settings = {
     SkillCooldown = 0.8,
     SkillMaxDistance = 20,
     HeightAboveEnemy = 8.5,
-    TweenSpeed = 50,
+    TweenSpeed = 38,
     AttackSpeed = 0.15,
     AutoClaimQuests = false,
     AutoSell = false,
@@ -163,12 +163,10 @@ loadConfig()
 
 -- 5. SERVIÇOS E ESTADOS GLOBAIS
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
-local TweenService = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local isScriptRunning = true
-local currentTween = nil
 local charConnection = nil
 local diedConnection = nil
 
@@ -176,8 +174,8 @@ local equipRemote = ReplicatedStorage:WaitForChild("Remotes", 10) and Replicated
 local questRemote = ReplicatedStorage:WaitForChild("Remotes", 10) and ReplicatedStorage.Remotes:WaitForChild("Quest", 10)
 
 -- COORDENADAS DOS PORTAIS (FASE 4 - BLEACH)
-local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0)
-local PORTAL_2_BOSS_POS  = CFrame.new(5411.5, -561.0, 2550.0)
+local PORTAL_1_WAVE8_POS = Vector3.new(4557.2, -305.5, 1925.0)
+local PORTAL_2_BOSS_POS  = Vector3.new(5411.5, -561.0, 2550.0)
 
 local isRespawning = false
 local isTransitioning = false
@@ -193,6 +191,9 @@ local comboIndex = 1
 local isDungeonEnded = false
 local attackRemote = nil
 
+local moverVelocity = nil
+local moverGyro = nil
+
 local function getCharacter()
     local char = player.Character
     if char and char:FindFirstChild("HumanoidRootPart") and char:FindFirstChild("Humanoid") and char.Humanoid.Health > 0 then
@@ -202,13 +203,72 @@ local function getCharacter()
 end
 
 local function stopMovement()
-    if currentTween then
-        currentTween:Cancel()
-        currentTween = nil
+    if moverVelocity and moverVelocity.Parent then
+        moverVelocity.Velocity = Vector3.zero
     end
     local _, root = getCharacter()
     if root and root.Parent then
         root.AssemblyLinearVelocity = Vector3.zero
+    end
+end
+
+local function cleanupMovers()
+    if moverVelocity then pcall(function() moverVelocity:Destroy() end) moverVelocity = nil end
+    if moverGyro then pcall(function() moverGyro:Destroy() end) moverGyro = nil end
+end
+
+local function ensureMovers(root)
+    if not root or not root.Parent then return nil, nil end
+    if not moverVelocity or moverVelocity.Parent ~= root then
+        cleanupMovers()
+        moverVelocity = Instance.new("BodyVelocity")
+        moverVelocity.Name = "Hub_SafeMover"
+        moverVelocity.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+        moverVelocity.Velocity = Vector3.zero
+        moverVelocity.Parent = root
+    end
+    if not moverGyro or moverGyro.Parent ~= root then
+        moverGyro = Instance.new("BodyGyro")
+        moverGyro.Name = "Hub_SafeGyro"
+        moverGyro.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
+        moverGyro.P = 3000
+        moverGyro.D = 500
+        moverGyro.CFrame = root.CFrame
+        moverGyro.Parent = root
+    end
+    return moverVelocity, moverGyro
+end
+
+-- Movimentação por Física Fluida (Sem Kick de Movimento Suspeito)
+local function safeFlyTo(targetPos, facePos)
+    if isDungeonEnded or isRespawning or isTransitioning or isSellingInProgress or not isScriptRunning then
+        stopMovement()
+        return
+    end
+
+    local _, root = getCharacter()
+    if not root or not root.Parent then return end
+
+    local bv, bg = ensureMovers(root)
+    if not bv or not bg then return end
+
+    local currentPos = root.Position
+    local delta = (targetPos - currentPos)
+    local dist = delta.Magnitude
+
+    if dist <= 2.5 then
+        bv.Velocity = Vector3.zero
+        root.AssemblyLinearVelocity = Vector3.zero
+    else
+        local speed = math.clamp(Settings.TweenSpeed, 15, 65)
+        local dir = delta.Unit
+        bv.Velocity = dir * speed
+    end
+
+    if facePos then
+        bg.CFrame = CFrame.new(currentPos, facePos)
+    else
+        bg.CFrame = CFrame.new(currentPos, targetPos)
     end
 end
 
@@ -228,7 +288,6 @@ local function triggerGuiButton(btn)
     end)
 end
 
--- Detecção segura de partida realmente encerrada
 local function checkDungeonEnd()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef or not isScriptRunning then return false, nil end
@@ -266,6 +325,7 @@ end
 
 local function bindCharacter(char)
     if not char then return end
+    cleanupMovers()
     local hum = char:WaitForChild("Humanoid", 10)
     if hum then
         if diedConnection then diedConnection:Disconnect() end
@@ -281,6 +341,7 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
     isRespawning = true
     isTransitioning = false
     enteringPortal = false
+    cleanupMovers()
     stopMovement()
     attackRemote = nil
 
@@ -290,23 +351,6 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
         isRespawning = false
     end)
 end)
-
-local function smoothFlyTo(targetCFrame)
-    if isDungeonEnded or isRespawning or isTransitioning or isSellingInProgress or not isScriptRunning then return end
-    local _, root = getCharacter()
-    if not root or not root.Parent then return end
-    
-    local distance = (root.Position - targetCFrame.Position).Magnitude
-    local duration = math.clamp(distance / math.max(Settings.TweenSpeed, 5), 0.05, 8)
-
-    if currentTween then
-        currentTween:Cancel()
-    end
-
-    local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
-    currentTween = TweenService:Create(root, tweenInfo, {CFrame = targetCFrame})
-    currentTween:Play()
-end
 
 local function pressKey(keyCode)
     if not isScriptRunning then return end
@@ -932,24 +976,23 @@ task.spawn(function()
 end)
 
 -- 12. MÁQUINAS DE ESTADOS & NAVEGAÇÃO
-local function passThroughPortalSafely(targetPortalCFrame)
+local function passThroughPortalSafely(targetPos)
     local char, root, hum = getCharacter()
     if not root or not hum or enteringPortal then return end
 
-    local dist = (root.Position - targetPortalCFrame.Position).Magnitude
+    local dist = (root.Position - targetPos).Magnitude
 
     if dist > 8 then
-        smoothFlyTo(targetPortalCFrame)
+        safeFlyTo(targetPos)
     else
         enteringPortal = true
         stopMovement()
         
-        root.CFrame = targetPortalCFrame * CFrame.new(0, 0, 2)
-        local forwardDir = (targetPortalCFrame.LookVector * 16)
-        root.AssemblyLinearVelocity = forwardDir
+        root.CFrame = CFrame.new(targetPos + Vector3.new(0, 0, 3))
+        root.AssemblyLinearVelocity = Vector3.new(0, 0, 15)
         
         if hum then
-            hum:MoveTo(targetPortalCFrame.Position + (targetPortalCFrame.LookVector * 6))
+            hum:MoveTo(targetPos + Vector3.new(0, 0, 8))
         end
 
         task.wait(0.8)
@@ -967,8 +1010,7 @@ local function runBleachPhaseFlow()
             local enemy, enemyPart = getClosestLivingEnemy()
             if enemy and enemyPart then
                 local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
-                local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
-                smoothFlyTo(targetCFrame)
+                safeFlyTo(abovePos, enemyPart.Position)
             end
         else
             stopMovement()
@@ -1012,8 +1054,7 @@ local function runBleachPhaseFlow()
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
             local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
-            local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
-            smoothFlyTo(targetCFrame)
+            safeFlyTo(abovePos, enemyPart.Position)
         end
     else
         stopMovement()
@@ -1026,8 +1067,7 @@ local function runIncursionPhaseFlow()
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
             local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
-            local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
-            smoothFlyTo(targetCFrame)
+            safeFlyTo(abovePos, enemyPart.Position)
         end
     else
         stopMovement()
@@ -1185,6 +1225,7 @@ local function destroyScript()
     Settings.AutoSell = false
     Settings.AutoClaimQuests = false
     
+    cleanupMovers()
     stopMovement()
     
     if charConnection then
@@ -1399,8 +1440,8 @@ CombatSection:AddSlider("HeightAboveEnemy", {
 CombatSection:AddSlider("TweenSpeed", {
     Title = "Velocidade do Voo",
     Default = Settings.TweenSpeed,
-    Min = 20,
-    Max = 120,
+    Min = 15,
+    Max = 65,
     Rounding = 0,
     Callback = function(Value)
         Settings.TweenSpeed = Value
