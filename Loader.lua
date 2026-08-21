@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (INTEGRAÇÃO DIRETA COM REPLICATEDSTORAGE STATS)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (FIX: AUTO FARM & ATTACK RESTORED)
 -- ====================================================================
 
 -- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA (Singleton Anti-Duplicação)
@@ -229,9 +229,18 @@ local function triggerGuiButton(btn)
     end)
 end
 
-local function findPlayAgainButton()
+-- Detecção segura de partida realmente encerrada
+local function checkDungeonEnd()
     local pguiRef = player:FindFirstChild("PlayerGui")
-    if not pguiRef then return nil end
+    if not pguiRef or not isScriptRunning then return false, nil end
+
+    if isVirusActive then
+        local gameFolder = workspace:FindFirstChild("Game")
+        local enemiesFolder = (gameFolder and gameFolder:FindFirstChild("Enemies")) or workspace:FindFirstChild("Enemies")
+        local hasEnemies = false
+        if enemiesFolder and #enemiesFolder:GetChildren() > 0 then hasEnemies = true end
+        if hasEnemies then return false, nil end
+    end
 
     local main = pguiRef:FindFirstChild("Main")
     local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
@@ -239,20 +248,12 @@ local function findPlayAgainButton()
     local endActions = dungeonStats and dungeonStats:FindFirstChild("EndActions")
     local playAgainBtn = endActions and endActions:FindFirstChild("PlayAgain")
 
-    if playAgainBtn and playAgainBtn:IsA("GuiObject") and playAgainBtn.Visible then
-        return playAgainBtn
+    -- Validação: O frame de estatísticas e o botão precisam estar VISÍVEIS juntos
+    if dungeonStats and dungeonStats.Visible and playAgainBtn and playAgainBtn.Visible then
+        return true, playAgainBtn
     end
 
-    for _, desc in ipairs(pguiRef:GetDescendants()) do
-        if (desc:IsA("TextButton") or desc:IsA("ImageButton")) and desc.Visible then
-            local txt = desc:IsA("TextButton") and desc.Text:lower() or desc.Name:lower()
-            if txt:find("playagain") or txt:find("play again") or txt:find("retry") or txt:find("jogar novamente") then
-                return desc
-            end
-        end
-    end
-
-    return nil
+    return false, nil
 end
 
 local function onPlayerDied()
@@ -263,7 +264,7 @@ local function onPlayerDied()
         if not isScriptRunning or not Settings.HardcoreMode or not Settings.AutoPlayAgain then return end
 
         stopMovement()
-        local retryBtn = findPlayAgainButton()
+        local _, retryBtn = checkDungeonEnd()
         if retryBtn then
             queueNextExecution()
             task.wait(0.5)
@@ -582,23 +583,16 @@ end
 
 -- 8. MOTOR DE AUTO-SELL COM LEITURA DIRETA DO REPLICATEDSTORAGE.STATS
 local function getOfficialItemRarity(slotName)
-    local statsFolders = {
-        ReplicatedStorage:FindFirstChild("Stats"),
-        ReplicatedStorage:FindFirstChild("Modules"),
-        ReplicatedStorage
-    }
-
-    for _, folder in ipairs(statsFolders) do
-        if folder then
-            for _, desc in ipairs(folder:GetDescendants()) do
-                if desc:IsA("ModuleScript") and (desc.Name:find("Stats") or desc.Name:find("Data")) then
-                    local success, data = pcall(require, desc)
-                    if success and type(data) == "table" then
-                        local itemData = data[slotName]
-                        if type(itemData) == "table" then
-                            local r = itemData.Rarity or itemData.rarity or itemData.Tier
-                            if r then return tostring(r) end
-                        end
+    local statsFolder = ReplicatedStorage:FindFirstChild("Stats")
+    if statsFolder then
+        for _, desc in ipairs(statsFolder:GetChildren()) do
+            if desc:IsA("ModuleScript") then
+                local success, data = pcall(require, desc)
+                if success and type(data) == "table" then
+                    local itemData = data[slotName]
+                    if type(itemData) == "table" then
+                        local r = itemData.Rarity or itemData.rarity or itemData.Tier
+                        if r then return tostring(r) end
                     end
                 end
             end
@@ -610,7 +604,6 @@ end
 local function getItemRarity(slot)
     local slotName = slot.Name
 
-    -- 1. CONSULTA DIRETA AO BANCO OFICIAL DO JOGO
     local officialRarity = getOfficialItemRarity(slotName)
     if officialRarity then
         local r = officialRarity:lower()
@@ -622,7 +615,6 @@ local function getItemRarity(slot)
         if r:find("common") then return "Common" end
     end
 
-    -- 2. Atributos diretos no Slot
     local directAttr = slot:GetAttribute("Rarity") or slot:GetAttribute("Tier")
     if directAttr then
         local r = tostring(directAttr):lower()
@@ -702,17 +694,14 @@ local function executeDirectAutoSell()
                     if not isEquipped and not isFav then
                         local rarity = getItemRarity(slot)
 
-                        -- 1. BLOQUEIO ABSOLUTO DE SECRET
                         if rarity == "Secret" then
                             continue
                         end
 
-                        -- 2. BLOQUEIO ABSOLUTO DE MYTHIC CASO DESATIVADO
                         if rarity == "Mythic" and not Settings.SellMythic then
                             continue
                         end
 
-                        -- 3. TRAVA CONTRA DESCONHECIDOS OU ITENS BASE
                         if rarity == "Unknown" or rarity == "Common" then
                             continue
                         end
@@ -1147,8 +1136,8 @@ task.spawn(function()
                     checkDungeonStartButton()
                 end
 
-                local playAgainBtn = findPlayAgainButton()
-                if playAgainBtn and playAgainBtn.Visible then
+                local ended, playAgainBtn = checkDungeonEnd()
+                if ended and playAgainBtn then
                     isDungeonEnded = true
                     isVirusActive = false
                     stopMovement()
