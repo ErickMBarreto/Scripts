@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (AUTO-SELL & FARM DEFINITIVOS)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (SCANNER DINÂMICO & AUTO-SELL BLINDADO)
 -- ====================================================================
 
 -- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA (Singleton Anti-Duplicação)
@@ -73,7 +73,39 @@ if not inDungeon then
     return
 end
 
--- 4. SISTEMA DE CONFIGURAÇÃO / PERSISTÊNCIA JSON
+-- 4. BANCO DE DADOS GERAL DE ITENS DO JOGO (MAPPER DINÂMICO)
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local GameItemDatabase = {}
+
+local function buildCompleteItemDatabase()
+    local statsFolder = ReplicatedStorage:FindFirstChild("Stats") or ReplicatedStorage:FindFirstChild("Modules")
+    if statsFolder then
+        for _, desc in ipairs(statsFolder:GetDescendants()) do
+            if desc:IsA("ModuleScript") then
+                local success, data = pcall(require, desc)
+                if success and type(data) == "table" then
+                    for itemName, itemInfo in pairs(data) do
+                        if type(itemInfo) == "table" then
+                            local r = itemInfo.Rarity or itemInfo.rarity or itemInfo.Tier
+                            local t = itemInfo.Type or itemInfo.type or itemInfo.Category
+                            if r then
+                                GameItemDatabase[tostring(itemName):lower()] = {
+                                    RealName = tostring(itemName),
+                                    Rarity = tostring(r),
+                                    Type = t and tostring(t):lower() or nil
+                                }
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+buildCompleteItemDatabase()
+
+-- 5. SISTEMA DE CONFIGURAÇÃO / PERSISTÊNCIA JSON
 local HttpService = game:GetService("HttpService")
 local CONFIG_FILE = "HubRapazes_Config.json"
 
@@ -161,10 +193,9 @@ end
 
 loadConfig()
 
--- 5. SERVIÇOS E ESTADOS GLOBAIS
+-- 6. SERVIÇOS E ESTADOS GLOBAIS
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
 local TweenService = game:GetService("TweenService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local isScriptRunning = true
@@ -316,7 +347,7 @@ local function pressKey(keyCode)
     end)
 end
 
--- 6. MOTOR DE COMBATE DIRETO E SCANNER DE ARMA
+-- 7. MOTOR DE COMBATE DIRETO E SCANNER DE ARMA
 local function findAttackRemote()
     if attackRemote and attackRemote.Parent then return attackRemote end
     for _, container in ipairs({ReplicatedStorage, ReplicatedStorage:FindFirstChild("Remotes"), ReplicatedStorage:FindFirstChild("Events")}) do
@@ -380,7 +411,7 @@ local function getDynamicHotbar()
     return nil
 end
 
--- 7. DETECÇÃO DE INIMIGOS
+-- 8. DETECÇÃO DE INIMIGOS
 local function getCurrentWaveNumber()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if pguiRef then
@@ -570,53 +601,40 @@ local function getClosestLivingEnemy()
     return closestEnemy, closestPart
 end
 
--- 8. MOTOR DE AUTO-SELL BLINDADO (MÓDULOS + GRADIENTES VISUAIS)
-local function getOfficialItemRarity(slotName)
-    local statsFolder = ReplicatedStorage:FindFirstChild("Stats") or ReplicatedStorage:FindFirstChild("Modules")
-    if statsFolder then
-        for _, desc in ipairs(statsFolder:GetDescendants()) do
-            if desc:IsA("ModuleScript") then
-                local success, data = pcall(require, desc)
-                if success and type(data) == "table" then
-                    local itemData = data[slotName]
-                    if type(itemData) == "table" then
-                        local r = itemData.Rarity or itemData.rarity or itemData.Tier
-                        if r then return tostring(r) end
-                    end
-                end
-            end
-        end
-    end
-    return nil
-end
-
-local function getItemRarity(slot)
+-- 9. AUDITORIA DE ITEM (VERIFICAÇÃO COMPLETA NO BANCO DE DADOS)
+local function getItemDataVerified(slot)
     local slotName = slot.Name
+    local slotKey = slotName:lower()
 
-    -- 1. CONSULTA AO BANCO OFICIAL
-    local officialRarity = getOfficialItemRarity(slotName)
-    if officialRarity then
-        local r = officialRarity:lower()
-        if r:find("secret") then return "Secret" end
-        if r:find("mythic") then return "Mythic" end
-        if r:find("legendary") then return "Legendary" end
-        if r:find("epic") then return "Epic" end
-        if r:find("rare") then return "Rare" end
-        if r:find("common") then return "Common" end
+    -- 1. Consulta no Banco de Dados Dinâmico construído
+    local dbInfo = GameItemDatabase[slotKey]
+    if dbInfo then
+        local r = dbInfo.Rarity:lower()
+        local detectedRarity = "Unknown"
+        if r:find("secret") then detectedRarity = "Secret"
+        elseif r:find("mythic") then detectedRarity = "Mythic"
+        elseif r:find("legendary") then detectedRarity = "Legendary"
+        elseif r:find("epic") then detectedRarity = "Epic"
+        elseif r:find("rare") then detectedRarity = "Rare"
+        elseif r:find("common") then detectedRarity = "Common"
+        end
+
+        return detectedRarity, dbInfo.Type
     end
 
-    -- 2. ATRIBUTO DIRETO
+    -- 2. Fallback de Atributos diretos no Slot
     local directAttr = slot:GetAttribute("Rarity") or slot:GetAttribute("Tier")
     if directAttr then
         local r = tostring(directAttr):lower()
-        if r:find("secret") then return "Secret" end
-        if r:find("mythic") then return "Mythic" end
-        if r:find("legendary") then return "Legendary" end
-        if r:find("epic") then return "Epic" end
-        if r:find("rare") then return "Rare" end
+        if r:find("secret") then return "Secret", nil
+        elseif r:find("mythic") then return "Mythic", nil
+        elseif r:find("legendary") then return "Legendary", nil
+        elseif r:find("epic") then return "Epic", nil
+        elseif r:find("rare") then return "Rare", nil
+        end
     end
 
-    -- 3. FALLBACK: LEITURA DIRETA DO GRADIENTE DE RARIDADE (BGTop / BGBottom)
+    -- 3. Fallback de Gradiente de Cor
     local rarityGrad = nil
     for _, name in ipairs({"BGTop", "BGBottom", "ShineGradient"}) do
         local f = slot:FindFirstChild(name)
@@ -629,51 +647,27 @@ local function getItemRarity(slot)
         end
     end
 
-    if not rarityGrad then
-        rarityGrad = slot:FindFirstChild("RarityGradient", true)
-    end
-
     if rarityGrad and rarityGrad:IsA("UIGradient") then
         local kpList = rarityGrad.Color.Keypoints
-        if #kpList > 2 then
-            return "Secret"
-        end
+        if #kpList > 2 then return "Secret", nil end
 
         local color = kpList[1].Value
         local r = math.round(color.R * 255)
         local g = math.round(color.G * 255)
         local b = math.round(color.B * 255)
 
-        -- Dourado / Amarelo (255, 191, 0)
-        if r >= 220 and g >= 150 and b <= 60 then
-            return "Legendary"
-        end
-
-        -- Roxo
-        if r >= 120 and r <= 210 and g <= 80 and b >= 180 then
-            return "Epic"
-        end
-
-        -- Azul
-        if r <= 60 and g >= 60 and b >= 180 then
-            return "Rare"
-        end
-
-        -- Vermelho puro (255, 0, 0)
-        if r >= 200 and g <= 50 and b <= 50 then
-            return "Mythic"
-        end
-
-        -- Branco / Cinza
-        if (r >= 230 and g >= 230 and b >= 230) or (math.abs(r - g) <= 10 and math.abs(g - b) <= 10) then
-            return "Common"
-        end
+        if r >= 220 and g >= 150 and b <= 60 then return "Legendary", nil end
+        if r >= 120 and r <= 210 and g <= 80 and b >= 180 then return "Epic", nil end
+        if r <= 60 and g >= 60 and b >= 180 then return "Rare", nil end
+        if r >= 200 and g <= 50 and b <= 50 then return "Mythic", nil end
     end
 
-    return "Unknown"
+    return "Unknown", nil
 end
 
-local function getItemTypeFromSlot(slot)
+local function getItemTypeFromSlot(slot, dbType)
+    if dbType and dbType ~= "" then return dbType end
+
     local attrType = slot:GetAttribute("Type") or slot:GetAttribute("ItemType") or slot:GetAttribute("Category")
     if attrType then return tostring(attrType):lower() end
 
@@ -690,9 +684,6 @@ local function getItemTypeFromSlot(slot)
         if pName:find("weapon") then return "weapon" end
         if pName:find("armor") then return "armor" end
         if pName:find("spell") then return "spell" end
-        
-        local itemTypeAttr = realItem:GetAttribute("Type")
-        if itemTypeAttr then return tostring(itemTypeAttr):lower() end
     end
 
     return "unknown"
@@ -737,24 +728,24 @@ local function executeDirectAutoSell()
                     local isFav = fav and fav:IsA("ImageLabel") and fav.Visible and fav.ImageColor3 ~= Color3.fromRGB(255, 255, 255)
 
                     if not isEquipped and not isFav then
-                        local rarity = getItemRarity(slot)
+                        local rarity, dbType = getItemDataVerified(slot)
 
-                        -- 1. BLOQUEIO ABSOLUTO DE SECRET
+                        -- 1. BLOQUEIO TOTAL E IRREVOGÁVEL DE SECRETS
                         if rarity == "Secret" then
                             continue
                         end
 
-                        -- 2. BLOQUEIO ABSOLUTO DE MYTHIC CASO DESATIVADO
+                        -- 2. BLOQUEIO DE MYTHIC CASO DESATIVADO
                         if rarity == "Mythic" and not Settings.SellMythic then
                             continue
                         end
 
-                        -- 3. TRAVA CONTRA DESCONHECIDOS OU ITENS BASE
+                        -- 3. TRAVA DE SEGURANÇA CONTRA ITENS NÃO IDENTIFICADOS OU COMUNS
                         if rarity == "Unknown" or rarity == "Common" then
                             continue
                         end
 
-                        local detectedType = getItemTypeFromSlot(slot)
+                        local detectedType = getItemTypeFromSlot(slot, dbType)
                         local typeAllowed = (detectedType == catData.TargetType) or (detectedType == "unknown")
 
                         if typeAllowed then
@@ -789,7 +780,7 @@ local function executeDirectAutoSell()
         end)
         Fluent:Notify({
             Title = "Auto-Sell Concluído",
-            Content = string.format("Vendidos %d itens filtrados (Secrets e Mythics protegidos)!", #itemsToSell),
+            Content = string.format("Auditados e vendidos %d itens com proteção a Secrets!", #itemsToSell),
             Duration = 3.5
         })
     end
@@ -797,7 +788,7 @@ local function executeDirectAutoSell()
     isSellingInProgress = false
 end
 
--- 9. MOTOR DE AUTO-CLAIM SILENCIOSO
+-- 10. MOTOR DE AUTO-CLAIM SILENCIOSO
 local function executeAutoClaimQuests()
     if not Settings.AutoClaimQuests or isQuestClaimInProgress or not isScriptRunning then return end
 
@@ -870,7 +861,7 @@ local function executeAutoClaimQuests()
     isQuestClaimInProgress = false
 end
 
--- 10. CONTROLES DE INTERFACE
+-- 11. CONTROLES DE INTERFACE
 local function checkDungeonStartButton()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef then return end
@@ -916,7 +907,7 @@ local function checkAndClickEngageButton()
     return false
 end
 
--- 11. TRAVA E EXECUÇÃO DE COMBATE
+-- 12. TRAVA E EXECUÇÃO DE COMBATE
 local function executeNativeAttack()
     if isDungeonEnded or isRespawning or isTransitioning or enteringPortal or isSellingInProgress or isQuestClaimInProgress or not isScriptRunning then return end
     
@@ -990,7 +981,7 @@ task.spawn(function()
     end
 end)
 
--- 12. MÁQUINAS DE ESTADOS & NAVEGAÇÃO
+-- 13. MÁQUINAS DE ESTADOS & NAVEGAÇÃO
 local function passThroughPortalSafely(targetPortalCFrame)
     local char, root, hum = getCharacter()
     if not root or not hum or enteringPortal then return end
@@ -1173,7 +1164,7 @@ task.spawn(function()
     end
 end)
 
--- 13. INTERFACE FLUENT
+-- 14. INTERFACE FLUENT
 local Window = Fluent:CreateWindow({
     Title = "Hub dos Rapazes",
     SubTitle = "Anime Dungeons",
