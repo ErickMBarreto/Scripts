@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (REMOTE & AUTO-SELL INTEGRADO)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (AUTO-SELL SILENCIOSO NATIVO)
 -- ====================================================================
 
 -- [[ 1. SINGLETON & BOOTSTRAP ]]
@@ -79,7 +79,7 @@ local SharedState = {
     CurrentTargetPos = nil
 }
 
--- [[ 2. MÓDULO DE CONFIGURAÇÃO (ConfigModule) ]]
+-- [[ 2. MÓDULO DE CONFIGURAÇÃO ]]
 local ConfigModule = {}
 ConfigModule.Settings = {
     SelectedPhase = "Bleach (Fase 4)",
@@ -134,7 +134,7 @@ function ConfigModule.Load()
 end
 ConfigModule.Load()
 
--- [[ 3. MÓDULO DE BANCO DE DADOS DIRETO (DatabaseModule) ]]
+-- [[ 3. MÓDULO DE BANCO DE DADOS ]]
 local DatabaseModule = {}
 DatabaseModule.Items = {}
 
@@ -168,7 +168,9 @@ function DatabaseModule.Init()
                             TechnicalName = tostring(rawName),
                             DisplayName = tostring(displayName),
                             Rarity = tostring(r),
-                            Type = tostring(t):lower()
+                            Type = tostring(t):lower(),
+                            StarterLoot = itemData.StarterLoot or false,
+                            ProductCosmetic = itemData.ProductCosmetic or false
                         }
 
                         DatabaseModule.Items[cleanKey(rawName)] = entry
@@ -181,7 +183,7 @@ function DatabaseModule.Init()
 end
 DatabaseModule.Init()
 
--- [[ 4. MÓDULO DE PERSONAGEM & FÍSICA (CharacterModule) ]]
+-- [[ 4. MÓDULO DE PERSONAGEM & FÍSICA ]]
 local CharacterModule = {}
 local diedConnection = nil
 local charConnection = nil
@@ -305,7 +307,7 @@ function CharacterModule.PressKey(keyCode)
     end)
 end
 
--- [[ 5. MÓDULO DE DETECÇÃO DE INIMIGOS (TargetingModule) ]]
+-- [[ 5. MÓDULO DE DETECÇÃO DE INIMIGOS ]]
 local TargetingModule = {}
 
 function TargetingModule.IsAlive(obj)
@@ -404,7 +406,7 @@ function TargetingModule.GetClosestEnemy(phase)
     return closestEnemy, closestPart
 end
 
--- [[ 6. MÓDULO DE COMBATE (CombatModule) ]]
+-- [[ 6. MÓDULO DE COMBATE ]]
 local CombatModule = {}
 local attackRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Attack", 10)
 local lastSkillUse = 0
@@ -490,15 +492,16 @@ function CombatModule.ExecuteSkills()
     end
 end
 
--- [[ 7. MÓDULO DE AUTO-SELL (AutoSellModule) ]]
+-- [[ 7. MÓDULO DE AUTO-SELL SILENCIOSO NATIVO ]]
 local AutoSellModule = {}
 local equipRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Equip", 10)
 
-function AutoSellModule.ResolveSlotData(slotName, slotTitle)
+function AutoSellModule.ResolveSlotData(slotName, itemObj)
     local k1 = cleanKey(slotName)
-    local k2 = cleanKey(slotTitle)
+    local itemType = itemObj and itemObj:GetAttribute("Type")
+    local itemRarity = itemObj and (itemObj:GetAttribute("Rarity") or itemObj:GetAttribute("Tier"))
 
-    local data = DatabaseModule.Items[k1] or (k2 ~= "" and DatabaseModule.Items[k2])
+    local data = DatabaseModule.Items[k1]
     if data then
         local r = data.Rarity:lower()
         local resolvedRarity = "Unknown"
@@ -510,92 +513,132 @@ function AutoSellModule.ResolveSlotData(slotName, slotTitle)
         elseif r:find("common") then resolvedRarity = "Common"
         end
 
-        return resolvedRarity, data.Type
+        return resolvedRarity, (itemType or data.Type), data.StarterLoot, data.ProductCosmetic
     end
 
-    return "Unknown", "unknown"
+    if itemRarity then
+        local r = tostring(itemRarity):lower()
+        local resolvedRarity = "Unknown"
+        if r:find("secret") then resolvedRarity = "Secret"
+        elseif r:find("mythic") then resolvedRarity = "Mythic"
+        elseif r:find("legendary") then resolvedRarity = "Legendary"
+        elseif r:find("epic") then resolvedRarity = "Epic"
+        elseif r:find("rare") then resolvedRarity = "Rare"
+        end
+        return resolvedRarity, tostring(itemType):lower(), false, false
+    end
+
+    return "Unknown", tostring(itemType):lower(), false, false
 end
 
 function AutoSellModule.Execute()
     if not ConfigModule.Settings.AutoSell or SharedState.IsSelling or not SharedState.IsRunning or not equipRemote then return end
-    
-    local scroll = pgui:FindFirstChild("Main") 
-        and pgui.Main:FindFirstChild("MainFrame") 
-        and pgui.Main.MainFrame:FindFirstChild("Items") 
-        and pgui.Main.MainFrame.Items:FindFirstChild("Scroll")
 
-    if not scroll then return end
+    local invFolder = player:FindFirstChild("Inventory")
+    local scroll = pgui:FindFirstChild("Main")
+        and pgui.Main:FindFirstChild("MainFrame")
+        and pgui.Main.MainFrame:FindFirstChild("Items")
+        and pgui.Main.MainFrame.Items:FindFirstChild("Scroll")
 
     SharedState.IsSelling = true
     local itemsToSell = {}
-    local processed = {}
+    local processedObjects = {}
 
-    for _, slot in ipairs(scroll:GetChildren()) do
-        if slot:IsA("GuiObject") and slot:GetAttribute("Item") ~= nil and slot.Name ~= "SteelSword" and not processed[slot] then
-            processed[slot] = true
+    -- 1. Método A: Varredura dos Slots de UI (extraindo o item.Value real)
+    if scroll then
+        for _, slot in ipairs(scroll:GetChildren()) do
+            if slot:IsA("ImageButton") and slot:FindFirstChild("Item") and slot.Item:IsA("ObjectValue") then
+                local realItem = slot.Item.Value
+                if realItem and realItem.Parent and not processedObjects[realItem] then
+                    processedObjects[realItem] = true
 
-            local eq = slot:FindFirstChild("EquippedSelection")
-            local isEquipped = eq and eq:IsA("ImageLabel") and eq.Visible and eq.ImageColor3 == Color3.fromRGB(0, 255, 0)
-            local fav = slot:FindFirstChild("Favorite", true)
-            local isFav = fav and fav:IsA("ImageLabel") and fav.Visible and fav.ImageColor3 ~= Color3.fromRGB(255, 255, 255)
+                    local isEquipped = realItem:GetAttribute("Equipped") == true
+                    local isFav = realItem:GetAttribute("Favorite") == true
 
-            if not isEquipped and not isFav then
-                local titleLabel = slot:FindFirstChild("Title", true)
-                local titleText = (titleLabel and titleLabel:IsA("TextLabel")) and titleLabel.Text or ""
-                
-                local rarity, itemType = AutoSellModule.ResolveSlotData(slot.Name, titleText)
+                    if not isEquipped and not isFav then
+                        local rarity, itemType, starterLoot, prodCosmetic = AutoSellModule.ResolveSlotData(slot.Name, realItem)
 
-                -- 1. PROTEÇÃO TOTAL: Secrets nunca são vendidos
-                if rarity == "Secret" then
-                    continue
-                end
+                        if rarity ~= "Secret" and not starterLoot and not prodCosmetic and itemType ~= "material" then
+                            if rarity ~= "Mythic" or ConfigModule.Settings.SellMythic then
+                                local typeAllowed = false
+                                if itemType == "weapon" and ConfigModule.Settings.SellWeapons then typeAllowed = true
+                                elseif itemType == "armor" and ConfigModule.Settings.SellArmors then typeAllowed = true
+                                elseif itemType == "spell" and ConfigModule.Settings.SellSpells then typeAllowed = true
+                                elseif not itemType or itemType == "unknown" or itemType == "" then
+                                    local n = slot.Name:lower()
+                                    if (n:find("sword") or n:find("blade") or n:find("staff") or n:find("dagger") or n:find("book") or n:find("axe") or n:find("katana")) and ConfigModule.Settings.SellWeapons then typeAllowed = true
+                                    elseif (n:find("armor") or n:find("robe") or n:find("hood") or n:find("helmet") or n:find("mask") or n:find("crown") or n:find("suit")) and ConfigModule.Settings.SellArmors then typeAllowed = true
+                                    elseif (n:find("tornado") or n:find("slash") or n:find("slam") or n:find("rumble") or n:find("gem") or n:find("pride") or n:find("one") or n:find("calm") or n:find("hado")) and ConfigModule.Settings.SellSpells then typeAllowed = true
+                                    end
+                                end
 
-                -- 2. PROTEÇÃO: Mythics apenas se habilitado
-                if rarity == "Mythic" and not ConfigModule.Settings.SellMythic then
-                    continue
-                end
+                                if typeAllowed then
+                                    local rarityAllowed = (rarity == "Rare" and ConfigModule.Settings.SellRare)
+                                        or (rarity == "Epic" and ConfigModule.Settings.SellEpic)
+                                        or (rarity == "Legendary" and ConfigModule.Settings.SellLegendary)
+                                        or (rarity == "Mythic" and ConfigModule.Settings.SellMythic)
 
-                -- 3. FILTRO DE TIPO
-                local typeAllowed = false
-                if itemType == "weapon" and ConfigModule.Settings.SellWeapons then typeAllowed = true
-                elseif itemType == "armor" and ConfigModule.Settings.SellArmors then typeAllowed = true
-                elseif itemType == "spell" and ConfigModule.Settings.SellSpells then typeAllowed = true
-                elseif itemType == "unknown" then
-                    -- Classificação por nomenclatura comum
-                    local n = slot.Name:lower()
-                    if (n:find("sword") or n:find("blade") or n:find("staff") or n:find("dagger") or n:find("book") or n:find("axe") or n:find("katana")) and ConfigModule.Settings.SellWeapons then typeAllowed = true
-                    elseif (n:find("armor") or n:find("robe") or n:find("hood") or n:find("helmet") or n:find("mask") or n:find("crown") or n:find("suit")) and ConfigModule.Settings.SellArmors then typeAllowed = true
-                    elseif (n:find("tornado") or n:find("slash") or n:find("slam") or n:find("rumble") or n:find("gem") or n:find("pride") or n:find("one") or n:find("calm") or n:find("hado")) and ConfigModule.Settings.SellSpells then typeAllowed = true
-                    end
-                end
-
-                if typeAllowed then
-                    local rarityAllowed = (rarity == "Rare" and ConfigModule.Settings.SellRare)
-                        or (rarity == "Epic" and ConfigModule.Settings.SellEpic)
-                        or (rarity == "Legendary" and ConfigModule.Settings.SellLegendary)
-                        or (rarity == "Mythic" and ConfigModule.Settings.SellMythic)
-
-                    if rarityAllowed then
-                        table.insert(itemsToSell, slot.Name)
+                                    if rarityAllowed then
+                                        table.insert(itemsToSell, realItem)
+                                    end
+                                end
+                            end
+                        end
                     end
                 end
             end
         end
     end
 
-    if #itemsToSell > 0 then
-        -- Envio em lote e individual de fallback
-        pcall(function() equipRemote:FireServer("Sell", itemsToSell) end)
-        for _, itemName in ipairs(itemsToSell) do
-            pcall(function() equipRemote:FireServer("Sell", itemName) end)
+    -- 2. Método B: Fallback direto pela pasta player.Inventory (caso o inventário esteja fechado)
+    if #itemsToSell == 0 and invFolder then
+        for _, realItem in ipairs(invFolder:GetChildren()) do
+            if realItem and not processedObjects[realItem] then
+                processedObjects[realItem] = true
+
+                local isEquipped = realItem:GetAttribute("Equipped") == true
+                local isFav = realItem:GetAttribute("Favorite") == true
+
+                if not isEquipped and not isFav then
+                    local rarity, itemType, starterLoot, prodCosmetic = AutoSellModule.ResolveSlotData(realItem.Name, realItem)
+
+                    if rarity ~= "Secret" and not starterLoot and not prodCosmetic and itemType ~= "material" then
+                        if rarity ~= "Mythic" or ConfigModule.Settings.SellMythic then
+                            local typeAllowed = false
+                            if itemType == "weapon" and ConfigModule.Settings.SellWeapons then typeAllowed = true
+                            elseif itemType == "armor" and ConfigModule.Settings.SellArmors then typeAllowed = true
+                            elseif itemType == "spell" and ConfigModule.Settings.SellSpells then typeAllowed = true
+                            end
+
+                            if typeAllowed then
+                                local rarityAllowed = (rarity == "Rare" and ConfigModule.Settings.SellRare)
+                                    or (rarity == "Epic" and ConfigModule.Settings.SellEpic)
+                                    or (rarity == "Legendary" and ConfigModule.Settings.SellLegendary)
+                                    or (rarity == "Mythic" and ConfigModule.Settings.SellMythic)
+
+                                if rarityAllowed then
+                                    table.insert(itemsToSell, realItem)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
         end
-        Fluent:Notify({ Title = "Auto-Sell", Content = string.format("Vendidos %d itens!", #itemsToSell), Duration = 3.5 })
     end
-    
+
+    -- 3. Disparo Oficial Direto no Remote
+    if #itemsToSell > 0 then
+        pcall(function()
+            equipRemote:FireServer("Sell", itemsToSell)
+        end)
+        Fluent:Notify({ Title = "Auto-Sell Concluído", Content = string.format("%d itens vendidos com sucesso!", #itemsToSell), Duration = 3.5 })
+    end
+
     SharedState.IsSelling = false
 end
 
--- [[ 8. MÓDULO DE MISSÕES (QuestModule) ]]
+-- [[ 8. MÓDULO DE MISSÕES ]]
 local QuestModule = {}
 local questRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Quest", 10)
 
@@ -656,7 +699,7 @@ function QuestModule.ClaimAll()
     SharedState.IsClaiming = false
 end
 
--- [[ 9. MÓDULO DE FLUXO E NAVEGAÇÃO DA FASE (FlowModule) ]]
+-- [[ 9. MÓDULO DE FLUXO E NAVEGAÇÃO ]]
 local FlowModule = {}
 
 local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0)
@@ -770,7 +813,7 @@ function FlowModule.RunIncursion()
     end
 end
 
--- [[ 10. MÓDULO DE ESTADOS DA DUNGEON (DungeonStateModule) ]]
+-- [[ 10. MÓDULO DE ESTADOS DA DUNGEON ]]
 local DungeonStateModule = {}
 
 function DungeonStateModule.CheckStart()
@@ -847,7 +890,7 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
     task.delay(1.0, function() SharedState.IsRespawning = false end)
 end)
 
--- [[ 11. MOTOR PRINCIPAL DE LOOPS (Orchestration) ]]
+-- [[ 11. MOTOR PRINCIPAL DE LOOPS ]]
 local initialRoutinesScheduled = false
 
 task.spawn(function()
@@ -943,7 +986,7 @@ task.spawn(function()
     end
 end)
 
--- [[ 12. MÓDULO DE INTERFACE VISUAL (UIModule) ]]
+-- [[ 12. INTERFACE VISUAL ]]
 local UIModule = {}
 
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
