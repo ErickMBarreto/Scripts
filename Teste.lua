@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (ANTI-SUSPICIOUS MOVEMENT ENGINE)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (ANTI-GROUND CLIP & RAYCAST SYSTEM)
 -- ====================================================================
 
 -- [[ 1. SINGLETON & BOOTSTRAP ]]
@@ -9,7 +9,6 @@ local HttpService = game:GetService("HttpService")
 local TweenService = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local VirtualInputManager = game:GetService("VirtualInputManager")
-local RunService = game:GetService("RunService")
 
 local UNIQUE_ID = "HubRapazes_Singleton_Tag"
 if CoreGui:FindFirstChild(UNIQUE_ID) then return end
@@ -185,7 +184,6 @@ DatabaseModule.Init()
 local CharacterModule = {}
 local diedConnection = nil
 local charConnection = nil
-local noclipConnection = nil
 
 function CharacterModule.Get()
     local char = player.Character
@@ -206,6 +204,32 @@ function CharacterModule.StopMovement()
         root.AssemblyLinearVelocity = Vector3.zero
         root.AssemblyAngularVelocity = Vector3.zero
     end
+end
+
+-- Raycast para garantir que o ponto de voo nunca fique colado ou abaixo do chão
+function CharacterModule.GetSafeCFrame(targetPosition, lookAtPosition)
+    local char = player.Character
+    local rayOrigin = targetPosition + Vector3.new(0, 20, 0)
+    local rayDirection = Vector3.new(0, -50, 0)
+    
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    if char then
+        params.FilterDescendantsInstances = {char}
+    end
+    
+    local hit = workspace:Raycast(rayOrigin, rayDirection, params)
+    local safeY = targetPosition.Y
+
+    if hit then
+        local floorY = hit.Position.Y
+        if safeY < (floorY + 3.5) then
+            safeY = floorY + 3.5
+        end
+    end
+
+    local safePos = Vector3.new(targetPosition.X, safeY, targetPosition.Z)
+    return CFrame.new(safePos, lookAtPosition)
 end
 
 function CharacterModule.FlyTo(targetCFrame)
@@ -232,20 +256,6 @@ function CharacterModule.FlyTo(targetCFrame)
     SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out), {CFrame = targetCFrame})
     SharedState.CurrentTween:Play()
 end
-
--- Noclip leve para evitar colisão forçada com quinas do mapa
-noclipConnection = RunService.Stepped:Connect(function()
-    if SharedState.IsRunning and ConfigModule.Settings.AutoFarm and not SharedState.IsRespawning then
-        local char = player.Character
-        if char then
-            for _, part in ipairs(char:GetChildren()) do
-                if part:IsA("BasePart") and part.CanCollide then
-                    part.CanCollide = false
-                end
-            end
-        end
-    end
-end)
 
 function CharacterModule.TriggerButton(btn)
     if not btn or not SharedState.IsRunning then return end
@@ -686,7 +696,6 @@ function FlowModule.GetWave()
     return 1
 end
 
--- Passagem suave através do portal sem micro-teleporte
 function FlowModule.PassPortal(targetCFrame)
     local _, root, hum = CharacterModule.Get()
     if not root or not hum or SharedState.EnteringPortal then return end
@@ -694,7 +703,8 @@ function FlowModule.PassPortal(targetCFrame)
     local dist = (root.Position - targetCFrame.Position).Magnitude
 
     if dist > 6 then
-        CharacterModule.FlyTo(targetCFrame)
+        local safeCFrame = CharacterModule.GetSafeCFrame(targetCFrame.Position, targetCFrame.Position + targetCFrame.LookVector * 10)
+        CharacterModule.FlyTo(safeCFrame)
     else
         SharedState.EnteringPortal = true
         CharacterModule.StopMovement()
@@ -718,7 +728,9 @@ function FlowModule.RunBleach()
     if SharedState.IsVirusActive then
         local enemy, enemyPart = TargetingModule.GetClosestEnemy("Bleach (Fase 4)")
         if enemy and enemyPart then
-            CharacterModule.FlyTo(CFrame.new(enemyPart.Position + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0), enemyPart.Position))
+            local abovePos = enemyPart.Position + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0)
+            local safeCFrame = CharacterModule.GetSafeCFrame(abovePos, enemyPart.Position)
+            CharacterModule.FlyTo(safeCFrame)
         else
             CharacterModule.StopMovement()
         end
@@ -756,7 +768,9 @@ function FlowModule.RunBleach()
 
     local enemy, enemyPart = TargetingModule.GetClosestEnemy("Bleach (Fase 4)")
     if enemy and enemyPart then
-        CharacterModule.FlyTo(CFrame.new(enemyPart.Position + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0), enemyPart.Position))
+        local abovePos = enemyPart.Position + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0)
+        local safeCFrame = CharacterModule.GetSafeCFrame(abovePos, enemyPart.Position)
+        CharacterModule.FlyTo(safeCFrame)
     else
         CharacterModule.StopMovement()
     end
@@ -765,7 +779,9 @@ end
 function FlowModule.RunIncursion()
     local enemy, enemyPart = TargetingModule.GetClosestEnemy("Incursão")
     if enemy and enemyPart then
-        CharacterModule.FlyTo(CFrame.new(enemyPart.Position + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0), enemyPart.Position))
+        local abovePos = enemyPart.Position + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0)
+        local safeCFrame = CharacterModule.GetSafeCFrame(abovePos, enemyPart.Position)
+        CharacterModule.FlyTo(safeCFrame)
     else
         CharacterModule.StopMovement()
     end
@@ -1007,7 +1023,6 @@ function UIModule.Shutdown()
     CharacterModule.StopMovement()
     if charConnection then charConnection:Disconnect() end
     if diedConnection then diedConnection:Disconnect() end
-    if noclipConnection then noclipConnection:Disconnect() end
     if singletonTag and singletonTag.Parent then singletonTag:Destroy() end
     if toggleGui and toggleGui.Parent then toggleGui:Destroy() end
     for _, gui in ipairs({CoreGui, player.PlayerGui}) do
