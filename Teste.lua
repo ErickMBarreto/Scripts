@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (TWEEN RESTAURADO ORIGINAL)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (AUTO-SELL & FARM DEFINITIVOS)
 -- ====================================================================
 
 -- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA (Singleton Anti-Duplicação)
@@ -570,11 +570,11 @@ local function getClosestLivingEnemy()
     return closestEnemy, closestPart
 end
 
--- 8. MOTOR DE AUTO-SELL (CONSULTA DIRETA DE DADOS NATIVOS)
+-- 8. MOTOR DE AUTO-SELL BLINDADO (MÓDULOS + GRADIENTES VISUAIS)
 local function getOfficialItemRarity(slotName)
-    local statsFolder = ReplicatedStorage:FindFirstChild("Stats")
+    local statsFolder = ReplicatedStorage:FindFirstChild("Stats") or ReplicatedStorage:FindFirstChild("Modules")
     if statsFolder then
-        for _, desc in ipairs(statsFolder:GetChildren()) do
+        for _, desc in ipairs(statsFolder:GetDescendants()) do
             if desc:IsA("ModuleScript") then
                 local success, data = pcall(require, desc)
                 if success and type(data) == "table" then
@@ -593,6 +593,7 @@ end
 local function getItemRarity(slot)
     local slotName = slot.Name
 
+    -- 1. CONSULTA AO BANCO OFICIAL
     local officialRarity = getOfficialItemRarity(slotName)
     if officialRarity then
         local r = officialRarity:lower()
@@ -604,6 +605,7 @@ local function getItemRarity(slot)
         if r:find("common") then return "Common" end
     end
 
+    -- 2. ATRIBUTO DIRETO
     local directAttr = slot:GetAttribute("Rarity") or slot:GetAttribute("Tier")
     if directAttr then
         local r = tostring(directAttr):lower()
@@ -612,6 +614,60 @@ local function getItemRarity(slot)
         if r:find("legendary") then return "Legendary" end
         if r:find("epic") then return "Epic" end
         if r:find("rare") then return "Rare" end
+    end
+
+    -- 3. FALLBACK: LEITURA DIRETA DO GRADIENTE DE RARIDADE (BGTop / BGBottom)
+    local rarityGrad = nil
+    for _, name in ipairs({"BGTop", "BGBottom", "ShineGradient"}) do
+        local f = slot:FindFirstChild(name)
+        if f then
+            local g = f:FindFirstChild("RarityGradient") or f:FindFirstChildWhichIsA("UIGradient")
+            if g then
+                rarityGrad = g
+                break
+            end
+        end
+    end
+
+    if not rarityGrad then
+        rarityGrad = slot:FindFirstChild("RarityGradient", true)
+    end
+
+    if rarityGrad and rarityGrad:IsA("UIGradient") then
+        local kpList = rarityGrad.Color.Keypoints
+        if #kpList > 2 then
+            return "Secret"
+        end
+
+        local color = kpList[1].Value
+        local r = math.round(color.R * 255)
+        local g = math.round(color.G * 255)
+        local b = math.round(color.B * 255)
+
+        -- Dourado / Amarelo (255, 191, 0)
+        if r >= 220 and g >= 150 and b <= 60 then
+            return "Legendary"
+        end
+
+        -- Roxo
+        if r >= 120 and r <= 210 and g <= 80 and b >= 180 then
+            return "Epic"
+        end
+
+        -- Azul
+        if r <= 60 and g >= 60 and b >= 180 then
+            return "Rare"
+        end
+
+        -- Vermelho puro (255, 0, 0)
+        if r >= 200 and g <= 50 and b <= 50 then
+            return "Mythic"
+        end
+
+        -- Branco / Cinza
+        if (r >= 230 and g >= 230 and b >= 230) or (math.abs(r - g) <= 10 and math.abs(g - b) <= 10) then
+            return "Common"
+        end
     end
 
     return "Unknown"
@@ -669,7 +725,7 @@ local function executeDirectAutoSell()
 
     for _, catData in ipairs(categoriesToScan) do
         triggerGuiButton(catData.Button)
-        task.wait(0.15)
+        task.wait(0.2)
 
         for _, slot in ipairs(scroll:GetChildren()) do
             if slot:IsA("GuiObject") and slot:GetAttribute("Item") and slot.Name ~= "SteelSword" then
@@ -683,14 +739,17 @@ local function executeDirectAutoSell()
                     if not isEquipped and not isFav then
                         local rarity = getItemRarity(slot)
 
+                        -- 1. BLOQUEIO ABSOLUTO DE SECRET
                         if rarity == "Secret" then
                             continue
                         end
 
+                        -- 2. BLOQUEIO ABSOLUTO DE MYTHIC CASO DESATIVADO
                         if rarity == "Mythic" and not Settings.SellMythic then
                             continue
                         end
 
+                        -- 3. TRAVA CONTRA DESCONHECIDOS OU ITENS BASE
                         if rarity == "Unknown" or rarity == "Common" then
                             continue
                         end
@@ -707,13 +766,14 @@ local function executeDirectAutoSell()
 
                             if rarityMatch then
                                 local itemValObj = slot:FindFirstChild("Item")
-                                local targetInstance = (itemValObj and itemValObj:IsA("ObjectValue") and itemValObj.Value)
+                                local targetItem = (itemValObj and itemValObj:IsA("ObjectValue") and itemValObj.Value)
                                     or (itemValObj and typeof(itemValObj.Value) == "Instance" and itemValObj.Value)
-                                    or slot
+                                    or (itemValObj and itemValObj.Value)
+                                    or slot.Name
 
-                                if targetInstance and not registered[targetInstance] then
-                                    registered[targetInstance] = true
-                                    table.insert(itemsToSell, targetInstance)
+                                if targetItem and not registered[targetItem] then
+                                    registered[targetItem] = true
+                                    table.insert(itemsToSell, targetItem)
                                 end
                             end
                         end
@@ -729,7 +789,7 @@ local function executeDirectAutoSell()
         end)
         Fluent:Notify({
             Title = "Auto-Sell Concluído",
-            Content = string.format("Vendidos %d itens filtrados!", #itemsToSell),
+            Content = string.format("Vendidos %d itens filtrados (Secrets e Mythics protegidos)!", #itemsToSell),
             Duration = 3.5
         })
     end
