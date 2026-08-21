@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (VERSÃO FINAL CONSOLIDADA)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (INTEGRAÇÃO DIRETA COM REPLICATEDSTORAGE STATS)
 -- ====================================================================
 
 -- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA (Singleton Anti-Duplicação)
@@ -26,7 +26,7 @@ for _, gui in ipairs({CoreGui, Players.LocalPlayer and Players.LocalPlayer:FindF
 end
 
 -- 2. REEXECUÇÃO AUTOMÁTICA INFINITA (Delta / Mobile)
-local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Teste.lua"
+local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Loader.lua"
 
 local function queueNextExecution()
     local queueFunc = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or queueonteleport
@@ -229,7 +229,6 @@ local function triggerGuiButton(btn)
     end)
 end
 
--- Busca definitiva do Play Again
 local function findPlayAgainButton()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef then return nil end
@@ -256,7 +255,6 @@ local function findPlayAgainButton()
     return nil
 end
 
--- Detecção do Modo Hardcore (23s após a morte)
 local function onPlayerDied()
     if not Settings.HardcoreMode then return end
 
@@ -392,7 +390,7 @@ local function getDynamicHotbar()
     return nil
 end
 
--- 7. DETECÇÃO DE INIMIGOS (COM SUPORTE A BOSS DE ENGAGE)
+-- 7. DETECÇÃO DE INIMIGOS
 local function getCurrentWaveNumber()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if pguiRef then
@@ -582,20 +580,59 @@ local function getClosestLivingEnemy()
     return closestEnemy, closestPart
 end
 
--- 8. MOTOR DE AUTO-SELL TRANCADO (FILTRO DE TIPO E RARIDADE)
+-- 8. MOTOR DE AUTO-SELL COM LEITURA DIRETA DO REPLICATEDSTORAGE.STATS
+local function getOfficialItemRarity(slotName)
+    local statsFolders = {
+        ReplicatedStorage:FindFirstChild("Stats"),
+        ReplicatedStorage:FindFirstChild("Modules"),
+        ReplicatedStorage
+    }
+
+    for _, folder in ipairs(statsFolders) do
+        if folder then
+            for _, desc in ipairs(folder:GetDescendants()) do
+                if desc:IsA("ModuleScript") and (desc.Name:find("Stats") or desc.Name:find("Data")) then
+                    local success, data = pcall(require, desc)
+                    if success and type(data) == "table" then
+                        local itemData = data[slotName]
+                        if type(itemData) == "table" then
+                            local r = itemData.Rarity or itemData.rarity or itemData.Tier
+                            if r then return tostring(r) end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
 local function getItemRarity(slot)
-    local grad = slot:FindFirstChild("RarityGradient", true)
-    if not grad or not grad:IsA("UIGradient") then return "Unknown" end
+    local slotName = slot.Name
 
-    local color = grad.Color.Keypoints[1].Value
-    local r = math.round(color.R * 255)
-    local g = math.round(color.G * 255)
-    local b = math.round(color.B * 255)
+    -- 1. CONSULTA DIRETA AO BANCO OFICIAL DO JOGO
+    local officialRarity = getOfficialItemRarity(slotName)
+    if officialRarity then
+        local r = officialRarity:lower()
+        if r:find("secret") then return "Secret" end
+        if r:find("mythic") then return "Mythic" end
+        if r:find("legendary") then return "Legendary" end
+        if r:find("epic") then return "Epic" end
+        if r:find("rare") then return "Rare" end
+        if r:find("common") then return "Common" end
+    end
 
-    if r <= 50 and g >= 60 and b >= 190 then return "Rare" end
-    if r >= 90 and r <= 160 and g <= 50 and b >= 190 then return "Epic" end
-    if r >= 220 and g >= 140 and b <= 50 then return "Legendary" end
-    if r >= 200 and g <= 50 and b <= 50 then return "Mythic" end
+    -- 2. Atributos diretos no Slot
+    local directAttr = slot:GetAttribute("Rarity") or slot:GetAttribute("Tier")
+    if directAttr then
+        local r = tostring(directAttr):lower()
+        if r:find("secret") then return "Secret" end
+        if r:find("mythic") then return "Mythic" end
+        if r:find("legendary") then return "Legendary" end
+        if r:find("epic") then return "Epic" end
+        if r:find("rare") then return "Rare" end
+    end
+
     return "Unknown"
 end
 
@@ -663,11 +700,27 @@ local function executeDirectAutoSell()
                     local isFav = fav and fav:IsA("ImageLabel") and fav.Visible and fav.ImageColor3 ~= Color3.fromRGB(255, 255, 255)
 
                     if not isEquipped and not isFav then
+                        local rarity = getItemRarity(slot)
+
+                        -- 1. BLOQUEIO ABSOLUTO DE SECRET
+                        if rarity == "Secret" then
+                            continue
+                        end
+
+                        -- 2. BLOQUEIO ABSOLUTO DE MYTHIC CASO DESATIVADO
+                        if rarity == "Mythic" and not Settings.SellMythic then
+                            continue
+                        end
+
+                        -- 3. TRAVA CONTRA DESCONHECIDOS OU ITENS BASE
+                        if rarity == "Unknown" or rarity == "Common" then
+                            continue
+                        end
+
                         local detectedType = getItemTypeFromSlot(slot)
                         local typeAllowed = (detectedType == catData.TargetType) or (detectedType == "unknown")
 
                         if typeAllowed then
-                            local rarity = getItemRarity(slot)
                             local rarityMatch = false
                             if rarity == "Rare" and Settings.SellRare then rarityMatch = true end
                             if rarity == "Epic" and Settings.SellEpic then rarityMatch = true end
@@ -698,7 +751,7 @@ local function executeDirectAutoSell()
         end)
         Fluent:Notify({
             Title = "Auto-Sell Concluído",
-            Content = string.format("Vendidos %d itens filtrados com sucesso!", #itemsToSell),
+            Content = string.format("Vendidos %d itens filtrados (Secrets protegidos com precisão nativa)!", #itemsToSell),
             Duration = 3.5
         })
     end
@@ -706,7 +759,7 @@ local function executeDirectAutoSell()
     isSellingInProgress = false
 end
 
--- 9. MOTOR DE AUTO-CLAIM SILENCIOSO (SEM MOVER MOUSE / SEM ABRIR JANELA)
+-- 9. MOTOR DE AUTO-CLAIM SILENCIOSO
 local function executeAutoClaimQuests()
     if not Settings.AutoClaimQuests or isQuestClaimInProgress or not isScriptRunning then return end
 
@@ -779,7 +832,7 @@ local function executeAutoClaimQuests()
     isQuestClaimInProgress = false
 end
 
--- 10. CONTROLES DE INTERFACE (ENGAGE > PLAY AGAIN)
+-- 10. CONTROLES DE INTERFACE
 local function checkDungeonStartButton()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef then return end
@@ -833,7 +886,6 @@ local function isPortalTransitionActive()
     if isRespawning or isTransitioning or enteringPortal or isSellingInProgress or isQuestClaimInProgress then return true end
     if (tick() - dungeonStartTime) < Settings.StartWaitTime then return true end
 
-    -- No Engage, não trava por portais
     if isVirusActive then return false end
 
     if Settings.SelectedPhase == "Bleach (Fase 4)" then
@@ -953,7 +1005,6 @@ local function runBleachPhaseFlow()
     local char, root = getCharacter()
     if not root then return end
 
-    -- Se o Boss do Engage estiver ativo: persegue e mata direto
     if isVirusActive then
         local enemies = getAllLivingEnemiesBleach()
         if #enemies > 0 then
@@ -1067,7 +1118,7 @@ local function runIncursionPhaseFlow()
     end
 end
 
--- LOOP PRINCIPAL (PRIORIDADE CORRIGIDA PARA PLAY AGAIN NO ENGAGE)
+-- LOOP PRINCIPAL
 task.spawn(function()
     while isScriptRunning do
         if Settings.AutoFarm and not isRespawning then
@@ -1096,7 +1147,6 @@ task.spawn(function()
                     checkDungeonStartButton()
                 end
 
-                -- 1. CHECAGEM PRIORITÁRIA DE FIM DE PARTIDA (PLAY AGAIN)
                 local playAgainBtn = findPlayAgainButton()
                 if playAgainBtn and playAgainBtn.Visible then
                     isDungeonEnded = true
@@ -1108,7 +1158,6 @@ task.spawn(function()
                         task.wait(0.2)
                     end
 
-                    -- Se ainda houver popup de Engage aberto E não clicamos nele antes
                     if Settings.AutoEngage and checkAndClickEngageButton() then
                         isDungeonEnded = false
                         isVirusActive = true
@@ -1123,7 +1172,6 @@ task.spawn(function()
                 else
                     isDungeonEnded = false
 
-                    -- 2. SE O PLAY AGAIN NÃO ESTIVER NA TELA, VERIFICA ENGAGE
                     local engaged = false
                     if Settings.AutoEngage and not isVirusActive then
                         engaged = checkAndClickEngageButton()
@@ -1498,6 +1546,7 @@ AutoSellRaritySection:AddToggle("SellLegendaryToggle", {
 
 AutoSellRaritySection:AddToggle("SellMythicToggle", {
     Title = "Vender Mítico (Mythic)",
+    Description = "Apenas ative se quiser vender Míticos. Secrets NUNCA são vendidos.",
     Default = Settings.SellMythic,
     Callback = function(Value)
         Settings.SellMythic = Value
