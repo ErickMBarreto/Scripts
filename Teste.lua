@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (AUTO-SELL SILENCIOSO NATIVO)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (BLEACH + ONE PIECE INTEGRADO)
 -- ====================================================================
 
 -- [[ 1. SINGLETON & BOOTSTRAP ]]
@@ -82,7 +82,7 @@ local SharedState = {
 -- [[ 2. MÓDULO DE CONFIGURAÇÃO ]]
 local ConfigModule = {}
 ConfigModule.Settings = {
-    SelectedPhase = "Bleach (Fase 4)",
+    SelectedPhase = "One Piece",
     CustomWeaponName = "VoidRods",
     AutoFarm = true,
     AutoAttack = true,
@@ -97,15 +97,7 @@ ConfigModule.Settings = {
     HeightAboveEnemy = 8.5,
     TweenSpeed = 50,
     AttackSpeed = 0.15,
-    AutoClaimQuests = false,
-    AutoSell = false,
-    SellRare = true,
-    SellEpic = true,
-    SellLegendary = false,
-    SellMythic = false,
-    SellWeapons = true,
-    SellArmors = false,
-    SellSpells = false
+    AutoClaimQuests = false
 }
 
 local CONFIG_FILE = "HubRapazes_Config.json"
@@ -134,56 +126,7 @@ function ConfigModule.Load()
 end
 ConfigModule.Load()
 
--- [[ 3. MÓDULO DE BANCO DE DADOS ]]
-local DatabaseModule = {}
-DatabaseModule.Items = {}
-
-local function cleanKey(str)
-    if not str then return "" end
-    return tostring(str):lower():gsub("[%s%-_%p]", "")
-end
-
-function DatabaseModule.Init()
-    local stats = ReplicatedStorage:WaitForChild("Stats", 10)
-    if not stats then return end
-
-    local targetModules = {
-        stats:FindFirstChild("WeaponStats"),
-        stats:FindFirstChild("SpellStats"),
-        stats:FindFirstChild("MaterialStats"),
-        stats:FindFirstChild("ArmorStats")
-    }
-
-    for _, mod in ipairs(targetModules) do
-        if mod and mod:IsA("ModuleScript") then
-            local ok, data = pcall(require, mod)
-            if ok and type(data) == "table" then
-                for rawName, itemData in pairs(data) do
-                    if type(itemData) == "table" then
-                        local r = itemData.Rarity or itemData.rarity or itemData.Tier or "Unknown"
-                        local t = itemData.Type or itemData.type or (mod.Name:lower():find("weapon") and "weapon") or (mod.Name:lower():find("spell") and "spell") or (mod.Name:lower():find("armor") and "armor") or "unknown"
-                        local displayName = itemData.Name or rawName
-
-                        local entry = {
-                            TechnicalName = tostring(rawName),
-                            DisplayName = tostring(displayName),
-                            Rarity = tostring(r),
-                            Type = tostring(t):lower(),
-                            StarterLoot = itemData.StarterLoot or false,
-                            ProductCosmetic = itemData.ProductCosmetic or false
-                        }
-
-                        DatabaseModule.Items[cleanKey(rawName)] = entry
-                        DatabaseModule.Items[cleanKey(displayName)] = entry
-                    end
-                end
-            end
-        end
-    end
-end
-DatabaseModule.Init()
-
--- [[ 4. MÓDULO DE PERSONAGEM & FÍSICA ]]
+-- [[ 3. MÓDULO DE PERSONAGEM & FÍSICA ]]
 local CharacterModule = {}
 local diedConnection = nil
 local charConnection = nil
@@ -250,7 +193,7 @@ function CharacterModule.GetSafeCFrame(targetPosition, lookAtPosition)
 end
 
 function CharacterModule.FlyTo(targetCFrame)
-    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.IsSelling or not SharedState.IsRunning then return end
+    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or not SharedState.IsRunning then return end
     local _, root = CharacterModule.Get()
     if not root or not root.Parent then return end
 
@@ -307,7 +250,7 @@ function CharacterModule.PressKey(keyCode)
     end)
 end
 
--- [[ 5. MÓDULO DE DETECÇÃO DE INIMIGOS ]]
+-- [[ 4. MÓDULO DE DETECÇÃO DE INIMIGOS ]]
 local TargetingModule = {}
 
 function TargetingModule.IsAlive(obj)
@@ -406,7 +349,7 @@ function TargetingModule.GetClosestEnemy(phase)
     return closestEnemy, closestPart
 end
 
--- [[ 6. MÓDULO DE COMBATE ]]
+-- [[ 5. MÓDULO DE COMBATE ]]
 local CombatModule = {}
 local attackRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Attack", 10)
 local lastSkillUse = 0
@@ -453,7 +396,7 @@ function CombatModule.GetHotbar()
 end
 
 function CombatModule.ExecuteM1()
-    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or SharedState.IsSelling or not SharedState.IsRunning then return end
+    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning then return end
     comboIndex = (comboIndex % 4) + 1
     local weapon = CombatModule.GetEffectiveWeapon()
     if attackRemote then pcall(function() attackRemote:FireServer("M1", weapon, comboIndex, 0, 0, 2) end) end
@@ -492,153 +435,7 @@ function CombatModule.ExecuteSkills()
     end
 end
 
--- [[ 7. MÓDULO DE AUTO-SELL SILENCIOSO NATIVO ]]
-local AutoSellModule = {}
-local equipRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Equip", 10)
-
-function AutoSellModule.ResolveSlotData(slotName, itemObj)
-    local k1 = cleanKey(slotName)
-    local itemType = itemObj and itemObj:GetAttribute("Type")
-    local itemRarity = itemObj and (itemObj:GetAttribute("Rarity") or itemObj:GetAttribute("Tier"))
-
-    local data = DatabaseModule.Items[k1]
-    if data then
-        local r = data.Rarity:lower()
-        local resolvedRarity = "Unknown"
-        if r:find("secret") then resolvedRarity = "Secret"
-        elseif r:find("mythic") then resolvedRarity = "Mythic"
-        elseif r:find("legendary") then resolvedRarity = "Legendary"
-        elseif r:find("epic") then resolvedRarity = "Epic"
-        elseif r:find("rare") then resolvedRarity = "Rare"
-        elseif r:find("common") then resolvedRarity = "Common"
-        end
-
-        return resolvedRarity, (itemType or data.Type), data.StarterLoot, data.ProductCosmetic
-    end
-
-    if itemRarity then
-        local r = tostring(itemRarity):lower()
-        local resolvedRarity = "Unknown"
-        if r:find("secret") then resolvedRarity = "Secret"
-        elseif r:find("mythic") then resolvedRarity = "Mythic"
-        elseif r:find("legendary") then resolvedRarity = "Legendary"
-        elseif r:find("epic") then resolvedRarity = "Epic"
-        elseif r:find("rare") then resolvedRarity = "Rare"
-        end
-        return resolvedRarity, tostring(itemType):lower(), false, false
-    end
-
-    return "Unknown", tostring(itemType):lower(), false, false
-end
-
-function AutoSellModule.Execute()
-    if not ConfigModule.Settings.AutoSell or SharedState.IsSelling or not SharedState.IsRunning or not equipRemote then return end
-
-    local invFolder = player:FindFirstChild("Inventory")
-    local scroll = pgui:FindFirstChild("Main")
-        and pgui.Main:FindFirstChild("MainFrame")
-        and pgui.Main.MainFrame:FindFirstChild("Items")
-        and pgui.Main.MainFrame.Items:FindFirstChild("Scroll")
-
-    SharedState.IsSelling = true
-    local itemsToSell = {}
-    local processedObjects = {}
-
-    -- 1. Método A: Varredura dos Slots de UI (extraindo o item.Value real)
-    if scroll then
-        for _, slot in ipairs(scroll:GetChildren()) do
-            if slot:IsA("ImageButton") and slot:FindFirstChild("Item") and slot.Item:IsA("ObjectValue") then
-                local realItem = slot.Item.Value
-                if realItem and realItem.Parent and not processedObjects[realItem] then
-                    processedObjects[realItem] = true
-
-                    local isEquipped = realItem:GetAttribute("Equipped") == true
-                    local isFav = realItem:GetAttribute("Favorite") == true
-
-                    if not isEquipped and not isFav then
-                        local rarity, itemType, starterLoot, prodCosmetic = AutoSellModule.ResolveSlotData(slot.Name, realItem)
-
-                        if rarity ~= "Secret" and not starterLoot and not prodCosmetic and itemType ~= "material" then
-                            if rarity ~= "Mythic" or ConfigModule.Settings.SellMythic then
-                                local typeAllowed = false
-                                if itemType == "weapon" and ConfigModule.Settings.SellWeapons then typeAllowed = true
-                                elseif itemType == "armor" and ConfigModule.Settings.SellArmors then typeAllowed = true
-                                elseif itemType == "spell" and ConfigModule.Settings.SellSpells then typeAllowed = true
-                                elseif not itemType or itemType == "unknown" or itemType == "" then
-                                    local n = slot.Name:lower()
-                                    if (n:find("sword") or n:find("blade") or n:find("staff") or n:find("dagger") or n:find("book") or n:find("axe") or n:find("katana")) and ConfigModule.Settings.SellWeapons then typeAllowed = true
-                                    elseif (n:find("armor") or n:find("robe") or n:find("hood") or n:find("helmet") or n:find("mask") or n:find("crown") or n:find("suit")) and ConfigModule.Settings.SellArmors then typeAllowed = true
-                                    elseif (n:find("tornado") or n:find("slash") or n:find("slam") or n:find("rumble") or n:find("gem") or n:find("pride") or n:find("one") or n:find("calm") or n:find("hado")) and ConfigModule.Settings.SellSpells then typeAllowed = true
-                                    end
-                                end
-
-                                if typeAllowed then
-                                    local rarityAllowed = (rarity == "Rare" and ConfigModule.Settings.SellRare)
-                                        or (rarity == "Epic" and ConfigModule.Settings.SellEpic)
-                                        or (rarity == "Legendary" and ConfigModule.Settings.SellLegendary)
-                                        or (rarity == "Mythic" and ConfigModule.Settings.SellMythic)
-
-                                    if rarityAllowed then
-                                        table.insert(itemsToSell, realItem)
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    -- 2. Método B: Fallback direto pela pasta player.Inventory (caso o inventário esteja fechado)
-    if #itemsToSell == 0 and invFolder then
-        for _, realItem in ipairs(invFolder:GetChildren()) do
-            if realItem and not processedObjects[realItem] then
-                processedObjects[realItem] = true
-
-                local isEquipped = realItem:GetAttribute("Equipped") == true
-                local isFav = realItem:GetAttribute("Favorite") == true
-
-                if not isEquipped and not isFav then
-                    local rarity, itemType, starterLoot, prodCosmetic = AutoSellModule.ResolveSlotData(realItem.Name, realItem)
-
-                    if rarity ~= "Secret" and not starterLoot and not prodCosmetic and itemType ~= "material" then
-                        if rarity ~= "Mythic" or ConfigModule.Settings.SellMythic then
-                            local typeAllowed = false
-                            if itemType == "weapon" and ConfigModule.Settings.SellWeapons then typeAllowed = true
-                            elseif itemType == "armor" and ConfigModule.Settings.SellArmors then typeAllowed = true
-                            elseif itemType == "spell" and ConfigModule.Settings.SellSpells then typeAllowed = true
-                            end
-
-                            if typeAllowed then
-                                local rarityAllowed = (rarity == "Rare" and ConfigModule.Settings.SellRare)
-                                    or (rarity == "Epic" and ConfigModule.Settings.SellEpic)
-                                    or (rarity == "Legendary" and ConfigModule.Settings.SellLegendary)
-                                    or (rarity == "Mythic" and ConfigModule.Settings.SellMythic)
-
-                                if rarityAllowed then
-                                    table.insert(itemsToSell, realItem)
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    -- 3. Disparo Oficial Direto no Remote
-    if #itemsToSell > 0 then
-        pcall(function()
-            equipRemote:FireServer("Sell", itemsToSell)
-        end)
-        Fluent:Notify({ Title = "Auto-Sell Concluído", Content = string.format("%d itens vendidos com sucesso!", #itemsToSell), Duration = 3.5 })
-    end
-
-    SharedState.IsSelling = false
-end
-
--- [[ 8. MÓDULO DE MISSÕES ]]
+-- [[ 6. MÓDULO DE MISSÕES ]]
 local QuestModule = {}
 local questRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Quest", 10)
 
@@ -699,11 +496,16 @@ function QuestModule.ClaimAll()
     SharedState.IsClaiming = false
 end
 
--- [[ 9. MÓDULO DE FLUXO E NAVEGAÇÃO ]]
+-- [[ 7. MÓDULO DE FLUXO E NAVEGAÇÃO DA FASE ]]
 local FlowModule = {}
 
-local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0)
-local PORTAL_2_BOSS_POS  = CFrame.new(5411.5, -561.0, 2550.0)
+-- Coordenadas Bleach
+local BLEACH_PORTAL_1 = CFrame.new(4557.2, -305.5, 1925.0)
+local BLEACH_PORTAL_2 = CFrame.new(5411.5, -561.0, 2550.0)
+
+-- Coordenadas One Piece
+local OP_PORTAL_1_WAVE7  = CFrame.new(1196.6, -240.9, 1855.1)
+local OP_PORTAL_2_WAVE12 = CFrame.new(2909.3, -105.7, 2151.7)
 
 function FlowModule.GetWave()
     local stageLabel = pgui and pgui:FindFirstChild("Main")
@@ -728,25 +530,26 @@ function FlowModule.PassPortal(targetCFrame)
 
     local dist = (root.Position - targetCFrame.Position).Magnitude
 
-    if dist > 6 then
+    if dist > 5 then
         local safeCFrame = CharacterModule.GetSafeCFrame(targetCFrame.Position, targetCFrame.Position + targetCFrame.LookVector * 10)
         CharacterModule.FlyTo(safeCFrame)
     else
         SharedState.EnteringPortal = true
         CharacterModule.StopMovement()
 
-        local forwardGoal = targetCFrame * CFrame.new(0, 0, -8)
-        local tweenInfo = TweenInfo.new(0.6, Enum.EasingStyle.Linear)
-        local passTween = TweenService:Create(root, tweenInfo, {CFrame = forwardGoal})
+        -- Pisa exatamente na área de chão para ativar o teleporte
+        local tweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Linear)
+        local passTween = TweenService:Create(root, tweenInfo, {CFrame = targetCFrame})
         passTween:Play()
         passTween.Completed:Wait()
 
         root.AssemblyLinearVelocity = Vector3.zero
-        task.wait(0.4)
+        task.wait(0.5)
         SharedState.EnteringPortal = false
     end
 end
 
+-- Rota Bleach
 function FlowModule.RunBleach()
     local _, root = CharacterModule.Get()
     if not root then return end
@@ -784,11 +587,11 @@ function FlowModule.RunBleach()
     local wave = FlowModule.GetWave()
 
     if wave >= 12 and currentRoom ~= "BossRoom" then
-        FlowModule.PassPortal(PORTAL_2_BOSS_POS)
+        FlowModule.PassPortal(BLEACH_PORTAL_2)
         return
     end
     if wave >= 8 and currentRoom == "Room1" then
-        FlowModule.PassPortal(PORTAL_1_WAVE8_POS)
+        FlowModule.PassPortal(BLEACH_PORTAL_1)
         return
     end
 
@@ -802,6 +605,64 @@ function FlowModule.RunBleach()
     end
 end
 
+-- Rota One Piece
+function FlowModule.RunOnePiece()
+    local _, root = CharacterModule.Get()
+    if not root then return end
+
+    if SharedState.IsVirusActive then
+        local enemy, enemyPart = TargetingModule.GetClosestEnemy("One Piece")
+        if enemy and enemyPart then
+            local abovePos = enemyPart.Position + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0)
+            local safeCFrame = CharacterModule.GetSafeCFrame(abovePos, enemyPart.Position)
+            CharacterModule.FlyTo(safeCFrame)
+        else
+            CharacterModule.StopMovement()
+        end
+        return
+    end
+
+    -- Identificação de salas por Coordenada X/Y
+    local currentRoom = "Room1"
+    if root.Position.X > 2000 and root.Position.Z > 2000 then
+        currentRoom = "BossRoom"
+    elseif root.Position.X > 1400 then
+        currentRoom = "Room2"
+    end
+
+    if currentRoom ~= SharedState.LastRoomState then
+        SharedState.LastRoomState = currentRoom
+        CharacterModule.StopMovement()
+        SharedState.EnteringPortal = false
+        SharedState.IsTransitioning = true
+        task.wait(0.6)
+        SharedState.IsTransitioning = false
+        return
+    end
+
+    if SharedState.EnteringPortal then return end
+    local wave = FlowModule.GetWave()
+
+    if wave >= 12 and currentRoom ~= "BossRoom" then
+        FlowModule.PassPortal(OP_PORTAL_2_WAVE12)
+        return
+    end
+    if wave >= 7 and currentRoom == "Room1" then
+        FlowModule.PassPortal(OP_PORTAL_1_WAVE7)
+        return
+    end
+
+    local enemy, enemyPart = TargetingModule.GetClosestEnemy("One Piece")
+    if enemy and enemyPart then
+        local abovePos = enemyPart.Position + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0)
+        local safeCFrame = CharacterModule.GetSafeCFrame(abovePos, enemyPart.Position)
+        CharacterModule.FlyTo(safeCFrame)
+    else
+        CharacterModule.StopMovement()
+    end
+end
+
+-- Rota Incursão
 function FlowModule.RunIncursion()
     local enemy, enemyPart = TargetingModule.GetClosestEnemy("Incursão")
     if enemy and enemyPart then
@@ -813,7 +674,7 @@ function FlowModule.RunIncursion()
     end
 end
 
--- [[ 10. MÓDULO DE ESTADOS DA DUNGEON ]]
+-- [[ 8. MÓDULO DE ESTADOS DA DUNGEON ]]
 local DungeonStateModule = {}
 
 function DungeonStateModule.CheckStart()
@@ -890,12 +751,12 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
     task.delay(1.0, function() SharedState.IsRespawning = false end)
 end)
 
--- [[ 11. MOTOR PRINCIPAL DE LOOPS ]]
+-- [[ 9. MOTOR PRINCIPAL DE LOOPS ]]
 local initialRoutinesScheduled = false
 
 task.spawn(function()
     while SharedState.IsRunning do
-        if ConfigModule.Settings.AutoAttack and not SharedState.IsDungeonEnded and not SharedState.IsRespawning and not SharedState.IsTransitioning and not SharedState.EnteringPortal and not SharedState.IsSelling then
+        if ConfigModule.Settings.AutoAttack and not SharedState.IsDungeonEnded and not SharedState.IsRespawning and not SharedState.IsTransitioning and not SharedState.EnteringPortal then
             local _, _, hum = CharacterModule.Get()
             if hum and hum.Health > 0 then CombatModule.ExecuteM1() end
         end
@@ -905,7 +766,7 @@ end)
 
 task.spawn(function()
     while SharedState.IsRunning do
-        if ConfigModule.Settings.AutoSkills and not SharedState.IsDungeonEnded and not SharedState.IsRespawning and not SharedState.IsTransitioning and not SharedState.EnteringPortal and not SharedState.IsSelling then
+        if ConfigModule.Settings.AutoSkills and not SharedState.IsDungeonEnded and not SharedState.IsRespawning and not SharedState.IsTransitioning and not SharedState.EnteringPortal then
             local _, _, hum = CharacterModule.Get()
             if hum and hum.Health > 0 then CombatModule.ExecuteSkills() end
         end
@@ -920,12 +781,6 @@ task.spawn(function()
             if hum and hum.Health > 0 then
                 if not initialRoutinesScheduled then
                     initialRoutinesScheduled = true
-                    task.spawn(function()
-                        task.wait(10)
-                        if SharedState.IsRunning and ConfigModule.Settings.AutoSell and not SharedState.IsDungeonEnded then
-                            AutoSellModule.Execute()
-                        end
-                    end)
                     task.spawn(function()
                         task.wait(13)
                         if SharedState.IsRunning and ConfigModule.Settings.AutoClaimQuests and not SharedState.IsDungeonEnded then
@@ -969,7 +824,9 @@ task.spawn(function()
                         SharedState.IsVirusActive = true
                         task.wait(1.0)
                     else
-                        if ConfigModule.Settings.SelectedPhase == "Bleach (Fase 4)" then
+                        if ConfigModule.Settings.SelectedPhase == "One Piece" then
+                            FlowModule.RunOnePiece()
+                        elseif ConfigModule.Settings.SelectedPhase == "Bleach (Fase 4)" then
                             FlowModule.RunBleach()
                         elseif ConfigModule.Settings.SelectedPhase == "Incursão" then
                             FlowModule.RunIncursion()
@@ -986,7 +843,7 @@ task.spawn(function()
     end
 end)
 
--- [[ 12. INTERFACE VISUAL ]]
+-- [[ 10. INTERFACE VISUAL ]]
 local UIModule = {}
 
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
@@ -1002,7 +859,6 @@ local Window = Fluent:CreateWindow({
 
 local Tabs = {
     Farm = Window:AddTab({ Title = "Farm" }),
-    AutoSell = Window:AddTab({ Title = "Auto Sell" }),
     Settings = Window:AddTab({ Title = "Settings" })
 }
 
@@ -1080,7 +936,7 @@ end)
 local PhaseSection = Tabs.Farm:AddSection("Fase Ativa")
 PhaseSection:AddDropdown("PhaseSelector", {
     Title = "Selecionar Fase",
-    Values = { "Bleach (Fase 4)", "Incursão" },
+    Values = { "One Piece", "Bleach (Fase 4)", "Incursão" },
     Default = ConfigModule.Settings.SelectedPhase,
     Callback = function(Value) ConfigModule.Settings.SelectedPhase = Value ConfigModule.Save() end
 })
@@ -1182,58 +1038,6 @@ CombatSection:AddSlider("TweenSpeed", {
     Default = ConfigModule.Settings.TweenSpeed,
     Min = 20, Max = 120, Rounding = 0,
     Callback = function(Value) ConfigModule.Settings.TweenSpeed = Value ConfigModule.Save() end
-})
-
--- ABA AUTO-SELL
-local AutoSellMainSection = Tabs.AutoSell:AddSection("Controle Geral de Venda")
-AutoSellMainSection:AddToggle("AutoSellToggle", {
-    Title = "Venda Automática (10s pós-início)",
-    Default = ConfigModule.Settings.AutoSell,
-    Callback = function(Value) ConfigModule.Settings.AutoSell = Value ConfigModule.Save() end
-})
-AutoSellMainSection:AddButton({
-    Title = "⚡ Executar Venda Direta Agora",
-    Callback = function() pcall(AutoSellModule.Execute) end
-})
-
-local AutoSellRaritySection = Tabs.AutoSell:AddSection("Filtro de Raridades (Vender)")
-AutoSellRaritySection:AddToggle("SellRareToggle", {
-    Title = "Vender Raro (Rare)",
-    Default = ConfigModule.Settings.SellRare,
-    Callback = function(Value) ConfigModule.Settings.SellRare = Value ConfigModule.Save() end
-})
-AutoSellRaritySection:AddToggle("SellEpicToggle", {
-    Title = "Vender Épico (Epic)",
-    Default = ConfigModule.Settings.SellEpic,
-    Callback = function(Value) ConfigModule.Settings.SellEpic = Value ConfigModule.Save() end
-})
-AutoSellRaritySection:AddToggle("SellLegendaryToggle", {
-    Title = "Vender Lendário (Legendary)",
-    Default = ConfigModule.Settings.SellLegendary,
-    Callback = function(Value) ConfigModule.Settings.SellLegendary = Value ConfigModule.Save() end
-})
-AutoSellRaritySection:AddToggle("SellMythicToggle", {
-    Title = "Vender Mítico (Mythic)",
-    Description = "Secrets NUNCA são vendidos.",
-    Default = ConfigModule.Settings.SellMythic,
-    Callback = function(Value) ConfigModule.Settings.SellMythic = Value ConfigModule.Save() end
-})
-
-local AutoSellTypeSection = Tabs.AutoSell:AddSection("Tipos de Item Permitidos")
-AutoSellTypeSection:AddToggle("SellWeaponsToggle", {
-    Title = "Incluir Armas (Weapons)",
-    Default = ConfigModule.Settings.SellWeapons,
-    Callback = function(Value) ConfigModule.Settings.SellWeapons = Value ConfigModule.Save() end
-})
-AutoSellTypeSection:AddToggle("SellArmorsToggle", {
-    Title = "Incluir Armaduras (Armors)",
-    Default = ConfigModule.Settings.SellArmors,
-    Callback = function(Value) ConfigModule.Settings.SellArmors = Value ConfigModule.Save() end
-})
-AutoSellTypeSection:AddToggle("SellSpellsToggle", {
-    Title = "Incluir Spells (Magias)",
-    Default = ConfigModule.Settings.SellSpells,
-    Callback = function(Value) ConfigModule.Settings.SellSpells = Value ConfigModule.Save() end
 })
 
 -- ABA SETTINGS
