@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (AUTO-SELL TOTALMENTE CORRIGIDO)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (REMOTE & AUTO-SELL INTEGRADO)
 -- ====================================================================
 
 -- [[ 1. SINGLETON & BOOTSTRAP ]]
@@ -161,7 +161,7 @@ function DatabaseModule.Init()
                 for rawName, itemData in pairs(data) do
                     if type(itemData) == "table" then
                         local r = itemData.Rarity or itemData.rarity or itemData.Tier or "Unknown"
-                        local t = itemData.Type or itemData.type or (mod.Name:lower():find("weapon") and "Weapon") or (mod.Name:lower():find("spell") and "Spell") or (mod.Name:lower():find("armor") and "Armor") or "Unknown"
+                        local t = itemData.Type or itemData.type or (mod.Name:lower():find("weapon") and "weapon") or (mod.Name:lower():find("spell") and "spell") or (mod.Name:lower():find("armor") and "armor") or "unknown"
                         local displayName = itemData.Name or rawName
 
                         local entry = {
@@ -406,23 +406,9 @@ end
 
 -- [[ 6. MÓDULO DE COMBATE (CombatModule) ]]
 local CombatModule = {}
-local attackRemote = nil
+local attackRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Attack", 10)
 local lastSkillUse = 0
 local comboIndex = 1
-
-function CombatModule.FindAttackRemote()
-    if attackRemote and attackRemote.Parent then return attackRemote end
-    for _, container in ipairs({ReplicatedStorage, ReplicatedStorage:FindFirstChild("Remotes"), ReplicatedStorage:FindFirstChild("Events")}) do
-        if container then
-            local rem = container:FindFirstChild("Attack") or container:FindFirstChild("M1") or container:FindFirstChild("Combat")
-            if rem and rem:IsA("RemoteEvent") then
-                attackRemote = rem
-                return attackRemote
-            end
-        end
-    end
-    return nil
-end
 
 function CombatModule.DetectWeapon()
     local pguiRef = player:FindFirstChild("PlayerGui")
@@ -468,8 +454,7 @@ function CombatModule.ExecuteM1()
     if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or SharedState.IsSelling or not SharedState.IsRunning then return end
     comboIndex = (comboIndex % 4) + 1
     local weapon = CombatModule.GetEffectiveWeapon()
-    local rem = CombatModule.FindAttackRemote()
-    if rem then pcall(function() rem:FireServer("M1", weapon, comboIndex, 0, 0, 2) end) end
+    if attackRemote then pcall(function() attackRemote:FireServer("M1", weapon, comboIndex, 0, 0, 2) end) end
 
     local char = player.Character
     if char and char:FindFirstChildOfClass("Tool") then pcall(function() char:FindFirstChildOfClass("Tool"):Activate() end) end
@@ -505,28 +490,13 @@ function CombatModule.ExecuteSkills()
     end
 end
 
--- [[ 7. MÓDULO DE AUTO-SELL AUDITADO (AutoSellModule) ]]
+-- [[ 7. MÓDULO DE AUTO-SELL (AutoSellModule) ]]
 local AutoSellModule = {}
-local equipRemote = nil
+local equipRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Equip", 10)
 
-function AutoSellModule.FindEquipRemote()
-    if equipRemote and equipRemote.Parent then return equipRemote end
-    for _, container in ipairs({ReplicatedStorage, ReplicatedStorage:FindFirstChild("Remotes"), ReplicatedStorage:FindFirstChild("Events")}) do
-        if container then
-            local rem = container:FindFirstChild("Equip") or container:FindFirstChild("Sell") or container:FindFirstChild("Item")
-            if rem and (rem:IsA("RemoteEvent") or rem:IsA("RemoteFunction")) then
-                equipRemote = rem
-                return equipRemote
-            end
-        end
-    end
-    return nil
-end
-
-function AutoSellModule.ResolveSlotData(slot)
-    local k1 = cleanKey(slot.Name)
-    local titleLabel = slot:FindFirstChild("Title", true)
-    local k2 = (titleLabel and titleLabel:IsA("TextLabel") and titleLabel.Text ~= "") and cleanKey(titleLabel.Text) or ""
+function AutoSellModule.ResolveSlotData(slotName, slotTitle)
+    local k1 = cleanKey(slotName)
+    local k2 = cleanKey(slotTitle)
 
     local data = DatabaseModule.Items[k1] or (k2 ~= "" and DatabaseModule.Items[k2])
     if data then
@@ -543,85 +513,70 @@ function AutoSellModule.ResolveSlotData(slot)
         return resolvedRarity, data.Type
     end
 
-    local directAttr = slot:GetAttribute("Rarity") or slot:GetAttribute("Tier")
-    if directAttr then
-        local r = tostring(directAttr):lower()
-        if r:find("secret") then return "Secret", nil
-        elseif r:find("mythic") then return "Mythic", nil
-        elseif r:find("legendary") then return "Legendary", nil
-        elseif r:find("epic") then return "Epic", nil
-        elseif r:find("rare") then return "Rare", nil
-        elseif r:find("common") then return "Common", nil
-        end
-    end
-
-    return "Unknown", nil
+    return "Unknown", "unknown"
 end
 
 function AutoSellModule.Execute()
-    if not ConfigModule.Settings.AutoSell or SharedState.IsSelling or not SharedState.IsRunning then return end
-    local remote = AutoSellModule.FindEquipRemote()
-    if not remote then return end
+    if not ConfigModule.Settings.AutoSell or SharedState.IsSelling or not SharedState.IsRunning or not equipRemote then return end
+    
+    local scroll = pgui:FindFirstChild("Main") 
+        and pgui.Main:FindFirstChild("MainFrame") 
+        and pgui.Main.MainFrame:FindFirstChild("Items") 
+        and pgui.Main.MainFrame.Items:FindFirstChild("Scroll")
 
-    local main = pgui:FindFirstChild("Main")
-    local mainFrame = main and main:FindFirstChild("MainFrame")
-    local itemsFrame = mainFrame and mainFrame:FindFirstChild("Items")
-    local buttonsFrame = itemsFrame and itemsFrame:FindFirstChild("Buttons")
-    local scroll = itemsFrame and itemsFrame:FindFirstChild("Scroll")
-    if not itemsFrame or not scroll then return end
+    if not scroll then return end
 
     SharedState.IsSelling = true
-    local categories = {}
-    if ConfigModule.Settings.SellWeapons and buttonsFrame and buttonsFrame:FindFirstChild("Weapon") then
-        table.insert(categories, { Button = buttonsFrame.Weapon, TargetType = "weapon" })
-    end
-    if ConfigModule.Settings.SellArmors and buttonsFrame and buttonsFrame:FindFirstChild("Armor") then
-        table.insert(categories, { Button = buttonsFrame.Armor, TargetType = "armor" })
-    end
-    if ConfigModule.Settings.SellSpells and buttonsFrame and buttonsFrame:FindFirstChild("Spell") then
-        table.insert(categories, { Button = buttonsFrame.Spell, TargetType = "spell" })
-    end
-
     local itemsToSell = {}
+    local processed = {}
 
-    for _, cat in ipairs(categories) do
-        CharacterModule.TriggerButton(cat.Button)
-        task.wait(0.25)
+    for _, slot in ipairs(scroll:GetChildren()) do
+        if slot:IsA("GuiObject") and slot:GetAttribute("Item") ~= nil and slot.Name ~= "SteelSword" and not processed[slot] then
+            processed[slot] = true
 
-        for _, slot in ipairs(scroll:GetChildren()) do
-            if slot:IsA("GuiObject") and slot:GetAttribute("Item") ~= nil and slot.Name ~= "SteelSword" and slot.Visible ~= false then
-                local eq = slot:FindFirstChild("EquippedSelection")
-                local isEquipped = eq and eq:IsA("ImageLabel") and eq.Visible and eq.ImageColor3 == Color3.fromRGB(0, 255, 0)
-                local fav = slot:FindFirstChild("Favorite", true)
-                local isFav = fav and fav:IsA("ImageLabel") and fav.Visible and fav.ImageColor3 ~= Color3.fromRGB(255, 255, 255)
+            local eq = slot:FindFirstChild("EquippedSelection")
+            local isEquipped = eq and eq:IsA("ImageLabel") and eq.Visible and eq.ImageColor3 == Color3.fromRGB(0, 255, 0)
+            local fav = slot:FindFirstChild("Favorite", true)
+            local isFav = fav and fav:IsA("ImageLabel") and fav.Visible and fav.ImageColor3 ~= Color3.fromRGB(255, 255, 255)
 
-                if not isEquipped and not isFav then
-                    local rarity, dbType = AutoSellModule.ResolveSlotData(slot)
+            if not isEquipped and not isFav then
+                local titleLabel = slot:FindFirstChild("Title", true)
+                local titleText = (titleLabel and titleLabel:IsA("TextLabel")) and titleLabel.Text or ""
+                
+                local rarity, itemType = AutoSellModule.ResolveSlotData(slot.Name, titleText)
 
-                    -- 1. BLOQUEIO TOTAL: Secrets nunca são vendidos
-                    if rarity == "Secret" then
-                        continue
+                -- 1. PROTEÇÃO TOTAL: Secrets nunca são vendidos
+                if rarity == "Secret" then
+                    continue
+                end
+
+                -- 2. PROTEÇÃO: Mythics apenas se habilitado
+                if rarity == "Mythic" and not ConfigModule.Settings.SellMythic then
+                    continue
+                end
+
+                -- 3. FILTRO DE TIPO
+                local typeAllowed = false
+                if itemType == "weapon" and ConfigModule.Settings.SellWeapons then typeAllowed = true
+                elseif itemType == "armor" and ConfigModule.Settings.SellArmors then typeAllowed = true
+                elseif itemType == "spell" and ConfigModule.Settings.SellSpells then typeAllowed = true
+                elseif itemType == "unknown" then
+                    -- Classificação por nomenclatura comum
+                    local n = slot.Name:lower()
+                    if (n:find("sword") or n:find("blade") or n:find("staff") or n:find("dagger") or n:find("book") or n:find("axe") or n:find("katana")) and ConfigModule.Settings.SellWeapons then typeAllowed = true
+                    elseif (n:find("armor") or n:find("robe") or n:find("hood") or n:find("helmet") or n:find("mask") or n:find("crown") or n:find("suit")) and ConfigModule.Settings.SellArmors then typeAllowed = true
+                    elseif (n:find("tornado") or n:find("slash") or n:find("slam") or n:find("rumble") or n:find("gem") or n:find("pride") or n:find("one") or n:find("calm") or n:find("hado")) and ConfigModule.Settings.SellSpells then typeAllowed = true
                     end
+                end
 
-                    -- 2. BLOQUEIO: Mythics apenas se autorizado
-                    if rarity == "Mythic" and not ConfigModule.Settings.SellMythic then
-                        continue
-                    end
+                if typeAllowed then
+                    local rarityAllowed = (rarity == "Rare" and ConfigModule.Settings.SellRare)
+                        or (rarity == "Epic" and ConfigModule.Settings.SellEpic)
+                        or (rarity == "Legendary" and ConfigModule.Settings.SellLegendary)
+                        or (rarity == "Mythic" and ConfigModule.Settings.SellMythic)
 
-                    -- 3. TRAVA: Ignora itens não mapeados ou comuns base
-                    if rarity == "Unknown" or rarity == "Common" then
-                        continue
-                    end
-
-                    if dbType == cat.TargetType or dbType == "unknown" or not dbType then
-                        local allow = (rarity == "Rare" and ConfigModule.Settings.SellRare)
-                            or (rarity == "Epic" and ConfigModule.Settings.SellEpic)
-                            or (rarity == "Legendary" and ConfigModule.Settings.SellLegendary)
-                            or (rarity == "Mythic" and ConfigModule.Settings.SellMythic)
-
-                        if allow then
-                            table.insert(itemsToSell, slot.Name)
-                        end
+                    if rarityAllowed then
+                        table.insert(itemsToSell, slot.Name)
                     end
                 end
             end
@@ -629,29 +584,20 @@ function AutoSellModule.Execute()
     end
 
     if #itemsToSell > 0 then
-        pcall(function() remote:FireServer("Sell", itemsToSell) end)
-        Fluent:Notify({ Title = "Auto-Sell Concluído", Content = string.format("Vendidos %d itens com sucesso!", #itemsToSell), Duration = 3.5 })
+        -- Envio em lote e individual de fallback
+        pcall(function() equipRemote:FireServer("Sell", itemsToSell) end)
+        for _, itemName in ipairs(itemsToSell) do
+            pcall(function() equipRemote:FireServer("Sell", itemName) end)
+        end
+        Fluent:Notify({ Title = "Auto-Sell", Content = string.format("Vendidos %d itens!", #itemsToSell), Duration = 3.5 })
     end
+    
     SharedState.IsSelling = false
 end
 
 -- [[ 8. MÓDULO DE MISSÕES (QuestModule) ]]
 local QuestModule = {}
-local questRemote = nil
-
-function QuestModule.FindQuestRemote()
-    if questRemote and questRemote.Parent then return questRemote end
-    for _, container in ipairs({ReplicatedStorage, ReplicatedStorage:FindFirstChild("Remotes"), ReplicatedStorage:FindFirstChild("Events")}) do
-        if container then
-            local rem = container:FindFirstChild("Quest") or container:FindFirstChild("Quests") or container:FindFirstChild("ClaimQuest")
-            if rem and (rem:IsA("RemoteEvent") or rem:IsA("RemoteFunction")) then
-                questRemote = rem
-                return questRemote
-            end
-        end
-    end
-    return nil
-end
+local questRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Quest", 10)
 
 function QuestModule.ClaimAll()
     if not ConfigModule.Settings.AutoClaimQuests or SharedState.IsClaiming or not SharedState.IsRunning then return end
@@ -672,7 +618,6 @@ function QuestModule.ClaimAll()
         questsFrame:FindFirstChild("Buttons") and questsFrame.Buttons:FindFirstChild("Weekly")
     }
 
-    local rem = QuestModule.FindQuestRemote()
     local claimed = 0
     for _, tab in ipairs(tabs) do
         if tab then
@@ -687,12 +632,12 @@ function QuestModule.ClaimAll()
                             CharacterModule.TriggerButton(slot)
                             task.wait(0.1)
                             CharacterModule.TriggerButton(claimBtn)
-                            if rem then
+                            if questRemote then
                                 pcall(function()
-                                    rem:FireServer("Claim", slot.Name)
-                                    rem:FireServer(slot.Name)
+                                    questRemote:FireServer("Claim", slot.Name)
+                                    questRemote:FireServer(slot.Name)
                                     local num = tonumber(slot.Name:match("%d+"))
-                                    if num then rem:FireServer(num) end
+                                    if num then questRemote:FireServer(num) end
                                 end)
                             end
                             claimed = claimed + 1
@@ -898,7 +843,6 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
     SharedState.IsTransitioning = false
     SharedState.EnteringPortal = false
     CharacterModule.StopMovement()
-    attackRemote = nil
     bindCharacterEvents(newChar)
     task.delay(1.0, function() SharedState.IsRespawning = false end)
 end)
