@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (SCANNER DINÂMICO & AUTO-SELL BLINDADO)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (FIX: VENDA DE ARMAS ÉPICAS & MAPPER)
 -- ====================================================================
 
 -- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA (Singleton Anti-Duplicação)
@@ -73,7 +73,7 @@ if not inDungeon then
     return
 end
 
--- 4. BANCO DE DADOS GERAL DE ITENS DO JOGO (MAPPER DINÂMICO)
+-- 4. BANCO DE DADOS GERAL DE ITENS DO JOGO (MAPPER DINÂMICO FLEXÍVEL)
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local GameItemDatabase = {}
 
@@ -89,7 +89,8 @@ local function buildCompleteItemDatabase()
                             local r = itemInfo.Rarity or itemInfo.rarity or itemInfo.Tier
                             local t = itemInfo.Type or itemInfo.type or itemInfo.Category
                             if r then
-                                GameItemDatabase[tostring(itemName):lower()] = {
+                                local cleanName = tostring(itemName):gsub("%s+", ""):lower()
+                                GameItemDatabase[cleanName] = {
                                     RealName = tostring(itemName),
                                     Rarity = tostring(r),
                                     Type = t and tostring(t):lower() or nil
@@ -128,7 +129,7 @@ local Settings = {
     AutoClaimQuests = false,
     AutoSell = false,
     SellRare = true,
-    SellEpic = false,
+    SellEpic = true,
     SellLegendary = false,
     SellMythic = false,
     SellWeapons = true,
@@ -601,13 +602,16 @@ local function getClosestLivingEnemy()
     return closestEnemy, closestPart
 end
 
--- 9. AUDITORIA DE ITEM (VERIFICAÇÃO COMPLETA NO BANCO DE DADOS)
+-- 9. AUDITORIA DE ITEM (RECONHECIMENTO PRECISO DE ROXO / ÉPICO)
 local function getItemDataVerified(slot)
     local slotName = slot.Name
-    local slotKey = slotName:lower()
+    local cleanName = slotName:gsub("%s+", ""):lower()
 
-    -- 1. Consulta no Banco de Dados Dinâmico construído
-    local dbInfo = GameItemDatabase[slotKey]
+    local titleLabel = slot:FindFirstChild("Title", true)
+    local titleText = (titleLabel and titleLabel:IsA("TextLabel") and titleLabel.Text ~= "") and titleLabel.Text:gsub("%s+", ""):lower() or nil
+
+    -- 1. Consulta no Banco de Dados
+    local dbInfo = GameItemDatabase[cleanName] or (titleText and GameItemDatabase[titleText])
     if dbInfo then
         local r = dbInfo.Rarity:lower()
         local detectedRarity = "Unknown"
@@ -622,7 +626,7 @@ local function getItemDataVerified(slot)
         return detectedRarity, dbInfo.Type
     end
 
-    -- 2. Fallback de Atributos diretos no Slot
+    -- 2. Atributos diretos no Slot
     local directAttr = slot:GetAttribute("Rarity") or slot:GetAttribute("Tier")
     if directAttr then
         local r = tostring(directAttr):lower()
@@ -634,7 +638,7 @@ local function getItemDataVerified(slot)
         end
     end
 
-    -- 3. Fallback de Gradiente de Cor
+    -- 3. Reconhecimento Avançado por Gradiente (BGTop / BGBottom / ShineGradient)
     local rarityGrad = nil
     for _, name in ipairs({"BGTop", "BGBottom", "ShineGradient"}) do
         local f = slot:FindFirstChild(name)
@@ -647,6 +651,10 @@ local function getItemDataVerified(slot)
         end
     end
 
+    if not rarityGrad then
+        rarityGrad = slot:FindFirstChild("RarityGradient", true)
+    end
+
     if rarityGrad and rarityGrad:IsA("UIGradient") then
         local kpList = rarityGrad.Color.Keypoints
         if #kpList > 2 then return "Secret", nil end
@@ -656,10 +664,19 @@ local function getItemDataVerified(slot)
         local g = math.round(color.G * 255)
         local b = math.round(color.B * 255)
 
-        if r >= 220 and g >= 150 and b <= 60 then return "Legendary", nil end
-        if r >= 120 and r <= 210 and g <= 80 and b >= 180 then return "Epic", nil end
-        if r <= 60 and g >= 60 and b >= 180 then return "Rare", nil end
-        if r >= 200 and g <= 50 and b <= 50 then return "Mythic", nil end
+        -- Dourado / Amarelo (Legendary)
+        if r >= 210 and g >= 140 and b <= 80 then return "Legendary", nil end
+
+        -- Vermelho puro (Mythic)
+        if r >= 190 and g <= 60 and b <= 60 then return "Mythic", nil end
+
+        -- Roxo / Púrpura / Magenta (Epic) - Tolerância ampliada para tons escuros e claros
+        if (b >= 110 and (r + b) > (g * 1.8)) or (r >= 90 and r <= 220 and b >= 140 and g <= 100) then
+            return "Epic", nil
+        end
+
+        -- Azul puro (Rare)
+        if b >= 160 and g >= 50 and r <= 90 then return "Rare", nil end
     end
 
     return "Unknown", nil
@@ -730,7 +747,7 @@ local function executeDirectAutoSell()
                     if not isEquipped and not isFav then
                         local rarity, dbType = getItemDataVerified(slot)
 
-                        -- 1. BLOQUEIO TOTAL E IRREVOGÁVEL DE SECRETS
+                        -- 1. BLOQUEIO ABSOLUTO DE SECRET
                         if rarity == "Secret" then
                             continue
                         end
@@ -740,7 +757,7 @@ local function executeDirectAutoSell()
                             continue
                         end
 
-                        -- 3. TRAVA DE SEGURANÇA CONTRA ITENS NÃO IDENTIFICADOS OU COMUNS
+                        -- 3. TRAVA DE SEGURANÇA
                         if rarity == "Unknown" or rarity == "Common" then
                             continue
                         end
@@ -780,7 +797,7 @@ local function executeDirectAutoSell()
         end)
         Fluent:Notify({
             Title = "Auto-Sell Concluído",
-            Content = string.format("Auditados e vendidos %d itens com proteção a Secrets!", #itemsToSell),
+            Content = string.format("Auditados e vendidos %d itens (incluindo Épicos)!", #itemsToSell),
             Duration = 3.5
         })
     end
