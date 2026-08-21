@@ -1,15 +1,17 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (FIX: VENDA DE ARMAS ÉPICAS & MAPPER)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (ARQUITETURA MODULAR ISOLADA)
 -- ====================================================================
 
--- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA (Singleton Anti-Duplicação)
+-- [[ 1. SINGLETON & BOOTSTRAP ]]
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local UNIQUE_ID = "HubRapazes_Singleton_Tag"
-if CoreGui:FindFirstChild(UNIQUE_ID) then
-    return
-end
+if CoreGui:FindFirstChild(UNIQUE_ID) then return end
 
 local singletonTag = Instance.new("Folder")
 singletonTag.Name = UNIQUE_ID
@@ -25,9 +27,7 @@ for _, gui in ipairs({CoreGui, Players.LocalPlayer and Players.LocalPlayer:FindF
     end
 end
 
--- 2. REEXECUÇÃO AUTOMÁTICA INFINITA (Delta / Mobile)
 local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Teste.lua"
-
 local function queueNextExecution()
     local queueFunc = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or queueonteleport
     if queueFunc then
@@ -40,14 +40,9 @@ local function queueNextExecution()
         end)
     end
 end
-
 queueNextExecution()
 
--- 3. ESPERA DE CARREGAMENTO E TRAVA DO LOBBY
-if not game:IsLoaded() then
-    game.Loaded:Wait()
-end
-
+if not game:IsLoaded() then game.Loaded:Wait() end
 local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
 local pgui = player:WaitForChild("PlayerGui", 20)
 
@@ -60,57 +55,31 @@ local function isInsideDungeon()
 end
 
 local inDungeon = false
-for i = 1, 15 do
-    if isInsideDungeon() then
-        inDungeon = true
-        break
-    end
+for _ = 1, 15 do
+    if isInsideDungeon() then inDungeon = true break end
     task.wait(0.5)
 end
-
 if not inDungeon then
     pcall(function() singletonTag:Destroy() end)
     return
 end
 
--- 4. BANCO DE DADOS GERAL DE ITENS DO JOGO (MAPPER DINÂMICO FLEXÍVEL)
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local GameItemDatabase = {}
+local SharedState = {
+    IsRunning = true,
+    IsRespawning = false,
+    IsTransitioning = false,
+    EnteringPortal = false,
+    IsVirusActive = false,
+    IsSelling = false,
+    IsClaiming = false,
+    IsDungeonEnded = false,
+    LastRoomState = "Room1",
+    CurrentTween = nil
+}
 
-local function buildCompleteItemDatabase()
-    local statsFolder = ReplicatedStorage:FindFirstChild("Stats") or ReplicatedStorage:FindFirstChild("Modules")
-    if statsFolder then
-        for _, desc in ipairs(statsFolder:GetDescendants()) do
-            if desc:IsA("ModuleScript") then
-                local success, data = pcall(require, desc)
-                if success and type(data) == "table" then
-                    for itemName, itemInfo in pairs(data) do
-                        if type(itemInfo) == "table" then
-                            local r = itemInfo.Rarity or itemInfo.rarity or itemInfo.Tier
-                            local t = itemInfo.Type or itemInfo.type or itemInfo.Category
-                            if r then
-                                local cleanName = tostring(itemName):gsub("%s+", ""):lower()
-                                GameItemDatabase[cleanName] = {
-                                    RealName = tostring(itemName),
-                                    Rarity = tostring(r),
-                                    Type = t and tostring(t):lower() or nil
-                                }
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-end
-
-buildCompleteItemDatabase()
-
--- 5. SISTEMA DE CONFIGURAÇÃO / PERSISTÊNCIA JSON
-local HttpService = game:GetService("HttpService")
-local CONFIG_FILE = "HubRapazes_Config.json"
-
-local Settings = {
+-- [[ 2. MÓDULO DE CONFIGURAÇÃO (ConfigModule) ]]
+local ConfigModule = {}
+ConfigModule.Settings = {
     SelectedPhase = "Bleach (Fase 4)",
     CustomWeaponName = "VoidRods",
     AutoFarm = true,
@@ -137,95 +106,70 @@ local Settings = {
     SellSpells = false
 }
 
-local function saveConfig()
+local CONFIG_FILE = "HubRapazes_Config.json"
+
+function ConfigModule.Save()
     pcall(function()
         if writefile then
-            local data = HttpService:JSONEncode({
-                SelectedPhase = Settings.SelectedPhase,
-                CustomWeaponName = Settings.CustomWeaponName,
-                HeightAboveEnemy = Settings.HeightAboveEnemy,
-                TweenSpeed = Settings.TweenSpeed,
-                AttackSpeed = Settings.AttackSpeed,
-                SkillCooldown = Settings.SkillCooldown,
-                StartWaitTime = Settings.StartWaitTime,
-                HardcoreMode = Settings.HardcoreMode,
-                AutoClaimQuests = Settings.AutoClaimQuests,
-                AutoSell = Settings.AutoSell,
-                SellRare = Settings.SellRare,
-                SellEpic = Settings.SellEpic,
-                SellLegendary = Settings.SellLegendary,
-                SellMythic = Settings.SellMythic,
-                SellWeapons = Settings.SellWeapons,
-                SellArmors = Settings.SellArmors,
-                SellSpells = Settings.SellSpells
-            })
-            writefile(CONFIG_FILE, data)
+            writefile(CONFIG_FILE, HttpService:JSONEncode(ConfigModule.Settings))
         end
     end)
 end
 
-local function loadConfig()
+function ConfigModule.Load()
     pcall(function()
         if readfile and isfile and isfile(CONFIG_FILE) then
-            local raw = readfile(CONFIG_FILE)
-            local data = HttpService:JSONDecode(raw)
+            local data = HttpService:JSONDecode(readfile(CONFIG_FILE))
             if data then
-                if data.SelectedPhase ~= nil then Settings.SelectedPhase = data.SelectedPhase end
-                if data.CustomWeaponName ~= nil then Settings.CustomWeaponName = data.CustomWeaponName end
-                if data.HeightAboveEnemy ~= nil then Settings.HeightAboveEnemy = data.HeightAboveEnemy end
-                if data.TweenSpeed ~= nil then Settings.TweenSpeed = data.TweenSpeed end
-                if data.AttackSpeed ~= nil then Settings.AttackSpeed = data.AttackSpeed end
-                if data.SkillCooldown ~= nil then Settings.SkillCooldown = data.SkillCooldown end
-                if data.StartWaitTime ~= nil then Settings.StartWaitTime = data.StartWaitTime end
-                if data.HardcoreMode ~= nil then Settings.HardcoreMode = data.HardcoreMode end
-                if data.AutoClaimQuests ~= nil then Settings.AutoClaimQuests = data.AutoClaimQuests end
-                if data.AutoSell ~= nil then Settings.AutoSell = data.AutoSell end
-                if data.SellRare ~= nil then Settings.SellRare = data.SellRare end
-                if data.SellEpic ~= nil then Settings.SellEpic = data.SellEpic end
-                if data.SellLegendary ~= nil then Settings.SellLegendary = data.SellLegendary end
-                if data.SellMythic ~= nil then Settings.SellMythic = data.SellMythic end
-                if data.SellWeapons ~= nil then Settings.SellWeapons = data.SellWeapons end
-                if data.SellArmors ~= nil then Settings.SellArmors = data.SellArmors end
-                if data.SellSpells ~= nil then Settings.SellSpells = data.SellSpells end
+                for k, v in pairs(data) do
+                    if ConfigModule.Settings[k] ~= nil then
+                        ConfigModule.Settings[k] = v
+                    end
+                end
             end
         end
     end)
 end
+ConfigModule.Load()
 
-loadConfig()
+-- [[ 3. MÓDULO DE BANCO DE DADOS (DatabaseModule) ]]
+local DatabaseModule = {}
+DatabaseModule.Items = {}
 
--- 6. SERVIÇOS E ESTADOS GLOBAIS
-local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
-local TweenService = game:GetService("TweenService")
-local VirtualInputManager = game:GetService("VirtualInputManager")
+function DatabaseModule.Init()
+    local statsFolder = ReplicatedStorage:FindFirstChild("Stats") or ReplicatedStorage:FindFirstChild("Modules")
+    if statsFolder then
+        for _, desc in ipairs(statsFolder:GetDescendants()) do
+            if desc:IsA("ModuleScript") then
+                local success, data = pcall(require, desc)
+                if success and type(data) == "table" then
+                    for itemName, itemInfo in pairs(data) do
+                        if type(itemInfo) == "table" then
+                            local r = itemInfo.Rarity or itemInfo.rarity or itemInfo.Tier
+                            local t = itemInfo.Type or itemInfo.type or itemInfo.Category
+                            if r then
+                                local cleanName = tostring(itemName):gsub("%s+", ""):lower()
+                                DatabaseModule.Items[cleanName] = {
+                                    RealName = tostring(itemName),
+                                    Rarity = tostring(r),
+                                    Type = t and tostring(t):lower() or nil
+                                }
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+DatabaseModule.Init()
 
-local isScriptRunning = true
-local currentTween = nil
-local charConnection = nil
+-- [[ 4. MÓDULO DE PERSONAGEM & FÍSICA (CharacterModule) ]]
+local CharacterModule = {}
 local diedConnection = nil
+local charConnection = nil
 
-local equipRemote = ReplicatedStorage:WaitForChild("Remotes", 10) and ReplicatedStorage.Remotes:WaitForChild("Equip", 10)
-local questRemote = ReplicatedStorage:WaitForChild("Remotes", 10) and ReplicatedStorage.Remotes:WaitForChild("Quest", 10)
-
--- COORDENADAS DOS PORTAIS (FASE 4 - BLEACH)
-local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0)
-local PORTAL_2_BOSS_POS  = CFrame.new(5411.5, -561.0, 2550.0)
-
-local isRespawning = false
-local isTransitioning = false
-local enteringPortal = false
-local isVirusActive = false
-local isSellingInProgress = false
-local isQuestClaimInProgress = false
-local initialRoutinesScheduled = false
-local lastRoomState = "Room1"
-
-local lastSkillUse = 0
-local comboIndex = 1
-local isDungeonEnded = false
-local attackRemote = nil
-
-local function getCharacter()
+function CharacterModule.Get()
     local char = player.Character
     if char and char:FindFirstChild("HumanoidRootPart") and char:FindFirstChild("Humanoid") and char.Humanoid.Health > 0 then
         return char, char.HumanoidRootPart, char.Humanoid
@@ -233,114 +177,44 @@ local function getCharacter()
     return nil, nil, nil
 end
 
-local function stopMovement()
-    if currentTween then
-        currentTween:Cancel()
-        currentTween = nil
+function CharacterModule.StopMovement()
+    if SharedState.CurrentTween then
+        SharedState.CurrentTween:Cancel()
+        SharedState.CurrentTween = nil
     end
-    local _, root = getCharacter()
+    local _, root = CharacterModule.Get()
     if root and root.Parent then
         root.AssemblyLinearVelocity = Vector3.zero
     end
 end
 
-local function smoothFlyTo(targetCFrame)
-    if isDungeonEnded or isRespawning or isTransitioning or isSellingInProgress or not isScriptRunning then return end
-    local _, root = getCharacter()
+function CharacterModule.FlyTo(targetCFrame)
+    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.IsSelling or not SharedState.IsRunning then return end
+    local _, root = CharacterModule.Get()
     if not root or not root.Parent then return end
-    
+
     local distance = (root.Position - targetCFrame.Position).Magnitude
-    local duration = math.clamp(distance / math.max(Settings.TweenSpeed, 5), 0.1, 10)
+    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 5), 0.1, 10)
 
-    if currentTween then
-        currentTween:Cancel()
-    end
-
-    local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
-    currentTween = TweenService:Create(root, tweenInfo, {CFrame = targetCFrame})
-    currentTween:Play()
+    if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
+    SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out), {CFrame = targetCFrame})
+    SharedState.CurrentTween:Play()
 end
 
-local function triggerGuiButton(btn)
-    if not btn or not isScriptRunning then return end
+function CharacterModule.TriggerButton(btn)
+    if not btn or not SharedState.IsRunning then return end
     pcall(function()
         for _, evName in ipairs({"Activated", "MouseButton1Click", "MouseButton1Down", "MouseButton1Up"}) do
-            if btn[evName] and firesignal then
-                pcall(function() firesignal(btn[evName]) end)
-            end
+            if btn[evName] and firesignal then firesignal(btn[evName]) end
             if btn[evName] and getconnections then
-                for _, c in ipairs(getconnections(btn[evName])) do
-                    pcall(function() c:Fire() end)
-                end
+                for _, c in ipairs(getconnections(btn[evName])) do c:Fire() end
             end
         end
     end)
 end
 
-local function checkDungeonEnd()
-    local pguiRef = player:FindFirstChild("PlayerGui")
-    if not pguiRef or not isScriptRunning then return false, nil end
-
-    local main = pguiRef:FindFirstChild("Main")
-    local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
-    local dungeonStats = dungeonFrame and dungeonFrame:FindFirstChild("DungeonStats")
-    local endActions = dungeonStats and dungeonStats:FindFirstChild("EndActions")
-    local playAgainBtn = endActions and endActions:FindFirstChild("PlayAgain")
-
-    if dungeonStats and dungeonStats.Visible and playAgainBtn and playAgainBtn.Visible then
-        return true, playAgainBtn
-    end
-
-    return false, nil
-end
-
-local function onPlayerDied()
-    if not Settings.HardcoreMode then return end
-
-    task.spawn(function()
-        task.wait(23)
-        if not isScriptRunning or not Settings.HardcoreMode or not Settings.AutoPlayAgain then return end
-
-        stopMovement()
-        local _, retryBtn = checkDungeonEnd()
-        if retryBtn then
-            queueNextExecution()
-            task.wait(0.5)
-            triggerGuiButton(retryBtn)
-            task.wait(3.0)
-        end
-    end)
-end
-
-local function bindCharacter(char)
-    if not char then return end
-    local hum = char:WaitForChild("Humanoid", 10)
-    if hum then
-        if diedConnection then diedConnection:Disconnect() end
-        diedConnection = hum.Died:Connect(onPlayerDied)
-    end
-end
-
-if player.Character then
-    bindCharacter(player.Character)
-end
-
-charConnection = player.CharacterAdded:Connect(function(newChar)
-    isRespawning = true
-    isTransitioning = false
-    enteringPortal = false
-    stopMovement()
-    attackRemote = nil
-
-    bindCharacter(newChar)
-
-    task.delay(1.0, function()
-        isRespawning = false
-    end)
-end)
-
-local function pressKey(keyCode)
-    if not isScriptRunning then return end
+function CharacterModule.PressKey(keyCode)
+    if not SharedState.IsRunning then return end
     pcall(function()
         VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
         task.wait(0.02)
@@ -348,8 +222,110 @@ local function pressKey(keyCode)
     end)
 end
 
--- 7. MOTOR DE COMBATE DIRETO E SCANNER DE ARMA
-local function findAttackRemote()
+-- [[ 5. MÓDULO DE DETECÇÃO DE INIMIGOS (TargetingModule) ]]
+local TargetingModule = {}
+
+function TargetingModule.IsAlive(obj)
+    if not obj or not obj.Parent then return false end
+    local hum = obj:FindFirstChildOfClass("Humanoid")
+    if hum then return (hum.Health > 0 and hum:GetState() ~= Enum.HumanoidStateType.Dead) end
+    local hpAttr = obj:GetAttribute("Health") or obj:GetAttribute("HP")
+    if hpAttr then return tonumber(hpAttr) > 0 end
+    local hpVal = obj:FindFirstChild("Health") or obj:FindFirstChild("HP")
+    if hpVal and hpVal:IsA("ValueBase") then return tonumber(hpVal.Value) > 0 end
+    return false
+end
+
+function TargetingModule.GetTargetPart(obj)
+    if not obj or not obj.Parent then return nil end
+    return obj:FindFirstChild("HumanoidRootPart")
+        or obj:FindFirstChild("RootPart")
+        or obj:FindFirstChild("Hitbox")
+        or obj:FindFirstChild("HitBox")
+        or obj:FindFirstChild("Bot")
+        or obj:FindFirstChild("Torso")
+        or obj:FindFirstChild("UpperTorso")
+        or obj:FindFirstChild("Head")
+        or (obj:IsA("Model") and obj.PrimaryPart)
+        or (obj:IsA("BasePart") and obj)
+        or obj:FindFirstChildWhichIsA("BasePart")
+end
+
+function TargetingModule.GetLivingEnemies(phase)
+    local list = {}
+    local char = player.Character
+    local registered = {}
+
+    local function addEntity(mob)
+        if mob and mob:IsA("Model") and mob ~= char and not registered[mob] and not Players:GetPlayerFromCharacter(mob) then
+            if TargetingModule.IsAlive(mob) and TargetingModule.GetTargetPart(mob) then
+                registered[mob] = true
+                table.insert(list, mob)
+            end
+        end
+    end
+
+    local gameFolder = workspace:FindFirstChild("Game")
+    local enemiesFolder = (gameFolder and gameFolder:FindFirstChild("Enemies")) or workspace:FindFirstChild("Enemies")
+    if enemiesFolder then
+        for _, enemy in ipairs(enemiesFolder:GetChildren()) do addEntity(enemy) end
+    end
+
+    if SharedState.IsVirusActive or phase == "Incursão" then
+        local virusFolder = (gameFolder and (gameFolder:FindFirstChild("Virus") or gameFolder:FindFirstChild("Boss") or gameFolder:FindFirstChild("SecretBoss"))) or workspace:FindFirstChild("Virus")
+        if virusFolder then
+            for _, mob in ipairs(virusFolder:GetChildren()) do addEntity(mob) end
+            if TargetingModule.IsAlive(virusFolder) then addEntity(virusFolder) end
+        end
+
+        for _, obj in ipairs(workspace:GetChildren()) do
+            if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
+                local name = obj.Name:lower()
+                if name:find("mob") or name:find("enemy") or name:find("boss") or name:find("virus") or obj:FindFirstChildOfClass("Humanoid") then
+                    addEntity(obj)
+                end
+            end
+        end
+    end
+
+    if #list == 0 and gameFolder and gameFolder:FindFirstChild("Stages") then
+        for _, stage in ipairs(gameFolder.Stages:GetChildren()) do
+            local spawns = stage:FindFirstChild("Spawns") or stage
+            for _, mob in ipairs(spawns:GetChildren()) do addEntity(mob) end
+        end
+    end
+
+    return list
+end
+
+function TargetingModule.GetClosestEnemy(phase)
+    local _, root = CharacterModule.Get()
+    if not root then return nil, nil end
+
+    local enemies = TargetingModule.GetLivingEnemies(phase)
+    local closestEnemy, closestPart = nil, nil
+    local minDistance = math.huge
+
+    for _, enemy in ipairs(enemies) do
+        local targetPart = TargetingModule.GetTargetPart(enemy)
+        if targetPart and targetPart:IsA("BasePart") then
+            local dist = (root.Position - targetPart.Position).Magnitude
+            if dist < minDistance then
+                minDistance = dist
+                closestEnemy = enemy
+                closestPart = targetPart
+            end
+        end
+    end
+
+    return closestEnemy, closestPart
+end
+
+-- [[ 6. MÓDULO DE COMBATE (CombatModule) ]]
+local CombatModule = {}
+local attackRemote = nil
+
+function CombatModule.FindAttackRemote()
     if attackRemote and attackRemote.Parent then return attackRemote end
     for _, container in ipairs({ReplicatedStorage, ReplicatedStorage:FindFirstChild("Remotes"), ReplicatedStorage:FindFirstChild("Events")}) do
         if container then
@@ -363,7 +339,7 @@ local function findAttackRemote()
     return nil
 end
 
-local function detectCurrentWeaponDetailed()
+function CombatModule.DetectWeapon()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if pguiRef then
         for _, desc in ipairs(pguiRef:GetDescendants()) do
@@ -380,31 +356,22 @@ local function detectCurrentWeaponDetailed()
     end
 
     local char = player.Character
-    if char then
-        local tool = char:FindFirstChildOfClass("Tool")
-        if tool then return tool.Name end
-    end
+    if char and char:FindFirstChildOfClass("Tool") then return char:FindFirstChildOfClass("Tool").Name end
     local bp = player:FindFirstChild("Backpack")
-    if bp then
-        local tool = bp:FindFirstChildOfClass("Tool")
-        if tool then return tool.Name end
-    end
-
+    if bp and bp:FindFirstChildOfClass("Tool") then return bp:FindFirstChildOfClass("Tool").Name end
     return nil
 end
 
-local function getEffectiveWeaponName()
-    if Settings.CustomWeaponName and Settings.CustomWeaponName ~= "" then
-        return Settings.CustomWeaponName
+function CombatModule.GetEffectiveWeapon()
+    if ConfigModule.Settings.CustomWeaponName and ConfigModule.Settings.CustomWeaponName ~= "" then
+        return ConfigModule.Settings.CustomWeaponName
     end
-    local found = detectCurrentWeaponDetailed()
-    return found or "VoidRods"
+    return CombatModule.DetectWeapon() or "VoidRods"
 end
 
-local function getDynamicHotbar()
+function CombatModule.GetHotbar()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef then return nil end
-
     local mainGui = pguiRef:FindFirstChild("Main")
     if mainGui and mainGui:FindFirstChild("FrontFrame") and mainGui.FrontFrame:FindFirstChild("Hotbar") then
         return mainGui.FrontFrame.Hotbar:FindFirstChild("List") or mainGui.FrontFrame.Hotbar
@@ -412,367 +379,152 @@ local function getDynamicHotbar()
     return nil
 end
 
--- 8. DETECÇÃO DE INIMIGOS
-local function getCurrentWaveNumber()
-    local pguiRef = player:FindFirstChild("PlayerGui")
-    if pguiRef then
-        local stageAmountLabel = pguiRef:FindFirstChild("Main")
-            and pguiRef.Main:FindFirstChild("DungeonFrame")
-            and pguiRef.Main.DungeonFrame:FindFirstChild("StatsHolder")
-            and pguiRef.Main.DungeonFrame.StatsHolder:FindFirstChild("Stage")
-            and pguiRef.Main.DungeonFrame.StatsHolder.Stage:FindFirstChild("Amount")
+function CombatModule.ExecuteM1()
+    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or SharedState.IsSelling or not SharedState.IsRunning then return end
+    comboIndex = (comboIndex % 4) + 1
+    local weapon = CombatModule.GetEffectiveWeapon()
+    local rem = CombatModule.FindAttackRemote()
+    if rem then pcall(function() rem:FireServer("M1", weapon, comboIndex, 0, 0, 2) end) end
 
-        if stageAmountLabel and stageAmountLabel:IsA("TextLabel") and stageAmountLabel.Visible and stageAmountLabel.Text ~= "" then
-            local cur = stageAmountLabel.Text:match("(%d+)%s*/%s*%d+") or stageAmountLabel.Text:match("(%d+)")
-            if cur then
-                local n = tonumber(cur)
-                if n and n >= 1 and n <= 15 then
-                    return n
-                end
-            end
-        end
-    end
-    return 1
-end
-
-local function getEntityTargetPart(obj)
-    if not obj or not obj.Parent then return nil end
-    return obj:FindFirstChild("HumanoidRootPart")
-        or obj:FindFirstChild("RootPart")
-        or obj:FindFirstChild("Hitbox")
-        or obj:FindFirstChild("HitBox")
-        or obj:FindFirstChild("Bot")
-        or obj:FindFirstChild("Torso")
-        or obj:FindFirstChild("UpperTorso")
-        or obj:FindFirstChild("Head")
-        or (obj:IsA("Model") and obj.PrimaryPart)
-        or (obj:IsA("BasePart") and obj)
-        or obj:FindFirstChildWhichIsA("BasePart")
-end
-
-local function isEntityAlive(obj)
-    if not obj or not obj.Parent then return false end
-    
-    local hum = obj:FindFirstChildOfClass("Humanoid")
-    if hum then 
-        return (hum.Health > 0 and hum:GetState() ~= Enum.HumanoidStateType.Dead)
-    end
-
-    local hpAttr = obj:GetAttribute("Health") or obj:GetAttribute("HP")
-    if hpAttr then return tonumber(hpAttr) > 0 end
-
-    local hpVal = obj:FindFirstChild("Health") or obj:FindFirstChild("HP")
-    if hpVal and hpVal:IsA("ValueBase") then return tonumber(hpVal.Value) > 0 end
-
-    return false
-end
-
-local function getAllLivingEnemiesBleach()
-    local list = {}
     local char = player.Character
-
-    local gameFolder = workspace:FindFirstChild("Game")
-    local enemiesFolder = (gameFolder and gameFolder:FindFirstChild("Enemies")) or workspace:FindFirstChild("Enemies")
-
-    if enemiesFolder then
-        for _, enemy in ipairs(enemiesFolder:GetChildren()) do
-            if isEntityAlive(enemy) then
-                table.insert(list, enemy)
-            end
-        end
-    end
-
-    if isVirusActive then
-        local virusFolder = (gameFolder and (gameFolder:FindFirstChild("Virus") or gameFolder:FindFirstChild("Boss") or gameFolder:FindFirstChild("SecretBoss"))) or workspace:FindFirstChild("Virus")
-        if virusFolder then
-            for _, mob in ipairs(virusFolder:GetChildren()) do
-                if isEntityAlive(mob) then table.insert(list, mob) end
-            end
-            if isEntityAlive(virusFolder) then table.insert(list, virusFolder) end
-        end
-
-        for _, obj in ipairs(workspace:GetChildren()) do
-            if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
-                local name = obj.Name:lower()
-                if name:find("virus") or name:find("secret") or name:find("boss") or obj:FindFirstChildOfClass("Humanoid") then
-                    if isEntityAlive(obj) then table.insert(list, obj) end
-                end
-            end
-        end
-    end
-
-    if #list == 0 and gameFolder and gameFolder:FindFirstChild("Stages") then
-        for _, stage in ipairs(gameFolder.Stages:GetChildren()) do
-            local spawns = stage:FindFirstChild("Spawns") or stage
-            for _, mob in ipairs(spawns:GetChildren()) do
-                if mob:IsA("Model") and mob ~= char and isEntityAlive(mob) then
-                    table.insert(list, mob)
-                end
-            end
-        end
-    end
-
-    return list
+    if char and char:FindFirstChildOfClass("Tool") then pcall(function() char:FindFirstChildOfClass("Tool"):Activate() end) end
 end
 
-local function getAllLivingEnemiesIncursion()
-    local list = {}
-    local char = player.Character
-    local registered = {}
+function CombatModule.ExecuteSkills()
+    if (tick() - lastSkillUse) < ConfigModule.Settings.SkillCooldown then return end
+    local _, root = CharacterModule.Get()
+    if not root then return end
 
-    local function addEntity(mob)
-        if mob and mob:IsA("Model") and mob ~= char and not registered[mob] and not Players:GetPlayerFromCharacter(mob) then
-            if isEntityAlive(mob) and getEntityTargetPart(mob) then
-                registered[mob] = true
-                table.insert(list, mob)
-            end
+    local _, enemyPart = TargetingModule.GetClosestEnemy(ConfigModule.Settings.SelectedPhase)
+    if enemyPart and (root.Position - enemyPart.Position).Magnitude <= ConfigModule.Settings.SkillMaxDistance then
+        lastSkillUse = tick()
+        local hotbarList = CombatModule.GetHotbar()
+        if hotbarList then
+            local s1 = hotbarList:FindFirstChild("Spell1", true) or hotbarList:FindFirstChild("Z", true)
+            local s2 = hotbarList:FindFirstChild("Spell2", true) or hotbarList:FindFirstChild("X", true)
+            local s3 = hotbarList:FindFirstChild("Ultimate", true) or hotbarList:FindFirstChild("Spell3", true) or hotbarList:FindFirstChild("C", true)
+
+            if s1 then CharacterModule.TriggerButton(s1) else CharacterModule.PressKey(Enum.KeyCode.Z) end
+            task.wait(0.06)
+            if s2 then CharacterModule.TriggerButton(s2) else CharacterModule.PressKey(Enum.KeyCode.X) end
+            task.wait(0.06)
+            if s3 then CharacterModule.TriggerButton(s3) end
+            CharacterModule.PressKey(Enum.KeyCode.C)
+        else
+            CharacterModule.PressKey(Enum.KeyCode.Z)
+            task.wait(0.06)
+            CharacterModule.PressKey(Enum.KeyCode.X)
+            task.wait(0.06)
+            CharacterModule.PressKey(Enum.KeyCode.C)
         end
     end
-
-    local gameFolder = workspace:FindFirstChild("Game")
-    if gameFolder then
-        local enemiesFolder = gameFolder:FindFirstChild("Enemies")
-        if enemiesFolder then
-            for _, enemy in ipairs(enemiesFolder:GetChildren()) do addEntity(enemy) end
-        end
-
-        local virusFolder = gameFolder:FindFirstChild("Virus") or gameFolder:FindFirstChild("Boss") or gameFolder:FindFirstChild("SecretBoss")
-        if virusFolder then
-            for _, enemy in ipairs(virusFolder:GetChildren()) do addEntity(enemy) end
-            if isEntityAlive(virusFolder) then addEntity(virusFolder) end
-        end
-
-        local summonsFolder = gameFolder:FindFirstChild("Summons") or gameFolder:FindFirstChild("Minions") or gameFolder:FindFirstChild("Clones")
-        if summonsFolder then
-            for _, summon in ipairs(summonsFolder:GetChildren()) do addEntity(summon) end
-        end
-
-        local stagesFolder = gameFolder:FindFirstChild("Stages")
-        if stagesFolder then
-            for _, stage in ipairs(stagesFolder:GetChildren()) do
-                local spawns = stage:FindFirstChild("Spawns") or stage
-                for _, mob in ipairs(spawns:GetChildren()) do addEntity(mob) end
-            end
-        end
-    end
-
-    local wsEnemies = workspace:FindFirstChild("Enemies") or workspace:FindFirstChild("Virus")
-    if wsEnemies then
-        for _, enemy in ipairs(wsEnemies:GetChildren()) do addEntity(enemy) end
-    end
-
-    for _, obj in ipairs(workspace:GetChildren()) do
-        if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
-            local name = obj.Name:lower()
-            if name:find("mob") or name:find("enemy") or name:find("clone") or name:find("summon") or name:find("minion") or name:find("boss") or name:find("virus") or obj:FindFirstChildOfClass("Humanoid") then
-                addEntity(obj)
-            end
-        end
-    end
-
-    return list
 end
 
-local function getClosestLivingEnemy()
-    local _, root = getCharacter()
-    if not root then return nil, nil end
+-- [[ 7. MÓDULO DE AUTO-SELL BLINDADO (AutoSellModule) ]]
+local AutoSellModule = {}
 
-    local enemies
-    if Settings.SelectedPhase == "Incursão" then
-        enemies = getAllLivingEnemiesIncursion()
-    else
-        enemies = getAllLivingEnemiesBleach()
-    end
-
-    local closestEnemy, closestPart = nil, nil
-    local minDistance = math.huge
-
-    for _, enemy in ipairs(enemies) do
-        local targetPart = getEntityTargetPart(enemy)
-        if targetPart and targetPart:IsA("BasePart") then
-            local dist = (root.Position - targetPart.Position).Magnitude
-            if dist < minDistance then
-                minDistance = dist
-                closestEnemy = enemy
-                closestPart = targetPart
-            end
-        end
-    end
-
-    return closestEnemy, closestPart
-end
-
--- 9. AUDITORIA DE ITEM (RECONHECIMENTO PRECISO DE ROXO / ÉPICO)
-local function getItemDataVerified(slot)
-    local slotName = slot.Name
-    local cleanName = slotName:gsub("%s+", ""):lower()
-
+function AutoSellModule.ResolveRarity(slot)
+    local cleanName = slot.Name:gsub("%s+", ""):lower()
     local titleLabel = slot:FindFirstChild("Title", true)
     local titleText = (titleLabel and titleLabel:IsA("TextLabel") and titleLabel.Text ~= "") and titleLabel.Text:gsub("%s+", ""):lower() or nil
 
-    -- 1. Consulta no Banco de Dados
-    local dbInfo = GameItemDatabase[cleanName] or (titleText and GameItemDatabase[titleText])
+    local dbInfo = DatabaseModule.Items[cleanName] or (titleText and DatabaseModule.Items[titleText])
     if dbInfo then
         local r = dbInfo.Rarity:lower()
-        local detectedRarity = "Unknown"
-        if r:find("secret") then detectedRarity = "Secret"
-        elseif r:find("mythic") then detectedRarity = "Mythic"
-        elseif r:find("legendary") then detectedRarity = "Legendary"
-        elseif r:find("epic") then detectedRarity = "Epic"
-        elseif r:find("rare") then detectedRarity = "Rare"
-        elseif r:find("common") then detectedRarity = "Common"
-        end
-
-        return detectedRarity, dbInfo.Type
+        if r:find("secret") then return "Secret", dbInfo.Type end
+        if r:find("mythic") then return "Mythic", dbInfo.Type end
+        if r:find("legendary") then return "Legendary", dbInfo.Type end
+        if r:find("epic") then return "Epic", dbInfo.Type end
+        if r:find("rare") then return "Rare", dbInfo.Type end
+        if r:find("common") then return "Common", dbInfo.Type end
     end
 
-    -- 2. Atributos diretos no Slot
     local directAttr = slot:GetAttribute("Rarity") or slot:GetAttribute("Tier")
     if directAttr then
         local r = tostring(directAttr):lower()
-        if r:find("secret") then return "Secret", nil
-        elseif r:find("mythic") then return "Mythic", nil
-        elseif r:find("legendary") then return "Legendary", nil
-        elseif r:find("epic") then return "Epic", nil
-        elseif r:find("rare") then return "Rare", nil
-        end
+        if r:find("secret") then return "Secret", nil end
+        if r:find("mythic") then return "Mythic", nil end
+        if r:find("legendary") then return "Legendary", nil end
+        if r:find("epic") then return "Epic", nil end
+        if r:find("rare") then return "Rare", nil end
     end
 
-    -- 3. Reconhecimento Avançado por Gradiente (BGTop / BGBottom / ShineGradient)
-    local rarityGrad = nil
-    for _, name in ipairs({"BGTop", "BGBottom", "ShineGradient"}) do
-        local f = slot:FindFirstChild(name)
-        if f then
-            local g = f:FindFirstChild("RarityGradient") or f:FindFirstChildWhichIsA("UIGradient")
-            if g then
-                rarityGrad = g
-                break
-            end
-        end
-    end
-
-    if not rarityGrad then
-        rarityGrad = slot:FindFirstChild("RarityGradient", true)
-    end
-
+    local rarityGrad = slot:FindFirstChild("RarityGradient", true) or (slot:FindFirstChild("BGTop") and slot.BGTop:FindFirstChildWhichIsA("UIGradient"))
     if rarityGrad and rarityGrad:IsA("UIGradient") then
-        local kpList = rarityGrad.Color.Keypoints
-        if #kpList > 2 then return "Secret", nil end
+        if #rarityGrad.Color.Keypoints > 2 then return "Secret", nil end
+        local c = rarityGrad.Color.Keypoints[1].Value
+        local r, g, b = math.round(c.R * 255), math.round(c.G * 255), math.round(c.B * 255)
 
-        local color = kpList[1].Value
-        local r = math.round(color.R * 255)
-        local g = math.round(color.G * 255)
-        local b = math.round(color.B * 255)
-
-        -- Dourado / Amarelo (Legendary)
         if r >= 210 and g >= 140 and b <= 80 then return "Legendary", nil end
-
-        -- Vermelho puro (Mythic)
         if r >= 190 and g <= 60 and b <= 60 then return "Mythic", nil end
-
-        -- Roxo / Púrpura / Magenta (Epic) - Tolerância ampliada para tons escuros e claros
-        if (b >= 110 and (r + b) > (g * 1.8)) or (r >= 90 and r <= 220 and b >= 140 and g <= 100) then
-            return "Epic", nil
-        end
-
-        -- Azul puro (Rare)
+        if (b >= 110 and (r + b) > (g * 1.8)) or (r >= 90 and r <= 220 and b >= 140 and g <= 100) then return "Epic", nil end
         if b >= 160 and g >= 50 and r <= 90 then return "Rare", nil end
     end
 
     return "Unknown", nil
 end
 
-local function getItemTypeFromSlot(slot, dbType)
+function AutoSellModule.ResolveType(slot, dbType)
     if dbType and dbType ~= "" then return dbType end
-
     local attrType = slot:GetAttribute("Type") or slot:GetAttribute("ItemType") or slot:GetAttribute("Category")
     if attrType then return tostring(attrType):lower() end
-
-    local typeVal = slot:FindFirstChild("Type") or slot:FindFirstChild("Category")
-    if typeVal and typeVal:IsA("StringValue") then return typeVal.Value:lower() end
-
     local itemValObj = slot:FindFirstChild("Item")
     local realItem = (itemValObj and itemValObj:IsA("ObjectValue") and itemValObj.Value)
         or (itemValObj and typeof(itemValObj.Value) == "Instance" and itemValObj.Value)
         or (typeof(itemValObj) == "Instance" and itemValObj)
-
     if realItem and realItem.Parent then
         local pName = realItem.Parent.Name:lower()
         if pName:find("weapon") then return "weapon" end
         if pName:find("armor") then return "armor" end
         if pName:find("spell") then return "spell" end
     end
-
     return "unknown"
 end
 
-local function executeDirectAutoSell()
-    if not Settings.AutoSell or isSellingInProgress or not isScriptRunning or not equipRemote then return end
-    
+function AutoSellModule.Execute()
+    if not ConfigModule.Settings.AutoSell or SharedState.IsSelling or not SharedState.IsRunning or not equipRemote then return end
     local main = pgui:FindFirstChild("Main")
     local itemsFrame = main and main:FindFirstChild("MainFrame") and main.MainFrame:FindFirstChild("Items")
     local buttonsFrame = itemsFrame and itemsFrame:FindFirstChild("Buttons")
     local scroll = itemsFrame and itemsFrame:FindFirstChild("Scroll")
     if not itemsFrame or not scroll then return end
 
-    isSellingInProgress = true
-
-    local categoriesToScan = {}
-    if Settings.SellWeapons and buttonsFrame and buttonsFrame:FindFirstChild("Weapon") then
-        table.insert(categoriesToScan, { Button = buttonsFrame.Weapon, TargetType = "weapon" })
+    SharedState.IsSelling = true
+    local categories = {}
+    if ConfigModule.Settings.SellWeapons and buttonsFrame and buttonsFrame:FindFirstChild("Weapon") then
+        table.insert(categories, { Button = buttonsFrame.Weapon, TargetType = "weapon" })
     end
-    if Settings.SellArmors and buttonsFrame and buttonsFrame:FindFirstChild("Armor") then
-        table.insert(categoriesToScan, { Button = buttonsFrame.Armor, TargetType = "armor" })
+    if ConfigModule.Settings.SellArmors and buttonsFrame and buttonsFrame:FindFirstChild("Armor") then
+        table.insert(categories, { Button = buttonsFrame.Armor, TargetType = "armor" })
     end
-    if Settings.SellSpells and buttonsFrame and buttonsFrame:FindFirstChild("Spell") then
-        table.insert(categoriesToScan, { Button = buttonsFrame.Spell, TargetType = "spell" })
+    if ConfigModule.Settings.SellSpells and buttonsFrame and buttonsFrame:FindFirstChild("Spell") then
+        table.insert(categories, { Button = buttonsFrame.Spell, TargetType = "spell" })
     end
 
-    local itemsToSell = {}
-    local registered = {}
+    local itemsToSell, registered = {}, {}
 
-    for _, catData in ipairs(categoriesToScan) do
-        triggerGuiButton(catData.Button)
+    for _, cat in ipairs(categories) do
+        CharacterModule.TriggerButton(cat.Button)
         task.wait(0.2)
 
         for _, slot in ipairs(scroll:GetChildren()) do
-            if slot:IsA("GuiObject") and slot:GetAttribute("Item") and slot.Name ~= "SteelSword" then
-                if slot.Visible ~= false then
-                    local eq = slot:FindFirstChild("EquippedSelection")
-                    local isEquipped = eq and eq:IsA("ImageLabel") and eq.Visible and eq.ImageColor3 == Color3.fromRGB(0, 255, 0)
-                    
-                    local fav = slot:FindFirstChild("Favorite", true)
-                    local isFav = fav and fav:IsA("ImageLabel") and fav.Visible and fav.ImageColor3 ~= Color3.fromRGB(255, 255, 255)
+            if slot:IsA("GuiObject") and slot:GetAttribute("Item") and slot.Name ~= "SteelSword" and slot.Visible ~= false then
+                local eq = slot:FindFirstChild("EquippedSelection")
+                local isEquipped = eq and eq:IsA("ImageLabel") and eq.Visible and eq.ImageColor3 == Color3.fromRGB(0, 255, 0)
+                local fav = slot:FindFirstChild("Favorite", true)
+                local isFav = fav and fav:IsA("ImageLabel") and fav.Visible and fav.ImageColor3 ~= Color3.fromRGB(255, 255, 255)
 
-                    if not isEquipped and not isFav then
-                        local rarity, dbType = getItemDataVerified(slot)
+                if not isEquipped and not isFav then
+                    local rarity, dbType = AutoSellModule.ResolveRarity(slot)
+                    if rarity ~= "Secret" and (rarity ~= "Mythic" or ConfigModule.Settings.SellMythic) and rarity ~= "Unknown" and rarity ~= "Common" then
+                        local detectedType = AutoSellModule.ResolveType(slot, dbType)
+                        if detectedType == cat.TargetType or detectedType == "unknown" then
+                            local allow = (rarity == "Rare" and ConfigModule.Settings.SellRare)
+                                or (rarity == "Epic" and ConfigModule.Settings.SellEpic)
+                                or (rarity == "Legendary" and ConfigModule.Settings.SellLegendary)
+                                or (rarity == "Mythic" and ConfigModule.Settings.SellMythic)
 
-                        -- 1. BLOQUEIO ABSOLUTO DE SECRET
-                        if rarity == "Secret" then
-                            continue
-                        end
-
-                        -- 2. BLOQUEIO DE MYTHIC CASO DESATIVADO
-                        if rarity == "Mythic" and not Settings.SellMythic then
-                            continue
-                        end
-
-                        -- 3. TRAVA DE SEGURANÇA
-                        if rarity == "Unknown" or rarity == "Common" then
-                            continue
-                        end
-
-                        local detectedType = getItemTypeFromSlot(slot, dbType)
-                        local typeAllowed = (detectedType == catData.TargetType) or (detectedType == "unknown")
-
-                        if typeAllowed then
-                            local rarityMatch = false
-                            if rarity == "Rare" and Settings.SellRare then rarityMatch = true end
-                            if rarity == "Epic" and Settings.SellEpic then rarityMatch = true end
-                            if rarity == "Legendary" and Settings.SellLegendary then rarityMatch = true end
-                            if rarity == "Mythic" and Settings.SellMythic then rarityMatch = true end
-
-                            if rarityMatch then
+                            if allow then
                                 local itemValObj = slot:FindFirstChild("Item")
                                 local targetItem = (itemValObj and itemValObj:IsA("ObjectValue") and itemValObj.Value)
                                     or (itemValObj and typeof(itemValObj.Value) == "Instance" and itemValObj.Value)
@@ -792,33 +544,24 @@ local function executeDirectAutoSell()
     end
 
     if #itemsToSell > 0 then
-        pcall(function()
-            equipRemote:FireServer("Sell", itemsToSell)
-        end)
-        Fluent:Notify({
-            Title = "Auto-Sell Concluído",
-            Content = string.format("Auditados e vendidos %d itens (incluindo Épicos)!", #itemsToSell),
-            Duration = 3.5
-        })
+        pcall(function() equipRemote:FireServer("Sell", itemsToSell) end)
+        Fluent:Notify({ Title = "Auto-Sell", Content = string.format("Vendidos %d itens com segurança!", #itemsToSell), Duration = 3.5 })
     end
-
-    isSellingInProgress = false
+    SharedState.IsSelling = false
 end
 
--- 10. MOTOR DE AUTO-CLAIM SILENCIOSO
-local function executeAutoClaimQuests()
-    if not Settings.AutoClaimQuests or isQuestClaimInProgress or not isScriptRunning then return end
+-- [[ 8. MÓDULO DE MISSÕES (QuestModule) ]]
+local QuestModule = {}
 
+function QuestModule.ClaimAll()
+    if not ConfigModule.Settings.AutoClaimQuests or SharedState.IsClaiming or not SharedState.IsRunning then return end
     local main = pgui:FindFirstChild("Main")
     local questsFrame = main and main:FindFirstChild("MainFrame") and main.MainFrame:FindFirstChild("Quests")
     local questsHolder = questsFrame and questsFrame:FindFirstChild("QuestsHolder")
-    local infoPanel = questsFrame and questsFrame:FindFirstChild("Information")
-    local claimBtn = infoPanel and infoPanel:FindFirstChild("Claim")
-
+    local claimBtn = questsFrame and questsFrame:FindFirstChild("Information") and questsFrame.Information:FindFirstChild("Claim")
     if not questsFrame or not questsHolder or not claimBtn then return end
 
-    isQuestClaimInProgress = true
-
+    SharedState.IsClaiming = true
     local originalVisible = questsFrame.Visible
     questsFrame.Visible = false
 
@@ -828,25 +571,20 @@ local function executeAutoClaimQuests()
         questsFrame:FindFirstChild("Buttons") and questsFrame.Buttons:FindFirstChild("Weekly")
     }
 
-    local claimedTotal = 0
-
-    for _, tabBtn in ipairs(tabs) do
-        if tabBtn then
-            triggerGuiButton(tabBtn)
+    local claimed = 0
+    for _, tab in ipairs(tabs) do
+        if tab then
+            CharacterModule.TriggerButton(tab)
             task.wait(0.12)
-
             for _, slot in ipairs(questsHolder:GetChildren()) do
                 if slot:IsA("GuiButton") then
-                    local progressLabel = slot:FindFirstChild("QuestProgress", true)
-                    if progressLabel and progressLabel:IsA("TextLabel") then
-                        local txt = progressLabel.Text:lower()
-
+                    local pLabel = slot:FindFirstChild("QuestProgress", true)
+                    if pLabel and pLabel:IsA("TextLabel") then
+                        local txt = pLabel.Text:lower()
                         if txt == "claim" or txt == "resgatar" then
-                            triggerGuiButton(slot)
+                            CharacterModule.TriggerButton(slot)
                             task.wait(0.1)
-
-                            triggerGuiButton(claimBtn)
-                            
+                            CharacterModule.TriggerButton(claimBtn)
                             if questRemote then
                                 pcall(function()
                                     questRemote:FireServer("Claim", slot.Name)
@@ -855,8 +593,7 @@ local function executeAutoClaimQuests()
                                     if num then questRemote:FireServer(num) end
                                 end)
                             end
-
-                            claimedTotal = claimedTotal + 1
+                            claimed = claimed + 1
                             task.wait(0.12)
                         end
                     end
@@ -866,179 +603,59 @@ local function executeAutoClaimQuests()
     end
 
     questsFrame.Visible = originalVisible
-
-    if claimedTotal > 0 then
-        Fluent:Notify({
-            Title = "Missões Resgatadas!",
-            Content = string.format("%d recompensa(s) de missão coletada(s) em segundo plano!", claimedTotal),
-            Duration = 3.5
-        })
+    if claimed > 0 then
+        Fluent:Notify({ Title = "Quests Resgatadas", Content = string.format("%d missões coletadas!", claimed), Duration = 3.5 })
     end
-
-    isQuestClaimInProgress = false
+    SharedState.IsClaiming = false
 end
 
--- 11. CONTROLES DE INTERFACE
-local function checkDungeonStartButton()
-    local pguiRef = player:FindFirstChild("PlayerGui")
-    if not pguiRef then return end
-    local main = pguiRef:FindFirstChild("Main")
-    local df = main and main:FindFirstChild("DungeonFrame")
-    if df and df.Visible then
-        local startBtn = df:FindFirstChild("Start") or df:FindFirstChild("Play")
-        if startBtn and startBtn:IsA("GuiObject") and startBtn.Visible then
-            triggerGuiButton(startBtn)
-            isVirusActive = false
+-- [[ 9. MÓDULO DE FLUXO E NAVEGAÇÃO DA FASE (FlowModule) ]]
+local FlowModule = {}
+
+function FlowModule.GetWave()
+    local stageLabel = pgui and pgui:FindFirstChild("Main")
+        and pgui.Main:FindFirstChild("DungeonFrame")
+        and pgui.Main.DungeonFrame:FindFirstChild("StatsHolder")
+        and pgui.Main.DungeonFrame.StatsHolder:FindFirstChild("Stage")
+        and pgui.Main.DungeonFrame.StatsHolder.Stage:FindFirstChild("Amount")
+
+    if stageLabel and stageLabel:IsA("TextLabel") and stageLabel.Visible and stageLabel.Text ~= "" then
+        local cur = stageLabel.Text:match("(%d+)%s*/%s*%d+") or stageLabel.Text:match("(%d+)")
+        if cur then
+            local n = tonumber(cur)
+            if n and n >= 1 and n <= 15 then return n end
         end
     end
+    return 1
 end
 
-local function checkAndClickEngageButton()
-    local pguiRef = player:FindFirstChild("PlayerGui")
-    if not pguiRef or not isScriptRunning then return false end
+function FlowModule.PassPortal(targetCFrame)
+    local _, root, hum = CharacterModule.Get()
+    if not root or not hum or SharedState.EnteringPortal then return end
 
-    local main = pguiRef:FindFirstChild("Main")
-    local virusFrame = main and main:FindFirstChild("VirusFrame")
-    if virusFrame and virusFrame.Visible then
-        local confirmBtn = virusFrame:FindFirstChild("Confirm", true) or virusFrame:FindFirstChild("Engage", true)
-        if confirmBtn and confirmBtn:IsA("GuiObject") and confirmBtn.Visible then
-            triggerGuiButton(confirmBtn)
-            isVirusActive = true
-            isDungeonEnded = false
-            return true
-        end
-    end
-
-    for _, desc in ipairs(pguiRef:GetDescendants()) do
-        if (desc:IsA("TextButton") or desc:IsA("ImageButton")) and desc.Visible then
-            local txt = desc:IsA("TextButton") and desc.Text:lower() or desc.Name:lower()
-            if txt:find("engage") or (txt:find("confirm") and desc:FindFirstAncestorWhichIsA("Frame") and desc:FindFirstAncestorWhichIsA("Frame").Name:lower():find("virus")) then
-                triggerGuiButton(desc)
-                isVirusActive = true
-                isDungeonEnded = false
-                return true
-            end
-        end
-    end
-
-    return false
-end
-
--- 12. TRAVA E EXECUÇÃO DE COMBATE
-local function executeNativeAttack()
-    if isDungeonEnded or isRespawning or isTransitioning or enteringPortal or isSellingInProgress or isQuestClaimInProgress or not isScriptRunning then return end
-    
-    comboIndex = (comboIndex % 4) + 1
-    local weapon = getEffectiveWeaponName()
-
-    local rem = findAttackRemote()
-    if rem then
-        pcall(function()
-            rem:FireServer("M1", weapon, comboIndex, 0, 0, 2)
-        end)
-    end
-
-    local char = player.Character
-    if char then
-        local tool = char:FindFirstChildOfClass("Tool")
-        if tool then 
-            pcall(function() tool:Activate() end) 
-        end
-    end
-end
-
-task.spawn(function()
-    while isScriptRunning do
-        if Settings.AutoAttack and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and not isSellingInProgress and not isQuestClaimInProgress then
-            local char, _, hum = getCharacter()
-            if char and hum and hum.Health > 0 then
-                executeNativeAttack()
-            end
-        end
-        task.wait(Settings.AttackSpeed)
-    end
-end)
-
-task.spawn(function()
-    while isScriptRunning do
-        if Settings.AutoSkills and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and not isSellingInProgress and not isQuestClaimInProgress then
-            local char, root, hum = getCharacter()
-            if char and root and hum and hum.Health > 0 then
-                if (tick() - lastSkillUse) >= Settings.SkillCooldown then
-                    local _, enemyPart = getClosestLivingEnemy()
-                    if enemyPart and enemyPart.Parent then
-                        local distance = (root.Position - enemyPart.Position).Magnitude
-                        if distance <= Settings.SkillMaxDistance then
-                            lastSkillUse = tick()
-                            local hotbarList = getDynamicHotbar()
-                            if hotbarList then
-                                local spell1 = hotbarList:FindFirstChild("Spell1", true) or hotbarList:FindFirstChild("Z", true)
-                                local spell2 = hotbarList:FindFirstChild("Spell2", true) or hotbarList:FindFirstChild("X", true)
-                                local ultimateBtn = hotbarList:FindFirstChild("Ultimate", true) or hotbarList:FindFirstChild("Spell3", true) or hotbarList:FindFirstChild("C", true)
-
-                                if spell1 then triggerGuiButton(spell1) else pressKey(Enum.KeyCode.Z) end
-                                task.wait(0.06)
-                                if spell2 then triggerGuiButton(spell2) else pressKey(Enum.KeyCode.X) end
-                                task.wait(0.06)
-                                if ultimateBtn then triggerGuiButton(ultimateBtn) end
-                                pressKey(Enum.KeyCode.C)
-                            else
-                                pressKey(Enum.KeyCode.Z)
-                                task.wait(0.06)
-                                pressKey(Enum.KeyCode.X)
-                                task.wait(0.06)
-                                pressKey(Enum.KeyCode.C)
-                            end
-                        end
-                    end
-                end
-            end
-        end
-        task.wait(0.1)
-    end
-end)
-
--- 13. MÁQUINAS DE ESTADOS & NAVEGAÇÃO
-local function passThroughPortalSafely(targetPortalCFrame)
-    local char, root, hum = getCharacter()
-    if not root or not hum or enteringPortal then return end
-
-    local dist = (root.Position - targetPortalCFrame.Position).Magnitude
-
-    if dist > 8 then
-        smoothFlyTo(targetPortalCFrame)
+    if (root.Position - targetCFrame.Position).Magnitude > 8 then
+        CharacterModule.FlyTo(targetCFrame)
     else
-        enteringPortal = true
-        stopMovement()
-        
-        root.CFrame = targetPortalCFrame * CFrame.new(0, 0, 2)
-        local forwardDir = (targetPortalCFrame.LookVector * 16)
-        root.AssemblyLinearVelocity = forwardDir
-        
-        if hum then
-            hum:MoveTo(targetPortalCFrame.Position + (targetPortalCFrame.LookVector * 6))
-        end
-
+        SharedState.EnteringPortal = true
+        CharacterModule.StopMovement()
+        root.CFrame = targetCFrame * CFrame.new(0, 0, 2)
+        root.AssemblyLinearVelocity = targetCFrame.LookVector * 16
+        hum:MoveTo(targetCFrame.Position + (targetCFrame.LookVector * 6))
         task.wait(0.8)
-        enteringPortal = false
+        SharedState.EnteringPortal = false
     end
 end
 
-local function runBleachPhaseFlow()
-    local char, root = getCharacter()
+function FlowModule.RunBleach()
+    local _, root = CharacterModule.Get()
     if not root then return end
 
-    if isVirusActive then
-        local enemies = getAllLivingEnemiesBleach()
-        if #enemies > 0 then
-            local enemy, enemyPart = getClosestLivingEnemy()
-            if enemy and enemyPart then
-                local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
-                local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
-                smoothFlyTo(targetCFrame)
-            end
+    if SharedState.IsVirusActive then
+        local enemy, enemyPart = TargetingModule.GetClosestEnemy("Bleach (Fase 4)")
+        if enemy and enemyPart then
+            CharacterModule.FlyTo(CFrame.new(enemyPart.Position + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0), enemyPart.Position))
         else
-            stopMovement()
+            CharacterModule.StopMovement()
         end
         return
     end
@@ -1050,138 +667,219 @@ local function runBleachPhaseFlow()
         currentRoom = "BossRoom"
     end
 
-    if currentRoom ~= lastRoomState then
-        lastRoomState = currentRoom
-        stopMovement()
-        enteringPortal = false
-        isTransitioning = true
+    if currentRoom ~= SharedState.LastRoomState then
+        SharedState.LastRoomState = currentRoom
+        CharacterModule.StopMovement()
+        SharedState.EnteringPortal = false
+        SharedState.IsTransitioning = true
         task.wait(0.6)
-        isTransitioning = false
+        SharedState.IsTransitioning = false
         return
     end
 
-    if enteringPortal then return end
-
-    local wave = getCurrentWaveNumber()
+    if SharedState.EnteringPortal then return end
+    local wave = FlowModule.GetWave()
 
     if wave >= 12 and currentRoom ~= "BossRoom" then
-        passThroughPortalSafely(PORTAL_2_BOSS_POS)
+        FlowModule.PassPortal(PORTAL_2_BOSS_POS)
         return
     end
-
     if wave >= 8 and currentRoom == "Room1" then
-        passThroughPortalSafely(PORTAL_1_WAVE8_POS)
+        FlowModule.PassPortal(PORTAL_1_WAVE8_POS)
         return
     end
 
-    local enemies = getAllLivingEnemiesBleach()
-    if #enemies > 0 then
-        local enemy, enemyPart = getClosestLivingEnemy()
-        if enemy and enemyPart then
-            local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
-            local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
-            smoothFlyTo(targetCFrame)
-        end
+    local enemy, enemyPart = TargetingModule.GetClosestEnemy("Bleach (Fase 4)")
+    if enemy and enemyPart then
+        CharacterModule.FlyTo(CFrame.new(enemyPart.Position + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0), enemyPart.Position))
     else
-        stopMovement()
+        CharacterModule.StopMovement()
     end
 end
 
-local function runIncursionPhaseFlow()
-    local enemies = getAllLivingEnemiesIncursion()
-    if #enemies > 0 then
-        local enemy, enemyPart = getClosestLivingEnemy()
-        if enemy and enemyPart then
-            local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
-            local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
-            smoothFlyTo(targetCFrame)
-        end
+function FlowModule.RunIncursion()
+    local enemy, enemyPart = TargetingModule.GetClosestEnemy("Incursão")
+    if enemy and enemyPart then
+        CharacterModule.FlyTo(CFrame.new(enemyPart.Position + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0), enemyPart.Position))
     else
-        stopMovement()
+        CharacterModule.StopMovement()
     end
 end
 
--- LOOP PRINCIPAL
+-- [[ 10. MÓDULO DE ESTADOS DA DUNGEON (DungeonStateModule) ]]
+local DungeonStateModule = {}
+
+function DungeonStateModule.CheckStart()
+    local df = pgui and pgui:FindFirstChild("Main") and pgui.Main:FindFirstChild("DungeonFrame")
+    if df and df.Visible then
+        local startBtn = df:FindFirstChild("Start") or df:FindFirstChild("Play")
+        if startBtn and startBtn:IsA("GuiObject") and startBtn.Visible then
+            CharacterModule.TriggerButton(startBtn)
+            SharedState.IsVirusActive = false
+        end
+    end
+end
+
+function DungeonStateModule.CheckEngage()
+    local main = pgui and pgui:FindFirstChild("Main")
+    local virusFrame = main and main:FindFirstChild("VirusFrame")
+    if virusFrame and virusFrame.Visible then
+        local confirmBtn = virusFrame:FindFirstChild("Confirm", true) or virusFrame:FindFirstChild("Engage", true)
+        if confirmBtn and confirmBtn:IsA("GuiObject") and confirmBtn.Visible then
+            CharacterModule.TriggerButton(confirmBtn)
+            SharedState.IsVirusActive = true
+            SharedState.IsDungeonEnded = false
+            return true
+        end
+    end
+    return false
+end
+
+function DungeonStateModule.CheckEnd()
+    local main = pgui and pgui:FindFirstChild("Main")
+    local dungeonStats = main and main:FindFirstChild("DungeonFrame") and main.DungeonFrame:FindFirstChild("DungeonStats")
+    local playAgainBtn = dungeonStats and dungeonStats:FindFirstChild("EndActions") and dungeonStats.EndActions:FindFirstChild("PlayAgain")
+
+    if dungeonStats and dungeonStats.Visible and playAgainBtn and playAgainBtn.Visible then
+        return true, playAgainBtn
+    end
+    return false, nil
+end
+
+local function onPlayerDiedHandler()
+    if not ConfigModule.Settings.HardcoreMode then return end
+    task.spawn(function()
+        task.wait(23)
+        if not SharedState.IsRunning or not ConfigModule.Settings.HardcoreMode or not ConfigModule.Settings.AutoPlayAgain then return end
+        CharacterModule.StopMovement()
+        local _, retryBtn = DungeonStateModule.CheckEnd()
+        if retryBtn then
+            queueNextExecution()
+            task.wait(0.5)
+            CharacterModule.TriggerButton(retryBtn)
+            task.wait(3.0)
+        end
+    end)
+end
+
+local function bindCharacterEvents(char)
+    if not char then return end
+    local hum = char:WaitForChild("Humanoid", 10)
+    if hum then
+        if diedConnection then diedConnection:Disconnect() end
+        diedConnection = hum.Died:Connect(onPlayerDiedHandler)
+    end
+end
+
+if player.Character then bindCharacterEvents(player.Character) end
+charConnection = player.CharacterAdded:Connect(function(newChar)
+    SharedState.IsRespawning = true
+    SharedState.IsTransitioning = false
+    SharedState.EnteringPortal = false
+    CharacterModule.StopMovement()
+    attackRemote = nil
+    bindCharacterEvents(newChar)
+    task.delay(1.0, function() SharedState.IsRespawning = false end)
+end)
+
+-- [[ 11. MOTOR PRINCIPAL DE LOOPS (Orchestration) ]]
 task.spawn(function()
-    while isScriptRunning do
-        if Settings.AutoFarm and not isRespawning then
-            local char, root, hum = getCharacter()
-            if char and root and hum and hum.Health > 0 then
-                
+    while SharedState.IsRunning do
+        if ConfigModule.Settings.AutoAttack and not SharedState.IsDungeonEnded and not SharedState.IsRespawning and not SharedState.IsTransitioning and not SharedState.EnteringPortal and not SharedState.IsSelling then
+            local _, _, hum = CharacterModule.Get()
+            if hum and hum.Health > 0 then CombatModule.ExecuteM1() end
+        end
+        task.wait(ConfigModule.Settings.AttackSpeed)
+    end
+end)
+
+task.spawn(function()
+    while SharedState.IsRunning do
+        if ConfigModule.Settings.AutoSkills and not SharedState.IsDungeonEnded and not SharedState.IsRespawning and not SharedState.IsTransitioning and not SharedState.EnteringPortal and not SharedState.IsSelling then
+            local _, _, hum = CharacterModule.Get()
+            if hum and hum.Health > 0 then CombatModule.ExecuteSkills() end
+        end
+        task.wait(0.1)
+    end
+end)
+
+task.spawn(function()
+    while SharedState.IsRunning do
+        if ConfigModule.Settings.AutoFarm and not SharedState.IsRespawning then
+            local _, _, hum = CharacterModule.Get()
+            if hum and hum.Health > 0 then
                 if not initialRoutinesScheduled then
                     initialRoutinesScheduled = true
-                    
                     task.spawn(function()
                         task.wait(10)
-                        if isScriptRunning and Settings.AutoSell and not isDungeonEnded then
-                            executeDirectAutoSell()
+                        if SharedState.IsRunning and ConfigModule.Settings.AutoSell and not SharedState.IsDungeonEnded then
+                            AutoSellModule.Execute()
                         end
                     end)
-
                     task.spawn(function()
                         task.wait(13)
-                        if isScriptRunning and Settings.AutoClaimQuests and not isDungeonEnded then
-                            executeAutoClaimQuests()
+                        if SharedState.IsRunning and ConfigModule.Settings.AutoClaimQuests and not SharedState.IsDungeonEnded then
+                            QuestModule.ClaimAll()
                         end
                     end)
                 end
 
-                if Settings.AutoStart then
-                    checkDungeonStartButton()
-                end
+                if ConfigModule.Settings.AutoStart then DungeonStateModule.CheckStart() end
 
-                local ended, playAgainBtn = checkDungeonEnd()
+                local ended, playAgainBtn = DungeonStateModule.CheckEnd()
                 if ended and playAgainBtn then
-                    isDungeonEnded = true
-                    isVirusActive = false
-                    stopMovement()
+                    SharedState.IsDungeonEnded = true
+                    SharedState.IsVirusActive = false
+                    CharacterModule.StopMovement()
 
-                    if Settings.AutoClaimQuests then
-                        pcall(executeAutoClaimQuests)
+                    if ConfigModule.Settings.AutoClaimQuests then
+                        pcall(QuestModule.ClaimAll)
                         task.wait(0.2)
                     end
 
-                    if Settings.AutoEngage and checkAndClickEngageButton() then
-                        isDungeonEnded = false
-                        isVirusActive = true
+                    if ConfigModule.Settings.AutoEngage and DungeonStateModule.CheckEngage() then
+                        SharedState.IsDungeonEnded = false
+                        SharedState.IsVirusActive = true
                         task.wait(1.0)
-                    elseif Settings.AutoPlayAgain then
+                    elseif ConfigModule.Settings.AutoPlayAgain then
                         queueNextExecution()
                         task.wait(0.8)
-                        triggerGuiButton(playAgainBtn)
+                        CharacterModule.TriggerButton(playAgainBtn)
                         task.wait(3.0)
                     end
                 else
-                    isDungeonEnded = false
-
+                    SharedState.IsDungeonEnded = false
                     local engaged = false
-                    if Settings.AutoEngage and not isVirusActive then
-                        engaged = checkAndClickEngageButton()
+                    if ConfigModule.Settings.AutoEngage and not SharedState.IsVirusActive then
+                        engaged = DungeonStateModule.CheckEngage()
                     end
 
                     if engaged then
-                        isDungeonEnded = false
-                        isVirusActive = true
+                        SharedState.IsDungeonEnded = false
+                        SharedState.IsVirusActive = true
                         task.wait(1.0)
                     else
-                        if Settings.SelectedPhase == "Bleach (Fase 4)" then
-                            runBleachPhaseFlow()
-                        elseif Settings.SelectedPhase == "Incursão" then
-                            runIncursionPhaseFlow()
+                        if ConfigModule.Settings.SelectedPhase == "Bleach (Fase 4)" then
+                            FlowModule.RunBleach()
+                        elseif ConfigModule.Settings.SelectedPhase == "Incursão" then
+                            FlowModule.RunIncursion()
                         end
                     end
                 end
             else
-                stopMovement()
+                CharacterModule.StopMovement()
             end
         else
-            stopMovement()
+            CharacterModule.StopMovement()
         end
         task.wait(0.05)
     end
 end)
 
--- 14. INTERFACE FLUENT
+-- [[ 12. MÓDULO DE INTERFACE VISUAL (UIModule) ]]
+local UIModule = {}
+
+local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
 local Window = Fluent:CreateWindow({
     Title = "Hub dos Rapazes",
     SubTitle = "Anime Dungeons",
@@ -1202,10 +900,8 @@ local toggleGui = Instance.new("ScreenGui")
 toggleGui.Name = "IBdihP_PersistentToggle"
 toggleGui.ResetOnSpawn = false
 toggleGui.DisplayOrder = 999999
-toggleGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-
 pcall(function() toggleGui.Parent = CoreGui end)
-if not toggleGui.Parent then toggleGui.Parent = player:WaitForChild("PlayerGui") end
+if not toggleGui.Parent then toggleGui.Parent = pgui end
 
 local floatBtn = Instance.new("TextButton")
 floatBtn.Name = "FloatButton"
@@ -1221,13 +917,10 @@ floatBtn.Active = true
 floatBtn.Draggable = true
 floatBtn.Visible = false
 
-local uiCorner = Instance.new("UICorner", floatBtn)
-uiCorner.CornerRadius = UDim.new(0, 10)
-
-local uiStroke = Instance.new("UIStroke", floatBtn)
-uiStroke.Color = Color3.fromRGB(0, 255, 170)
-uiStroke.Thickness = 1.6
-uiStroke.Parent = floatBtn
+Instance.new("UICorner", floatBtn).CornerRadius = UDim.new(0, 10)
+local stroke = Instance.new("UIStroke", floatBtn)
+stroke.Color = Color3.fromRGB(0, 255, 170)
+stroke.Thickness = 1.6
 
 local function toggleUI(show)
     floatBtn.Visible = not show
@@ -1239,40 +932,15 @@ local function toggleUI(show)
         end
     end
 end
+floatBtn.MouseButton1Click:Connect(function() toggleUI(true) end)
 
-floatBtn.MouseButton1Click:Connect(function()
-    toggleUI(true)
-end)
-
-local function destroyScript()
-    isScriptRunning = false
-    Settings.AutoFarm = false
-    Settings.AutoAttack = false
-    Settings.AutoSkills = false
-    Settings.AutoSell = false
-    Settings.AutoClaimQuests = false
-    
-    stopMovement()
-    
-    if charConnection then
-        charConnection:Disconnect()
-        charConnection = nil
-    end
-
-    if diedConnection then
-        diedConnection:Disconnect()
-        diedConnection = nil
-    end
-
-    if singletonTag and singletonTag.Parent then
-        singletonTag:Destroy()
-    end
-    local st = CoreGui:FindFirstChild(UNIQUE_ID)
-    if st then st:Destroy() end
-
-    if toggleGui and toggleGui.Parent then
-        toggleGui:Destroy()
-    end
+function UIModule.Shutdown()
+    SharedState.IsRunning = false
+    CharacterModule.StopMovement()
+    if charConnection then charConnection:Disconnect() end
+    if diedConnection then diedConnection:Disconnect() end
+    if singletonTag and singletonTag.Parent then singletonTag:Destroy() end
+    if toggleGui and toggleGui.Parent then toggleGui:Destroy() end
     for _, gui in ipairs({CoreGui, player.PlayerGui}) do
         for _, child in ipairs(gui:GetChildren()) do
             if child.Name == "IBdihP_PersistentToggle" or child.Name:find("Fluent") then
@@ -1286,66 +954,47 @@ task.spawn(function()
     task.wait(0.8)
     for _, gui in ipairs({CoreGui, player.PlayerGui}) do
         for _, btn in ipairs(gui:GetDescendants()) do
-            if (btn:IsA("ImageButton") or btn:IsA("TextButton")) then
+            if btn:IsA("ImageButton") or btn:IsA("TextButton") then
                 if btn.Name:lower():find("close") then
-                    btn.MouseButton1Click:Connect(function()
-                        destroyScript()
-                    end)
+                    btn.MouseButton1Click:Connect(UIModule.Shutdown)
                 elseif btn.Name:lower():find("min") then
-                    btn.MouseButton1Click:Connect(function()
-                        toggleUI(false)
-                    end)
+                    btn.MouseButton1Click:Connect(function() toggleUI(false) end)
                 end
             end
         end
     end
 end)
 
--- ABA FARM
+-- Configuração dos componentes da UI
 local PhaseSection = Tabs.Farm:AddSection("Fase Ativa")
 PhaseSection:AddDropdown("PhaseSelector", {
     Title = "Selecionar Fase",
     Values = { "Bleach (Fase 4)", "Incursão" },
-    Default = Settings.SelectedPhase,
-    Callback = function(Value)
-        Settings.SelectedPhase = Value
-        saveConfig()
-    end
+    Default = ConfigModule.Settings.SelectedPhase,
+    Callback = function(Value) ConfigModule.Settings.SelectedPhase = Value ConfigModule.Save() end
 })
 
 local WeaponSection = Tabs.Farm:AddSection("Configuração de Arma")
 local WeaponInput = WeaponSection:AddInput("WeaponInputBox", {
     Title = "Arma Equipada / Nome",
-    Default = Settings.CustomWeaponName,
+    Default = ConfigModule.Settings.CustomWeaponName,
     Placeholder = "Ex: VoidRods, Katana...",
-    Numeric = false,
     Finished = true,
-    Callback = function(Value)
-        Settings.CustomWeaponName = Value
-        saveConfig()
-    end
+    Callback = function(Value) ConfigModule.Settings.CustomWeaponName = Value ConfigModule.Save() end
 })
 
 WeaponSection:AddButton({
     Title = "🔍 Detectar Arma da Mão",
-    Description = "Lê automaticamente o nome da arma do personagem/inventário",
+    Description = "Lê automaticamente o nome da arma equipada",
     Callback = function()
-        local detected = detectCurrentWeaponDetailed()
+        local detected = CombatModule.DetectWeapon()
         if detected and detected ~= "" then
-            Settings.CustomWeaponName = detected
+            ConfigModule.Settings.CustomWeaponName = detected
             WeaponInput:SetValue(detected)
-            saveConfig()
-            Fluent:Notify({
-                Title = "Arma Detectada!",
-                Content = "Arma identificada: " .. tostring(detected),
-                Duration = 4
-            })
+            ConfigModule.Save()
+            Fluent:Notify({ Title = "Arma Detectada", Content = "Identificada: " .. tostring(detected), Duration = 4 })
         else
-            Fluent:Notify({
-                Title = "Nenhuma Arma Encontrada",
-                Content = "Digite o nome exato da arma na caixa de texto.",
-                Duration = 4
-            })
+            Fluent:Notify({ Title = "Não Encontrada", Content = "Digite o nome exato da arma.", Duration = 4 })
         end
     end
 })
@@ -1353,245 +1002,145 @@ WeaponSection:AddButton({
 local CombatSection = Tabs.Farm:AddSection("Controles de Farm")
 CombatSection:AddToggle("AutoFarmToggle", {
     Title = "Iniciar Auto Farm",
-    Description = "Executa a rota mapeada da fase selecionada",
     Default = true,
-    Callback = function(Value)
-        Settings.AutoFarm = Value
-        if not Value then stopMovement() end
-    end
+    Callback = function(Value) ConfigModule.Settings.AutoFarm = Value if not Value then CharacterModule.StopMovement() end end
 })
-
 CombatSection:AddToggle("HardcoreToggle", {
     Title = "Modo Hardcore",
-    Description = "Se morrer, aguarda 23s e clica em Play Again para reiniciar",
-    Default = Settings.HardcoreMode,
-    Callback = function(Value)
-        Settings.HardcoreMode = Value
-        saveConfig()
-    end
+    Description = "Espera 23s após a morte e clica em Play Again",
+    Default = ConfigModule.Settings.HardcoreMode,
+    Callback = function(Value) ConfigModule.Settings.HardcoreMode = Value ConfigModule.Save() end
 })
-
 CombatSection:AddToggle("AutoEngageToggle", {
     Title = "Auto Engage (Boss Secreto)",
-    Description = "Prioridade: Clica em Engage antes do Play Again",
     Default = true,
-    Callback = function(Value) Settings.AutoEngage = Value end
+    Callback = function(Value) ConfigModule.Settings.AutoEngage = Value end
 })
-
 CombatSection:AddToggle("AutoPlayAgainToggle", {
     Title = "Auto Play Again",
-    Description = "Reinicia a partida automaticamente ao vencer/perder",
     Default = true,
-    Callback = function(Value) Settings.AutoPlayAgain = Value end
+    Callback = function(Value) ConfigModule.Settings.AutoPlayAgain = Value end
 })
-
 CombatSection:AddToggle("AutoStartToggle", {
     Title = "Auto Start Dungeon",
-    Description = "Inicia a fase sozinho",
     Default = true,
-    Callback = function(Value) Settings.AutoStart = Value end
+    Callback = function(Value) ConfigModule.Settings.AutoStart = Value end
 })
-
 CombatSection:AddSlider("StartWaitTimeSlider", {
     Title = "Espera Inicial (segundos)",
-    Default = Settings.StartWaitTime,
-    Min = 0.5,
-    Max = 6.0,
-    Rounding = 1,
-    Callback = function(Value)
-        Settings.StartWaitTime = Value
-        saveConfig()
-    end
+    Default = ConfigModule.Settings.StartWaitTime,
+    Min = 0.5, Max = 6.0, Rounding = 1,
+    Callback = function(Value) ConfigModule.Settings.StartWaitTime = Value ConfigModule.Save() end
 })
-
 CombatSection:AddToggle("AutoAttackToggle", {
     Title = "Auto Attack (M1)",
-    Description = "Dispara os ataques básicos continuamente",
     Default = true,
-    Callback = function(Value) Settings.AutoAttack = Value end
+    Callback = function(Value) ConfigModule.Settings.AutoAttack = Value end
 })
-
 CombatSection:AddToggle("AutoSkillsToggle", {
     Title = "Auto Skills (Z, X e Ultimate)",
-    Description = "Dispara skills apenas perto de inimigos",
     Default = true,
-    Callback = function(Value) Settings.AutoSkills = Value end
+    Callback = function(Value) ConfigModule.Settings.AutoSkills = Value end
 })
-
 CombatSection:AddSlider("SkillMaxDistSlider", {
     Title = "Distância das Skills (studs)",
-    Default = Settings.SkillMaxDistance,
-    Min = 8,
-    Max = 40,
-    Rounding = 0,
-    Callback = function(Value) Settings.SkillMaxDistance = Value end
+    Default = ConfigModule.Settings.SkillMaxDistance,
+    Min = 8, Max = 40, Rounding = 0,
+    Callback = function(Value) ConfigModule.Settings.SkillMaxDistance = Value end
 })
-
 CombatSection:AddSlider("AttackSpeedSlider", {
-    Title = "Velocidade do Ataque (segundos)",
-    Default = Settings.AttackSpeed,
-    Min = 0.04,
-    Max = 0.35,
-    Rounding = 2,
-    Callback = function(Value)
-        Settings.AttackSpeed = Value
-        saveConfig()
-    end
+    Title = "Velocidade do Ataque (s)",
+    Default = ConfigModule.Settings.AttackSpeed,
+    Min = 0.04, Max = 0.35, Rounding = 2,
+    Callback = function(Value) ConfigModule.Settings.AttackSpeed = Value ConfigModule.Save() end
 })
-
 CombatSection:AddSlider("SkillCooldownSlider", {
-    Title = "Intervalo das Skills (segundos)",
-    Default = Settings.SkillCooldown,
-    Min = 0.2,
-    Max = 4,
-    Rounding = 1,
-    Callback = function(Value)
-        Settings.SkillCooldown = Value
-        saveConfig()
-    end
+    Title = "Intervalo das Skills (s)",
+    Default = ConfigModule.Settings.SkillCooldown,
+    Min = 0.2, Max = 4, Rounding = 1,
+    Callback = function(Value) ConfigModule.Settings.SkillCooldown = Value ConfigModule.Save() end
 })
-
 CombatSection:AddSlider("HeightAboveEnemy", {
     Title = "Altura acima do Inimigo",
-    Default = Settings.HeightAboveEnemy,
-    Min = 1,
-    Max = 20,
-    Rounding = 1,
-    Callback = function(Value)
-        Settings.HeightAboveEnemy = Value
-        saveConfig()
-    end
+    Default = ConfigModule.Settings.HeightAboveEnemy,
+    Min = 1, Max = 20, Rounding = 1,
+    Callback = function(Value) ConfigModule.Settings.HeightAboveEnemy = Value ConfigModule.Save() end
 })
-
 CombatSection:AddSlider("TweenSpeed", {
     Title = "Velocidade do Voo",
-    Default = Settings.TweenSpeed,
-    Min = 20,
-    Max = 120,
-    Rounding = 0,
-    Callback = function(Value)
-        Settings.TweenSpeed = Value
-        saveConfig()
-    end
+    Default = ConfigModule.Settings.TweenSpeed,
+    Min = 20, Max = 120, Rounding = 0,
+    Callback = function(Value) ConfigModule.Settings.TweenSpeed = Value ConfigModule.Save() end
 })
 
 -- ABA AUTO-SELL
 local AutoSellMainSection = Tabs.AutoSell:AddSection("Controle Geral de Venda")
-
 AutoSellMainSection:AddToggle("AutoSellToggle", {
     Title = "Venda Automática (10s pós-início)",
-    Description = "Aguarda 10 segundos de partida e vende os itens configurados",
-    Default = Settings.AutoSell,
-    Callback = function(Value)
-        Settings.AutoSell = Value
-        saveConfig()
-    end
+    Default = ConfigModule.Settings.AutoSell,
+    Callback = function(Value) ConfigModule.Settings.AutoSell = Value ConfigModule.Save() end
 })
-
 AutoSellMainSection:AddButton({
     Title = "⚡ Executar Venda Direta Agora",
-    Description = "Dispara a venda instantânea dos itens filtrados",
-    Callback = function()
-        pcall(executeDirectAutoSell)
-    end
+    Callback = function() pcall(AutoSellModule.Execute) end
 })
 
 local AutoSellRaritySection = Tabs.AutoSell:AddSection("Filtro de Raridades (Vender)")
-
 AutoSellRaritySection:AddToggle("SellRareToggle", {
     Title = "Vender Raro (Rare)",
-    Default = Settings.SellRare,
-    Callback = function(Value)
-        Settings.SellRare = Value
-        saveConfig()
-    end
+    Default = ConfigModule.Settings.SellRare,
+    Callback = function(Value) ConfigModule.Settings.SellRare = Value ConfigModule.Save() end
 })
-
 AutoSellRaritySection:AddToggle("SellEpicToggle", {
     Title = "Vender Épico (Epic)",
-    Default = Settings.SellEpic,
-    Callback = function(Value)
-        Settings.SellEpic = Value
-        saveConfig()
-    end
+    Default = ConfigModule.Settings.SellEpic,
+    Callback = function(Value) ConfigModule.Settings.SellEpic = Value ConfigModule.Save() end
 })
-
 AutoSellRaritySection:AddToggle("SellLegendaryToggle", {
     Title = "Vender Lendário (Legendary)",
-    Default = Settings.SellLegendary,
-    Callback = function(Value)
-        Settings.SellLegendary = Value
-        saveConfig()
-    end
+    Default = ConfigModule.Settings.SellLegendary,
+    Callback = function(Value) ConfigModule.Settings.SellLegendary = Value ConfigModule.Save() end
 })
-
 AutoSellRaritySection:AddToggle("SellMythicToggle", {
     Title = "Vender Mítico (Mythic)",
-    Description = "Apenas ative se quiser vender Míticos. Secrets NUNCA são vendidos.",
-    Default = Settings.SellMythic,
-    Callback = function(Value)
-        Settings.SellMythic = Value
-        saveConfig()
-    end
+    Description = "Secrets NUNCA são vendidos.",
+    Default = ConfigModule.Settings.SellMythic,
+    Callback = function(Value) ConfigModule.Settings.SellMythic = Value ConfigModule.Save() end
 })
 
 local AutoSellTypeSection = Tabs.AutoSell:AddSection("Tipos de Item Permitidos")
-
 AutoSellTypeSection:AddToggle("SellWeaponsToggle", {
     Title = "Incluir Armas (Weapons)",
-    Default = Settings.SellWeapons,
-    Callback = function(Value)
-        Settings.SellWeapons = Value
-        saveConfig()
-    end
+    Default = ConfigModule.Settings.SellWeapons,
+    Callback = function(Value) ConfigModule.Settings.SellWeapons = Value ConfigModule.Save() end
 })
-
 AutoSellTypeSection:AddToggle("SellArmorsToggle", {
     Title = "Incluir Armaduras (Armors)",
-    Default = Settings.SellArmors,
-    Callback = function(Value)
-        Settings.SellArmors = Value
-        saveConfig()
-    end
+    Default = ConfigModule.Settings.SellArmors,
+    Callback = function(Value) ConfigModule.Settings.SellArmors = Value ConfigModule.Save() end
 })
-
 AutoSellTypeSection:AddToggle("SellSpellsToggle", {
     Title = "Incluir Spells (Magias)",
-    Default = Settings.SellSpells,
-    Callback = function(Value)
-        Settings.SellSpells = Value
-        saveConfig()
-    end
+    Default = ConfigModule.Settings.SellSpells,
+    Callback = function(Value) ConfigModule.Settings.SellSpells = Value ConfigModule.Save() end
 })
 
 -- ABA SETTINGS
 local QuestsSection = Tabs.Settings:AddSection("Automação de Missões (Quests)")
-
 QuestsSection:AddToggle("AutoClaimQuestsToggle", {
     Title = "Auto-Claim de Missões (13s pós-início)",
-    Description = "Resgata missões prontas (Hourly/Daily/Weekly) no início e ao vencer",
-    Default = Settings.AutoClaimQuests,
-    Callback = function(Value)
-        Settings.AutoClaimQuests = Value
-        saveConfig()
-    end
+    Default = ConfigModule.Settings.AutoClaimQuests,
+    Callback = function(Value) ConfigModule.Settings.AutoClaimQuests = Value ConfigModule.Save() end
 })
-
 QuestsSection:AddButton({
     Title = "⚡ Resgatar Missões Agora",
-    Description = "Verifica e resgata imediatamente todas as abas",
-    Callback = function()
-        pcall(executeAutoClaimQuests)
-    end
+    Callback = function() pcall(QuestModule.ClaimAll) end
 })
 
 local SettingsSection = Tabs.Settings:AddSection("Gerenciamento do Script")
 SettingsSection:AddButton({
     Title = "Encerrar Script por Completo",
-    Description = "Para todos os loops e libera o carregamento de uma nova versão",
-    Callback = function()
-        destroyScript()
-    end
+    Callback = UIModule.Shutdown
 })
 
 Window:SelectTab(Tabs.Farm)
