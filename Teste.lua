@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (BANCO DE DADOS DIRETO DOS STATS)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (ANTI-SUSPICIOUS MOVEMENT ENGINE)
 -- ====================================================================
 
 -- [[ 1. SINGLETON & BOOTSTRAP ]]
@@ -9,6 +9,7 @@ local HttpService = game:GetService("HttpService")
 local TweenService = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local RunService = game:GetService("RunService")
 
 local UNIQUE_ID = "HubRapazes_Singleton_Tag"
 if CoreGui:FindFirstChild(UNIQUE_ID) then return end
@@ -74,7 +75,8 @@ local SharedState = {
     IsClaiming = false,
     IsDungeonEnded = false,
     LastRoomState = "Room1",
-    CurrentTween = nil
+    CurrentTween = nil,
+    CurrentTargetPos = nil
 }
 
 -- [[ 2. MÓDULO DE CONFIGURAÇÃO (ConfigModule) ]]
@@ -183,6 +185,7 @@ DatabaseModule.Init()
 local CharacterModule = {}
 local diedConnection = nil
 local charConnection = nil
+local noclipConnection = nil
 
 function CharacterModule.Get()
     local char = player.Character
@@ -197,9 +200,11 @@ function CharacterModule.StopMovement()
         SharedState.CurrentTween:Cancel()
         SharedState.CurrentTween = nil
     end
+    SharedState.CurrentTargetPos = nil
     local _, root = CharacterModule.Get()
     if root and root.Parent then
         root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
     end
 end
 
@@ -208,13 +213,39 @@ function CharacterModule.FlyTo(targetCFrame)
     local _, root = CharacterModule.Get()
     if not root or not root.Parent then return end
 
-    local distance = (root.Position - targetCFrame.Position).Magnitude
-    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 5), 0.1, 10)
+    local targetPos = targetCFrame.Position
+    if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 3.5 and SharedState.CurrentTween then
+        return
+    end
 
-    if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
+    SharedState.CurrentTargetPos = targetPos
+    local distance = (root.Position - targetPos).Magnitude
+    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 5), 0.08, 8)
+
+    if SharedState.CurrentTween then 
+        SharedState.CurrentTween:Cancel() 
+    end
+
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+
     SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out), {CFrame = targetCFrame})
     SharedState.CurrentTween:Play()
 end
+
+-- Noclip leve para evitar colisão forçada com quinas do mapa
+noclipConnection = RunService.Stepped:Connect(function()
+    if SharedState.IsRunning and ConfigModule.Settings.AutoFarm and not SharedState.IsRespawning then
+        local char = player.Character
+        if char then
+            for _, part in ipairs(char:GetChildren()) do
+                if part:IsA("BasePart") and part.CanCollide then
+                    part.CanCollide = false
+                end
+            end
+        end
+    end
+end)
 
 function CharacterModule.TriggerButton(btn)
     if not btn or not SharedState.IsRunning then return end
@@ -437,7 +468,7 @@ function CombatModule.ExecuteSkills()
     end
 end
 
--- [[ 7. MÓDULO DE AUTO-SELL COM RESOLUÇÃO DIRETA ]]
+-- [[ 7. MÓDULO DE AUTO-SELL AUDITADO (AutoSellModule) ]]
 local AutoSellModule = {}
 
 function AutoSellModule.ResolveSlotData(slot)
@@ -528,17 +559,14 @@ function AutoSellModule.Execute()
                 if not isEquipped and not isFav then
                     local rarity, dbType = AutoSellModule.ResolveSlotData(slot)
 
-                    -- 1. BLOQUEIO TOTAL: Secrets nunca são vendidos
                     if rarity == "Secret" then
                         continue
                     end
 
-                    -- 2. BLOQUEIO: Mythics apenas se autorizado
                     if rarity == "Mythic" and not ConfigModule.Settings.SellMythic then
                         continue
                     end
 
-                    -- 3. TRAVA: Ignora itens não mapeados ou comuns base
                     if rarity == "Unknown" or rarity == "Common" then
                         continue
                     end
@@ -637,6 +665,10 @@ end
 -- [[ 9. MÓDULO DE FLUXO E NAVEGAÇÃO DA FASE (FlowModule) ]]
 local FlowModule = {}
 
+-- Posições absolutas dos portais
+local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0)
+local PORTAL_2_BOSS_POS  = CFrame.new(5411.5, -561.0, 2550.0)
+
 function FlowModule.GetWave()
     local stageLabel = pgui and pgui:FindFirstChild("Main")
         and pgui.Main:FindFirstChild("DungeonFrame")
@@ -654,19 +686,27 @@ function FlowModule.GetWave()
     return 1
 end
 
+-- Passagem suave através do portal sem micro-teleporte
 function FlowModule.PassPortal(targetCFrame)
     local _, root, hum = CharacterModule.Get()
     if not root or not hum or SharedState.EnteringPortal then return end
 
-    if (root.Position - targetCFrame.Position).Magnitude > 8 then
+    local dist = (root.Position - targetCFrame.Position).Magnitude
+
+    if dist > 6 then
         CharacterModule.FlyTo(targetCFrame)
     else
         SharedState.EnteringPortal = true
         CharacterModule.StopMovement()
-        root.CFrame = targetCFrame * CFrame.new(0, 0, 2)
-        root.AssemblyLinearVelocity = targetCFrame.LookVector * 16
-        hum:MoveTo(targetCFrame.Position + (targetCFrame.LookVector * 6))
-        task.wait(0.8)
+
+        local forwardGoal = targetCFrame * CFrame.new(0, 0, -8)
+        local tweenInfo = TweenInfo.new(0.6, Enum.EasingStyle.Linear)
+        local passTween = TweenService:Create(root, tweenInfo, {CFrame = forwardGoal})
+        passTween:Play()
+        passTween.Completed:Wait()
+
+        root.AssemblyLinearVelocity = Vector3.zero
+        task.wait(0.4)
         SharedState.EnteringPortal = false
     end
 end
@@ -762,7 +802,8 @@ end
 
 function DungeonStateModule.CheckEnd()
     local main = pgui and pgui:FindFirstChild("Main")
-    local dungeonStats = main and main:FindFirstChild("DungeonFrame") and main.DungeonFrame:FindFirstChild("DungeonStats")
+    local dungeonStats = main and main:FindFirstChild("DungeonFrame") and main.MainFrame and main.DungeonFrame:FindFirstChild("DungeonStats")
+    dungeonStats = dungeonStats or (main and main:FindFirstChild("DungeonFrame") and main.DungeonFrame:FindFirstChild("DungeonStats"))
     local playAgainBtn = dungeonStats and dungeonStats:FindFirstChild("EndActions") and dungeonStats.EndActions:FindFirstChild("PlayAgain")
 
     if dungeonStats and dungeonStats.Visible and playAgainBtn and playAgainBtn.Visible then
@@ -966,6 +1007,7 @@ function UIModule.Shutdown()
     CharacterModule.StopMovement()
     if charConnection then charConnection:Disconnect() end
     if diedConnection then diedConnection:Disconnect() end
+    if noclipConnection then noclipConnection:Disconnect() end
     if singletonTag and singletonTag.Parent then singletonTag:Destroy() end
     if toggleGui and toggleGui.Parent then toggleGui:Destroy() end
     for _, gui in ipairs({CoreGui, player.PlayerGui}) do
