@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (FIX: AUTO FARM & ATTACK RESTORED)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (AUTO FARM & ATTACK FULL RESTORED)
 -- ====================================================================
 
 -- 1. TRAVA FÍSICA DE INSTÂNCIA ÚNICA (Singleton Anti-Duplicação)
@@ -87,7 +87,7 @@ local Settings = {
     AutoPlayAgain = true,
     AutoEngage = true,
     HardcoreMode = false,
-    StartWaitTime = 3.5,
+    StartWaitTime = 2.0,
     SkillCooldown = 0.8,
     SkillMaxDistance = 20,
     HeightAboveEnemy = 8.5,
@@ -179,7 +179,6 @@ local questRemote = ReplicatedStorage:WaitForChild("Remotes", 10) and Replicated
 local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0)
 local PORTAL_2_BOSS_POS  = CFrame.new(5411.5, -561.0, 2550.0)
 
-local dungeonStartTime = tick()
 local isRespawning = false
 local isTransitioning = false
 local enteringPortal = false
@@ -234,21 +233,12 @@ local function checkDungeonEnd()
     local pguiRef = player:FindFirstChild("PlayerGui")
     if not pguiRef or not isScriptRunning then return false, nil end
 
-    if isVirusActive then
-        local gameFolder = workspace:FindFirstChild("Game")
-        local enemiesFolder = (gameFolder and gameFolder:FindFirstChild("Enemies")) or workspace:FindFirstChild("Enemies")
-        local hasEnemies = false
-        if enemiesFolder and #enemiesFolder:GetChildren() > 0 then hasEnemies = true end
-        if hasEnemies then return false, nil end
-    end
-
     local main = pguiRef:FindFirstChild("Main")
     local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
     local dungeonStats = dungeonFrame and dungeonFrame:FindFirstChild("DungeonStats")
     local endActions = dungeonStats and dungeonStats:FindFirstChild("EndActions")
     local playAgainBtn = endActions and endActions:FindFirstChild("PlayAgain")
 
-    -- Validação: O frame de estatísticas e o botão precisam estar VISÍVEIS juntos
     if dungeonStats and dungeonStats.Visible and playAgainBtn and playAgainBtn.Visible then
         return true, playAgainBtn
     end
@@ -296,7 +286,7 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
 
     bindCharacter(newChar)
 
-    task.delay(1.2, function()
+    task.delay(1.0, function()
         isRespawning = false
     end)
 end)
@@ -307,7 +297,7 @@ local function smoothFlyTo(targetCFrame)
     if not root or not root.Parent then return end
     
     local distance = (root.Position - targetCFrame.Position).Magnitude
-    local duration = math.clamp(distance / math.max(Settings.TweenSpeed, 5), 0.1, 10)
+    local duration = math.clamp(distance / math.max(Settings.TweenSpeed, 5), 0.05, 8)
 
     if currentTween then
         currentTween:Cancel()
@@ -581,7 +571,7 @@ local function getClosestLivingEnemy()
     return closestEnemy, closestPart
 end
 
--- 8. MOTOR DE AUTO-SELL COM LEITURA DIRETA DO REPLICATEDSTORAGE.STATS
+-- 8. MOTOR DE AUTO-SELL
 local function getOfficialItemRarity(slotName)
     local statsFolder = ReplicatedStorage:FindFirstChild("Stats")
     if statsFolder then
@@ -740,7 +730,7 @@ local function executeDirectAutoSell()
         end)
         Fluent:Notify({
             Title = "Auto-Sell Concluído",
-            Content = string.format("Vendidos %d itens filtrados (Secrets protegidos com precisão nativa)!", #itemsToSell),
+            Content = string.format("Vendidos %d itens filtrados!", #itemsToSell),
             Duration = 3.5
         })
     end
@@ -831,7 +821,6 @@ local function checkDungeonStartButton()
         local startBtn = df:FindFirstChild("Start") or df:FindFirstChild("Play")
         if startBtn and startBtn:IsA("GuiObject") and startBtn.Visible then
             triggerGuiButton(startBtn)
-            dungeonStartTime = tick()
             isVirusActive = false
         end
     end
@@ -847,7 +836,6 @@ local function checkAndClickEngageButton()
         local confirmBtn = virusFrame:FindFirstChild("Confirm", true) or virusFrame:FindFirstChild("Engage", true)
         if confirmBtn and confirmBtn:IsA("GuiObject") and confirmBtn.Visible then
             triggerGuiButton(confirmBtn)
-            dungeonStartTime = tick()
             isVirusActive = true
             isDungeonEnded = false
             return true
@@ -859,7 +847,6 @@ local function checkAndClickEngageButton()
             local txt = desc:IsA("TextButton") and desc.Text:lower() or desc.Name:lower()
             if txt:find("engage") or (txt:find("confirm") and desc:FindFirstAncestorWhichIsA("Frame") and desc:FindFirstAncestorWhichIsA("Frame").Name:lower():find("virus")) then
                 triggerGuiButton(desc)
-                dungeonStartTime = tick()
                 isVirusActive = true
                 isDungeonEnded = false
                 return true
@@ -871,28 +858,8 @@ local function checkAndClickEngageButton()
 end
 
 -- 11. TRAVA E EXECUÇÃO DE COMBATE
-local function isPortalTransitionActive()
-    if isRespawning or isTransitioning or enteringPortal or isSellingInProgress or isQuestClaimInProgress then return true end
-    if (tick() - dungeonStartTime) < Settings.StartWaitTime then return true end
-
-    if isVirusActive then return false end
-
-    if Settings.SelectedPhase == "Bleach (Fase 4)" then
-        local _, root = getCharacter()
-        if not root then return true end
-
-        local wave = getCurrentWaveNumber()
-        local inRoom1 = root.Position.Z < 2100 and root.Position.Y > -450
-        local inBossRoom = root.Position.Y > -400 and root.Position.Z > 2800
-
-        if wave >= 8 and inRoom1 then return true end
-        if wave >= 12 and not inBossRoom then return true end
-    end
-    return false
-end
-
 local function executeNativeAttack()
-    if isDungeonEnded or isRespawning or isTransitioning or enteringPortal or isSellingInProgress or isQuestClaimInProgress or not isScriptRunning or isPortalTransitionActive() then return end
+    if isDungeonEnded or isRespawning or isTransitioning or enteringPortal or isSellingInProgress or isQuestClaimInProgress or not isScriptRunning then return end
     
     comboIndex = (comboIndex % 4) + 1
     local weapon = getEffectiveWeaponName()
@@ -915,7 +882,7 @@ end
 
 task.spawn(function()
     while isScriptRunning do
-        if Settings.AutoAttack and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and not isSellingInProgress and not isQuestClaimInProgress and not isPortalTransitionActive() then
+        if Settings.AutoAttack and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and not isSellingInProgress and not isQuestClaimInProgress then
             local char, _, hum = getCharacter()
             if char and hum and hum.Health > 0 then
                 executeNativeAttack()
@@ -927,7 +894,7 @@ end)
 
 task.spawn(function()
     while isScriptRunning do
-        if Settings.AutoSkills and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and not isSellingInProgress and not isQuestClaimInProgress and not isPortalTransitionActive() then
+        if Settings.AutoSkills and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and not isSellingInProgress and not isQuestClaimInProgress then
             local char, root, hum = getCharacter()
             if char and root and hum and hum.Health > 0 then
                 if (tick() - lastSkillUse) >= Settings.SkillCooldown then
@@ -1009,11 +976,6 @@ local function runBleachPhaseFlow()
         return
     end
 
-    if (tick() - dungeonStartTime) < Settings.StartWaitTime then
-        stopMovement()
-        return
-    end
-
     local currentRoom = "Room1"
     if root.Position.Y < -450 then
         currentRoom = "Room2"
@@ -1049,23 +1011,9 @@ local function runBleachPhaseFlow()
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
-            while isScriptRunning and Settings.AutoFarm and not isDungeonEnded and not isRespawning and not isTransitioning and not enteringPortal and not isSellingInProgress and not isQuestClaimInProgress and enemy.Parent and enemyPart.Parent and isEntityAlive(enemy) and not isPortalTransitionActive() do
-                local _, currentRoot = getCharacter()
-                if not currentRoot then break end
-
-                local currentWave = getCurrentWaveNumber()
-                local isR1 = currentRoot.Position.Z < 2100 and currentRoot.Position.Y > -450
-                local isBoss = currentRoot.Position.Y > -400 and currentRoot.Position.Z > 2800
-
-                if (currentWave >= 8 and isR1) or (currentWave >= 12 and not isBoss) then
-                    break
-                end
-
-                local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
-                local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
-                smoothFlyTo(targetCFrame)
-                task.wait(0.05)
-            end
+            local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
+            local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
+            smoothFlyTo(targetCFrame)
         end
     else
         stopMovement()
@@ -1073,28 +1021,7 @@ local function runBleachPhaseFlow()
 end
 
 local function runIncursionPhaseFlow()
-    if isVirusActive then
-        local enemies = getAllLivingEnemiesIncursion()
-        if #enemies > 0 then
-            local enemy, enemyPart = getClosestLivingEnemy()
-            if enemy and enemyPart then
-                local abovePos = enemyPart.Position + Vector3.new(0, Settings.HeightAboveEnemy, 0)
-                local targetCFrame = CFrame.new(abovePos, enemyPart.Position)
-                smoothFlyTo(targetCFrame)
-            end
-        else
-            stopMovement()
-        end
-        return
-    end
-
-    if (tick() - dungeonStartTime) < Settings.StartWaitTime then
-        stopMovement()
-        return
-    end
-
     local enemies = getAllLivingEnemiesIncursion()
-
     if #enemies > 0 then
         local enemy, enemyPart = getClosestLivingEnemy()
         if enemy and enemyPart then
@@ -1150,7 +1077,6 @@ task.spawn(function()
                     if Settings.AutoEngage and checkAndClickEngageButton() then
                         isDungeonEnded = false
                         isVirusActive = true
-                        dungeonStartTime = tick()
                         task.wait(1.0)
                     elseif Settings.AutoPlayAgain then
                         queueNextExecution()
@@ -1169,7 +1095,6 @@ task.spawn(function()
                     if engaged then
                         isDungeonEnded = false
                         isVirusActive = true
-                        dungeonStartTime = tick()
                         task.wait(1.0)
                     else
                         if Settings.SelectedPhase == "Bleach (Fase 4)" then
@@ -1403,8 +1328,8 @@ CombatSection:AddToggle("AutoStartToggle", {
 CombatSection:AddSlider("StartWaitTimeSlider", {
     Title = "Espera Inicial (segundos)",
     Default = Settings.StartWaitTime,
-    Min = 1.0,
-    Max = 8.0,
+    Min = 0.5,
+    Max = 6.0,
     Rounding = 1,
     Callback = function(Value)
         Settings.StartWaitTime = Value
