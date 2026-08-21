@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (BLEACH + ONE PIECE INTEGRADO)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (ONE PIECE PORTAL 2 FIX)
 -- ====================================================================
 
 -- [[ 1. SINGLETON & BOOTSTRAP ]]
@@ -198,7 +198,7 @@ function CharacterModule.FlyTo(targetCFrame)
     if not root or not root.Parent then return end
 
     local targetPos = targetCFrame.Position
-    if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 3.5 and SharedState.CurrentTween then
+    if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 3.0 and SharedState.CurrentTween then
         return
     end
 
@@ -499,11 +499,11 @@ end
 -- [[ 7. MÓDULO DE FLUXO E NAVEGAÇÃO DA FASE ]]
 local FlowModule = {}
 
--- Coordenadas Bleach
+-- Bleach
 local BLEACH_PORTAL_1 = CFrame.new(4557.2, -305.5, 1925.0)
 local BLEACH_PORTAL_2 = CFrame.new(5411.5, -561.0, 2550.0)
 
--- Coordenadas One Piece
+-- One Piece (Coordenadas reais de teleporte)
 local OP_PORTAL_1_WAVE7  = CFrame.new(1196.6, -240.9, 1855.1)
 local OP_PORTAL_2_WAVE12 = CFrame.new(2909.3, -105.7, 2151.7)
 
@@ -530,15 +530,14 @@ function FlowModule.PassPortal(targetCFrame)
 
     local dist = (root.Position - targetCFrame.Position).Magnitude
 
-    if dist > 5 then
-        local safeCFrame = CharacterModule.GetSafeCFrame(targetCFrame.Position, targetCFrame.Position + targetCFrame.LookVector * 10)
-        CharacterModule.FlyTo(safeCFrame)
+    if dist > 6 then
+        CharacterModule.FlyTo(targetCFrame)
     else
         SharedState.EnteringPortal = true
         CharacterModule.StopMovement()
 
-        -- Pisa exatamente na área de chão para ativar o teleporte
-        local tweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Linear)
+        -- Pisa diretamente na coordenada exata da área de teleporte
+        local tweenInfo = TweenInfo.new(0.4, Enum.EasingStyle.Linear)
         local passTween = TweenService:Create(root, tweenInfo, {CFrame = targetCFrame})
         passTween:Play()
         passTween.Completed:Wait()
@@ -622,12 +621,12 @@ function FlowModule.RunOnePiece()
         return
     end
 
-    -- Identificação de salas por Coordenada X/Y
+    -- Detecção precisa das 3 salas de One Piece
     local currentRoom = "Room1"
-    if root.Position.X > 2000 and root.Position.Z > 2000 then
-        currentRoom = "BossRoom"
-    elseif root.Position.X > 1400 then
-        currentRoom = "Room2"
+    if root.Position.X >= 2200 and root.Position.X <= 2650 and root.Position.Z >= 1950 then
+        currentRoom = "BossRoom" -- Sala 3 Spawn: 2457.1, -77.1, 2104.8
+    elseif root.Position.X >= 1400 then
+        currentRoom = "Room2" -- Sala 2 Spawn: 1638.9, -94.8, 1299.7
     end
 
     if currentRoom ~= SharedState.LastRoomState then
@@ -643,15 +642,19 @@ function FlowModule.RunOnePiece()
     if SharedState.EnteringPortal then return end
     local wave = FlowModule.GetWave()
 
+    -- 1. Na Wave 12, se ainda não estiver na BossRoom, foca 100% no Portal 2 (sem distrações)
     if wave >= 12 and currentRoom ~= "BossRoom" then
         FlowModule.PassPortal(OP_PORTAL_2_WAVE12)
         return
     end
+
+    -- 2. Na Wave 7 a 11, se estiver na Sala 1, força a ida ao Portal 1
     if wave >= 7 and currentRoom == "Room1" then
         FlowModule.PassPortal(OP_PORTAL_1_WAVE7)
         return
     end
 
+    -- 3. Combate normal de mobs e Boss
     local enemy, enemyPart = TargetingModule.GetClosestEnemy("One Piece")
     if enemy and enemyPart then
         local abovePos = enemyPart.Position + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0)
