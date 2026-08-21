@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (ANTI-GROUND CLIP & RAYCAST SYSTEM)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (ANTI-FLING & COLLISION FIX)
 -- ====================================================================
 
 -- [[ 1. SINGLETON & BOOTSTRAP ]]
@@ -9,6 +9,7 @@ local HttpService = game:GetService("HttpService")
 local TweenService = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local RunService = game:GetService("RunService")
 
 local UNIQUE_ID = "HubRapazes_Singleton_Tag"
 if CoreGui:FindFirstChild(UNIQUE_ID) then return end
@@ -184,6 +185,7 @@ DatabaseModule.Init()
 local CharacterModule = {}
 local diedConnection = nil
 local charConnection = nil
+local antiFlingConnection = nil
 
 function CharacterModule.Get()
     local char = player.Character
@@ -206,7 +208,22 @@ function CharacterModule.StopMovement()
     end
 end
 
--- Raycast para garantir que o ponto de voo nunca fique colado ou abaixo do chão
+-- Estabilização de física contra ejeção/fling ao encostar em monstros
+function CharacterModule.ApplyPhysicsStabilizers(char)
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if hum then
+        hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.PlatformStanding, false)
+    end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if root then
+        root.CanCollide = false
+    end
+end
+
+-- Raycast de piso
 function CharacterModule.GetSafeCFrame(targetPosition, lookAtPosition)
     local char = player.Character
     local rayOrigin = targetPosition + Vector3.new(0, 20, 0)
@@ -256,6 +273,19 @@ function CharacterModule.FlyTo(targetCFrame)
     SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out), {CFrame = targetCFrame})
     SharedState.CurrentTween:Play()
 end
+
+-- Anti-Fling: Corta velocidade vertical excessiva em tempo real
+antiFlingConnection = RunService.Heartbeat:Connect(function()
+    if SharedState.IsRunning and ConfigModule.Settings.AutoFarm and not SharedState.IsRespawning then
+        local _, root, hum = CharacterModule.Get()
+        if root and hum then
+            if math.abs(root.AssemblyLinearVelocity.Y) > 60 or root.AssemblyLinearVelocity.Magnitude > 130 then
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+            end
+        end
+    end
+end)
 
 function CharacterModule.TriggerButton(btn)
     if not btn or not SharedState.IsRunning then return end
@@ -675,7 +705,6 @@ end
 -- [[ 9. MÓDULO DE FLUXO E NAVEGAÇÃO DA FASE (FlowModule) ]]
 local FlowModule = {}
 
--- Posições absolutas dos portais
 local PORTAL_1_WAVE8_POS = CFrame.new(4557.2, -305.5, 1925.0)
 local PORTAL_2_BOSS_POS  = CFrame.new(5411.5, -561.0, 2550.0)
 
@@ -846,6 +875,7 @@ end
 
 local function bindCharacterEvents(char)
     if not char then return end
+    CharacterModule.ApplyPhysicsStabilizers(char)
     local hum = char:WaitForChild("Humanoid", 10)
     if hum then
         if diedConnection then diedConnection:Disconnect() end
@@ -1023,6 +1053,7 @@ function UIModule.Shutdown()
     CharacterModule.StopMovement()
     if charConnection then charConnection:Disconnect() end
     if diedConnection then diedConnection:Disconnect() end
+    if antiFlingConnection then antiFlingConnection:Disconnect() end
     if singletonTag and singletonTag.Parent then singletonTag:Destroy() end
     if toggleGui and toggleGui.Parent then toggleGui:Destroy() end
     for _, gui in ipairs({CoreGui, player.PlayerGui}) do
