@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (SELETOR DE MODOS DE POSICIONAMENTO)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (FIX RESPAWN & DESTRAVAMENTO DE PORTAL)
 -- ====================================================================
 
 -- [[ 1. SINGLETON & BOOTSTRAP ]]
@@ -76,14 +76,15 @@ local SharedState = {
     IsDungeonEnded = false,
     LastRoomState = "Room1",
     CurrentTween = nil,
-    CurrentTargetPos = nil
+    CurrentTargetPos = nil,
+    LastPortalAttempt = 0
 }
 
 -- [[ 2. CONFIGURAÇÕES ]]
 local ConfigModule = {}
 ConfigModule.Settings = {
     SelectedPhase = "One Piece",
-    PositionMode = "Em Cima da Cabeça", -- "Em Cima da Cabeça", "Nas Costas", "Padrão (Anterior)"
+    PositionMode = "Em Cima da Cabeça",
     CustomWeaponName = "VoidRods",
     AutoFarm = true,
     AutoAttack = true,
@@ -173,8 +174,8 @@ hoverConnection = RunService.Heartbeat:Connect(function()
     if SharedState.IsRunning and ConfigModule.Settings.AutoFarm and not SharedState.IsRespawning and not SharedState.EnteringPortal then
         local _, root, hum = CharacterModule.Get()
         if root and hum and hum.Health > 0 then
-            root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-            root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
         end
     end
 end)
@@ -204,7 +205,6 @@ function CharacterModule.GetSafeCFrame(targetPosition, lookAtPosition)
     return CFrame.new(safePos, lookAtPosition)
 end
 
--- Posicionamento Adaptativo Conforme o Dropdown
 function CharacterModule.FlyToEnemy(targetPart)
     if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning then return end
     local _, root = CharacterModule.Get()
@@ -220,7 +220,7 @@ function CharacterModule.FlyToEnemy(targetPart)
         local backOffset = -targetPart.CFrame.LookVector * ConfigModule.Settings.BackDistance + Vector3.new(0, 2.5, 0)
         local backPos = targetPart.Position + backOffset
         targetCFrame = CFrame.lookAt(backPos, targetPart.Position)
-    else -- "Padrão (Anterior)"
+    else
         local abovePos = targetPart.Position + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0)
         targetCFrame = CharacterModule.GetSafeCFrame(abovePos, targetPart.Position)
     end
@@ -557,7 +557,14 @@ end
 
 function FlowModule.PassPortal(targetCFrame)
     local _, root, hum = CharacterModule.Get()
-    if not root or not hum or SharedState.EnteringPortal then return end
+    if not root or not hum then return end
+
+    -- Watchdog anti-congelamento: se demorar mais de 2s tentando entrar, reseta a flag
+    if SharedState.EnteringPortal and (tick() - SharedState.LastPortalAttempt) > 2.0 then
+        SharedState.EnteringPortal = false
+    end
+
+    if SharedState.EnteringPortal then return end
 
     local dist = (root.Position - targetCFrame.Position).Magnitude
 
@@ -565,15 +572,23 @@ function FlowModule.PassPortal(targetCFrame)
         CharacterModule.FlyToPortal(targetCFrame)
     else
         SharedState.EnteringPortal = true
+        SharedState.LastPortalAttempt = tick()
         CharacterModule.StopMovement()
 
-        local tweenInfo = TweenInfo.new(0.4, Enum.EasingStyle.Linear)
+        local tweenInfo = TweenInfo.new(0.35, Enum.EasingStyle.Linear)
         local passTween = TweenService:Create(root, tweenInfo, {CFrame = targetCFrame})
         passTween:Play()
         passTween.Completed:Wait()
 
         root.AssemblyLinearVelocity = Vector3.zero
-        task.wait(0.5)
+        task.wait(0.3)
+
+        -- Impulso suave para frente para garantir que o hitbox sai da área do portal
+        local _, newRoot = CharacterModule.Get()
+        if newRoot then
+            newRoot.CFrame = newRoot.CFrame * CFrame.new(0, 0, -6)
+        end
+
         SharedState.EnteringPortal = false
     end
 end
@@ -605,7 +620,7 @@ function FlowModule.RunBleach()
         CharacterModule.StopMovement()
         SharedState.EnteringPortal = false
         SharedState.IsTransitioning = true
-        task.wait(0.6)
+        task.wait(0.4)
         SharedState.IsTransitioning = false
         return
     end
@@ -645,6 +660,7 @@ function FlowModule.RunOnePiece()
         return
     end
 
+    -- Identificação dinâmica de posição
     local currentRoom = "Room1"
     if root.Position.X >= 2200 and root.Position.X <= 2650 and root.Position.Z >= 1950 then
         currentRoom = "BossRoom"
@@ -657,7 +673,7 @@ function FlowModule.RunOnePiece()
         CharacterModule.StopMovement()
         SharedState.EnteringPortal = false
         SharedState.IsTransitioning = true
-        task.wait(0.6)
+        task.wait(0.4)
         SharedState.IsTransitioning = false
         return
     end
@@ -665,16 +681,25 @@ function FlowModule.RunOnePiece()
     if SharedState.EnteringPortal then return end
     local wave = FlowModule.GetWave()
 
-    if wave >= 12 and currentRoom ~= "BossRoom" then
+    -- 1. Na Wave 12: se estiver no Spawn inicial (morreu e voltou), atravessa o Portal 1 primeiro
+    if wave >= 12 and currentRoom == "Room1" then
+        FlowModule.PassPortal(OP_PORTAL_1_WAVE7)
+        return
+    end
+
+    -- 2. Na Wave 12: se estiver na Room 2, atravessa o Portal 2
+    if wave >= 12 and currentRoom == "Room2" then
         FlowModule.PassPortal(OP_PORTAL_2_WAVE12)
         return
     end
 
+    -- 3. Na Wave 7 a 11: atravessa o Portal 1
     if wave >= 7 and currentRoom == "Room1" then
         FlowModule.PassPortal(OP_PORTAL_1_WAVE7)
         return
     end
 
+    -- 4. Combate
     local _, enemyPart = TargetingModule.GetClosestEnemy("One Piece")
     if enemyPart then
         CharacterModule.FlyToEnemy(enemyPart)
@@ -735,6 +760,11 @@ function DungeonStateModule.CheckEnd()
 end
 
 local function onPlayerDiedHandler()
+    CharacterModule.StopMovement()
+    SharedState.EnteringPortal = false
+    SharedState.IsTransitioning = false
+    SharedState.LastRoomState = "Room1"
+
     if not ConfigModule.Settings.HardcoreMode then return end
     task.spawn(function()
         task.wait(23)
@@ -765,9 +795,10 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
     SharedState.IsRespawning = true
     SharedState.IsTransitioning = false
     SharedState.EnteringPortal = false
+    SharedState.LastRoomState = "Room1" -- Garante sincronização de rota após a morte
     CharacterModule.StopMovement()
     bindCharacterEvents(newChar)
-    task.delay(1.0, function() SharedState.IsRespawning = false end)
+    task.delay(0.8, function() SharedState.IsRespawning = false end)
 end)
 
 -- [[ 9. MOTOR PRINCIPAL DE LOOPS ]]
