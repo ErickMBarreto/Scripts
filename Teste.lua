@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (ARQUITETURA MODULAR ISOLADA)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (BANCO DE DADOS DIRETO DOS STATS)
 -- ====================================================================
 
 -- [[ 1. SINGLETON & BOOTSTRAP ]]
@@ -132,30 +132,45 @@ function ConfigModule.Load()
 end
 ConfigModule.Load()
 
--- [[ 3. MÓDULO DE BANCO DE DADOS (DatabaseModule) ]]
+-- [[ 3. MÓDULO DE BANCO DE DADOS DIRETO (DatabaseModule) ]]
 local DatabaseModule = {}
 DatabaseModule.Items = {}
 
+local function cleanKey(str)
+    if not str then return "" end
+    return tostring(str):lower():gsub("[%s%-_%p]", "")
+end
+
 function DatabaseModule.Init()
-    local statsFolder = ReplicatedStorage:FindFirstChild("Stats") or ReplicatedStorage:FindFirstChild("Modules")
-    if statsFolder then
-        for _, desc in ipairs(statsFolder:GetDescendants()) do
-            if desc:IsA("ModuleScript") then
-                local success, data = pcall(require, desc)
-                if success and type(data) == "table" then
-                    for itemName, itemInfo in pairs(data) do
-                        if type(itemInfo) == "table" then
-                            local r = itemInfo.Rarity or itemInfo.rarity or itemInfo.Tier
-                            local t = itemInfo.Type or itemInfo.type or itemInfo.Category
-                            if r then
-                                local cleanName = tostring(itemName):gsub("%s+", ""):lower()
-                                DatabaseModule.Items[cleanName] = {
-                                    RealName = tostring(itemName),
-                                    Rarity = tostring(r),
-                                    Type = t and tostring(t):lower() or nil
-                                }
-                            end
-                        end
+    local stats = ReplicatedStorage:WaitForChild("Stats", 10)
+    if not stats then return end
+
+    local targetModules = {
+        stats:FindFirstChild("WeaponStats"),
+        stats:FindFirstChild("SpellStats"),
+        stats:FindFirstChild("MaterialStats"),
+        stats:FindFirstChild("ArmorStats")
+    }
+
+    for _, mod in ipairs(targetModules) do
+        if mod and mod:IsA("ModuleScript") then
+            local ok, data = pcall(require, mod)
+            if ok and type(data) == "table" then
+                for rawName, itemData in pairs(data) do
+                    if type(itemData) == "table" then
+                        local r = itemData.Rarity or itemData.rarity or itemData.Tier or "Unknown"
+                        local t = itemData.Type or itemData.type or (mod.Name:lower():find("weapon") and "Weapon") or (mod.Name:lower():find("spell") and "Spell") or (mod.Name:lower():find("armor") and "Armor") or "Unknown"
+                        local displayName = itemData.Name or rawName
+
+                        local entry = {
+                            TechnicalName = tostring(rawName),
+                            DisplayName = tostring(displayName),
+                            Rarity = tostring(r),
+                            Type = tostring(t):lower()
+                        }
+
+                        DatabaseModule.Items[cleanKey(rawName)] = entry
+                        DatabaseModule.Items[cleanKey(displayName)] = entry
                     end
                 end
             end
@@ -324,6 +339,8 @@ end
 -- [[ 6. MÓDULO DE COMBATE (CombatModule) ]]
 local CombatModule = {}
 local attackRemote = nil
+local lastSkillUse = 0
+local comboIndex = 1
 
 function CombatModule.FindAttackRemote()
     if attackRemote and attackRemote.Parent then return attackRemote end
@@ -420,52 +437,46 @@ function CombatModule.ExecuteSkills()
     end
 end
 
--- [[ 7. MÓDULO DE AUTO-SELL BLINDADO (AutoSellModule) ]]
+-- [[ 7. MÓDULO DE AUTO-SELL COM RESOLUÇÃO DIRETA ]]
 local AutoSellModule = {}
 
-function AutoSellModule.ResolveRarity(slot)
-    local cleanName = slot.Name:gsub("%s+", ""):lower()
+function AutoSellModule.ResolveSlotData(slot)
+    local k1 = cleanKey(slot.Name)
     local titleLabel = slot:FindFirstChild("Title", true)
-    local titleText = (titleLabel and titleLabel:IsA("TextLabel") and titleLabel.Text ~= "") and titleLabel.Text:gsub("%s+", ""):lower() or nil
+    local k2 = (titleLabel and titleLabel:IsA("TextLabel") and titleLabel.Text ~= "") and cleanKey(titleLabel.Text) or ""
 
-    local dbInfo = DatabaseModule.Items[cleanName] or (titleText and DatabaseModule.Items[titleText])
-    if dbInfo then
-        local r = dbInfo.Rarity:lower()
-        if r:find("secret") then return "Secret", dbInfo.Type end
-        if r:find("mythic") then return "Mythic", dbInfo.Type end
-        if r:find("legendary") then return "Legendary", dbInfo.Type end
-        if r:find("epic") then return "Epic", dbInfo.Type end
-        if r:find("rare") then return "Rare", dbInfo.Type end
-        if r:find("common") then return "Common", dbInfo.Type end
+    local data = DatabaseModule.Items[k1] or (k2 ~= "" and DatabaseModule.Items[k2])
+    if data then
+        local r = data.Rarity:lower()
+        local resolvedRarity = "Unknown"
+        if r:find("secret") then resolvedRarity = "Secret"
+        elseif r:find("mythic") then resolvedRarity = "Mythic"
+        elseif r:find("legendary") then resolvedRarity = "Legendary"
+        elseif r:find("epic") then resolvedRarity = "Epic"
+        elseif r:find("rare") then resolvedRarity = "Rare"
+        elseif r:find("common") then resolvedRarity = "Common"
+        end
+
+        return resolvedRarity, data.Type
     end
 
     local directAttr = slot:GetAttribute("Rarity") or slot:GetAttribute("Tier")
     if directAttr then
         local r = tostring(directAttr):lower()
-        if r:find("secret") then return "Secret", nil end
-        if r:find("mythic") then return "Mythic", nil end
-        if r:find("legendary") then return "Legendary", nil end
-        if r:find("epic") then return "Epic", nil end
-        if r:find("rare") then return "Rare", nil end
-    end
-
-    local rarityGrad = slot:FindFirstChild("RarityGradient", true) or (slot:FindFirstChild("BGTop") and slot.BGTop:FindFirstChildWhichIsA("UIGradient"))
-    if rarityGrad and rarityGrad:IsA("UIGradient") then
-        if #rarityGrad.Color.Keypoints > 2 then return "Secret", nil end
-        local c = rarityGrad.Color.Keypoints[1].Value
-        local r, g, b = math.round(c.R * 255), math.round(c.G * 255), math.round(c.B * 255)
-
-        if r >= 210 and g >= 140 and b <= 80 then return "Legendary", nil end
-        if r >= 190 and g <= 60 and b <= 60 then return "Mythic", nil end
-        if (b >= 110 and (r + b) > (g * 1.8)) or (r >= 90 and r <= 220 and b >= 140 and g <= 100) then return "Epic", nil end
-        if b >= 160 and g >= 50 and r <= 90 then return "Rare", nil end
+        if r:find("secret") then return "Secret", nil
+        elseif r:find("mythic") then return "Mythic", nil
+        elseif r:find("legendary") then return "Legendary", nil
+        elseif r:find("epic") then return "Epic", nil
+        elseif r:find("rare") then return "Rare", nil
+        elseif r:find("common") then return "Common", nil
+        end
     end
 
     return "Unknown", nil
 end
 
 function AutoSellModule.ResolveType(slot, dbType)
-    if dbType and dbType ~= "" then return dbType end
+    if dbType and dbType ~= "" and dbType ~= "unknown" then return dbType end
     local attrType = slot:GetAttribute("Type") or slot:GetAttribute("ItemType") or slot:GetAttribute("Category")
     if attrType then return tostring(attrType):lower() end
     local itemValObj = slot:FindFirstChild("Item")
@@ -515,26 +526,40 @@ function AutoSellModule.Execute()
                 local isFav = fav and fav:IsA("ImageLabel") and fav.Visible and fav.ImageColor3 ~= Color3.fromRGB(255, 255, 255)
 
                 if not isEquipped and not isFav then
-                    local rarity, dbType = AutoSellModule.ResolveRarity(slot)
-                    if rarity ~= "Secret" and (rarity ~= "Mythic" or ConfigModule.Settings.SellMythic) and rarity ~= "Unknown" and rarity ~= "Common" then
-                        local detectedType = AutoSellModule.ResolveType(slot, dbType)
-                        if detectedType == cat.TargetType or detectedType == "unknown" then
-                            local allow = (rarity == "Rare" and ConfigModule.Settings.SellRare)
-                                or (rarity == "Epic" and ConfigModule.Settings.SellEpic)
-                                or (rarity == "Legendary" and ConfigModule.Settings.SellLegendary)
-                                or (rarity == "Mythic" and ConfigModule.Settings.SellMythic)
+                    local rarity, dbType = AutoSellModule.ResolveSlotData(slot)
 
-                            if allow then
-                                local itemValObj = slot:FindFirstChild("Item")
-                                local targetItem = (itemValObj and itemValObj:IsA("ObjectValue") and itemValObj.Value)
-                                    or (itemValObj and typeof(itemValObj.Value) == "Instance" and itemValObj.Value)
-                                    or (itemValObj and itemValObj.Value)
-                                    or slot.Name
+                    -- 1. BLOQUEIO TOTAL: Secrets nunca são vendidos
+                    if rarity == "Secret" then
+                        continue
+                    end
 
-                                if targetItem and not registered[targetItem] then
-                                    registered[targetItem] = true
-                                    table.insert(itemsToSell, targetItem)
-                                end
+                    -- 2. BLOQUEIO: Mythics apenas se autorizado
+                    if rarity == "Mythic" and not ConfigModule.Settings.SellMythic then
+                        continue
+                    end
+
+                    -- 3. TRAVA: Ignora itens não mapeados ou comuns base
+                    if rarity == "Unknown" or rarity == "Common" then
+                        continue
+                    end
+
+                    local detectedType = AutoSellModule.ResolveType(slot, dbType)
+                    if detectedType == cat.TargetType or detectedType == "unknown" then
+                        local allow = (rarity == "Rare" and ConfigModule.Settings.SellRare)
+                            or (rarity == "Epic" and ConfigModule.Settings.SellEpic)
+                            or (rarity == "Legendary" and ConfigModule.Settings.SellLegendary)
+                            or (rarity == "Mythic" and ConfigModule.Settings.SellMythic)
+
+                        if allow then
+                            local itemValObj = slot:FindFirstChild("Item")
+                            local targetItem = (itemValObj and itemValObj:IsA("ObjectValue") and itemValObj.Value)
+                                or (itemValObj and typeof(itemValObj.Value) == "Instance" and itemValObj.Value)
+                                or (itemValObj and itemValObj.Value)
+                                or slot.Name
+
+                            if targetItem and not registered[targetItem] then
+                                registered[targetItem] = true
+                                table.insert(itemsToSell, targetItem)
                             end
                         end
                     end
@@ -545,7 +570,7 @@ function AutoSellModule.Execute()
 
     if #itemsToSell > 0 then
         pcall(function() equipRemote:FireServer("Sell", itemsToSell) end)
-        Fluent:Notify({ Title = "Auto-Sell", Content = string.format("Vendidos %d itens com segurança!", #itemsToSell), Duration = 3.5 })
+        Fluent:Notify({ Title = "Auto-Sell", Content = string.format("Vendidos %d itens com dados oficiais!", #itemsToSell), Duration = 3.5 })
     end
     SharedState.IsSelling = false
 end
@@ -783,6 +808,8 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
 end)
 
 -- [[ 11. MOTOR PRINCIPAL DE LOOPS (Orchestration) ]]
+local initialRoutinesScheduled = false
+
 task.spawn(function()
     while SharedState.IsRunning do
         if ConfigModule.Settings.AutoAttack and not SharedState.IsDungeonEnded and not SharedState.IsRespawning and not SharedState.IsTransitioning and not SharedState.EnteringPortal and not SharedState.IsSelling then
@@ -965,7 +992,7 @@ task.spawn(function()
     end
 end)
 
--- Configuração dos componentes da UI
+-- Componentes da UI
 local PhaseSection = Tabs.Farm:AddSection("Fase Ativa")
 PhaseSection:AddDropdown("PhaseSelector", {
     Title = "Selecionar Fase",
