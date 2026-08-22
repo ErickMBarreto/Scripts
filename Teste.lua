@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (FIX VOO INFINITO & ANTI-FLING Y)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (ANTI-SUSPICIOUS MOVEMENT / SAFE FLY)
 -- ====================================================================
 
 -- [[ 1. SINGLETON & BOOTSTRAP ]]
@@ -98,7 +98,7 @@ ConfigModule.Settings = {
     SkillMaxDistance = 22,
     HeightAboveEnemy = 8.5,
     BackDistance = 6.0,
-    TweenSpeed = 55,
+    TweenSpeed = 48, -- Velocidade segura para passar no validador do servidor
     AttackSpeed = 0.15,
     AutoClaimQuests = false
 }
@@ -129,11 +129,11 @@ function ConfigModule.Load()
 end
 ConfigModule.Load()
 
--- [[ 3. MÓDULO DE PERSONAGEM & FÍSICA ]]
+-- [[ 3. MÓDULO DE PERSONAGEM & FÍSICA SEGURA ]]
 local CharacterModule = {}
 local diedConnection = nil
 local charConnection = nil
-local hoverConnection = nil
+local flightStabilizer = nil
 
 function CharacterModule.Get()
     local char = player.Character
@@ -151,7 +151,7 @@ function CharacterModule.StopMovement()
     SharedState.CurrentTargetPos = nil
     local _, root = CharacterModule.Get()
     if root and root.Parent then
-        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyLinearVelocity = Vector3.new(0, -0.1, 0)
         root.AssemblyAngularVelocity = Vector3.zero
     end
 end
@@ -170,22 +170,17 @@ function CharacterModule.ApplyPhysicsStabilizers(char)
     end
 end
 
--- Limite de segurança de Y e estabilização de velocidade
-hoverConnection = RunService.Heartbeat:Connect(function()
+-- Estabilização de gravidade sem disparar alerta de velocidade zero
+flightStabilizer = RunService.Stepped:Connect(function()
     if SharedState.IsRunning and ConfigModule.Settings.AutoFarm and not SharedState.IsRespawning and not SharedState.EnteringPortal then
         local _, root, hum = CharacterModule.Get()
         if root and hum and hum.Health > 0 then
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-
-            -- Trava Anti-Voo Infinito: Se passar dos limites de altura do mapa, reseta a posição
-            if root.Position.Y > 250 or root.Position.Y < -650 then
-                CharacterModule.StopMovement()
-                if ConfigModule.Settings.SelectedPhase == "One Piece" then
-                    root.CFrame = CFrame.new(root.Position.X, -80, root.Position.Z)
-                elseif ConfigModule.Settings.SelectedPhase == "Bleach (Fase 4)" then
-                    root.CFrame = CFrame.new(root.Position.X, -300, root.Position.Z)
-                end
+            -- Aplica velocidade neutra legítima para o servidor validar que o personagem está em transição de física
+            if SharedState.CurrentTween then
+                root.AssemblyAngularVelocity = Vector3.zero
+            else
+                root.AssemblyLinearVelocity = Vector3.new(0, 0.05, 0)
+                root.AssemblyAngularVelocity = Vector3.zero
             end
         end
     end
@@ -222,7 +217,6 @@ function CharacterModule.FlyToEnemy(targetPart)
     if not root or not targetPart or not targetPart.Parent then return end
 
     local enemyPos = targetPart.Position
-    -- Validação matemática: se o monstro estiver em coordenadas corrompidas ou for destruído, cancela
     if enemyPos.Magnitude > 20000 or enemyPos.Y > 500 or enemyPos.Y < -800 then
         CharacterModule.StopMovement()
         return
@@ -232,8 +226,7 @@ function CharacterModule.FlyToEnemy(targetPart)
     local targetCFrame
 
     if mode == "Em Cima da Cabeça" then
-        -- Pequeno offset de 0.05 no Z para evitar Gimbal Lock matemático do ângulo reto
-        local abovePos = enemyPos + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0.05)
+        local abovePos = enemyPos + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0.1)
         targetCFrame = CFrame.lookAt(abovePos, enemyPos)
     elseif mode == "Nas Costas" then
         local lookVec = targetPart.CFrame.LookVector
@@ -252,23 +245,23 @@ function CharacterModule.FlyToEnemy(targetPart)
     local targetPos = targetCFrame.Position
     local distance = (root.Position - targetPos).Magnitude
 
-    if distance <= 2.5 then
-        root.CFrame = targetCFrame
+    -- Se a distância for minúscula, não força CFrame direto (evita alerta de movimento suspeito)
+    if distance <= 1.2 then
         return
     end
 
-    if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 2.0 and SharedState.CurrentTween then
+    if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 1.8 and SharedState.CurrentTween then
         return
     end
 
     SharedState.CurrentTargetPos = targetPos
-    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 10), 0.05, 4.0)
+    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 10), 0.08, 3.5)
 
     if SharedState.CurrentTween then 
         SharedState.CurrentTween:Cancel() 
     end
 
-    SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out), {CFrame = targetCFrame})
+    SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = targetCFrame})
     SharedState.CurrentTween:Play()
 end
 
@@ -279,13 +272,13 @@ function CharacterModule.FlyToPortal(targetCFrame)
 
     local targetPos = targetCFrame.Position
     local distance = (root.Position - targetPos).Magnitude
-    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 10), 0.08, 6)
+    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 10), 0.1, 5.0)
 
     if SharedState.CurrentTween then 
         SharedState.CurrentTween:Cancel() 
     end
 
-    SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out), {CFrame = targetCFrame})
+    SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = targetCFrame})
     SharedState.CurrentTween:Play()
 end
 
@@ -591,30 +584,21 @@ function FlowModule.PassPortal(targetCFrame)
 
     local dist = (root.Position - targetCFrame.Position).Magnitude
 
-    if dist > 6 then
+    if dist > 5 then
         CharacterModule.FlyToPortal(targetCFrame)
     else
         SharedState.EnteringPortal = true
         SharedState.LastPortalAttempt = tick()
         CharacterModule.StopMovement()
 
-        -- Mergulho no chão do portal para garantir Touched
-        local floorTouchCFrame = targetCFrame * CFrame.new(0, -2.5, 0)
-        local tweenInfo = TweenInfo.new(0.3, Enum.EasingStyle.Linear)
+        -- Aproximação com velocidade física segura sem despencar
+        local floorTouchCFrame = targetCFrame * CFrame.new(0, -1.2, 0)
+        local tweenInfo = TweenInfo.new(0.4, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
         local passTween = TweenService:Create(root, tweenInfo, {CFrame = floorTouchCFrame})
         passTween:Play()
         passTween.Completed:Wait()
 
-        root.AssemblyLinearVelocity = Vector3.new(0, -20, 0)
         task.wait(0.4)
-
-        local _, newRoot = CharacterModule.Get()
-        if newRoot then
-            newRoot.AssemblyLinearVelocity = Vector3.zero
-            newRoot.CFrame = newRoot.CFrame * CFrame.new(0, 2, -5)
-        end
-
-        task.wait(0.2)
         SharedState.EnteringPortal = false
     end
 end
@@ -974,7 +958,7 @@ function UIModule.Shutdown()
     CharacterModule.StopMovement()
     if charConnection then charConnection:Disconnect() end
     if diedConnection then diedConnection:Disconnect() end
-    if hoverConnection then hoverConnection:Disconnect() end
+    if flightStabilizer then flightStabilizer:Disconnect() end
     if singletonTag and singletonTag.Parent then singletonTag:Destroy() end
     if toggleGui and toggleGui.Parent then toggleGui:Destroy() end
     for _, gui in ipairs({CoreGui, player.PlayerGui}) do
@@ -1063,7 +1047,7 @@ CombatSection:AddSlider("BackDistance", {
 CombatSection:AddSlider("TweenSpeed", {
     Title = "Velocidade do Voo",
     Default = ConfigModule.Settings.TweenSpeed,
-    Min = 20, Max = 120, Rounding = 0,
+    Min = 20, Max = 90, Rounding = 0,
     Callback = function(Value) ConfigModule.Settings.TweenSpeed = Value ConfigModule.Save() end
 })
 CombatSection:AddToggle("HardcoreToggle", {
