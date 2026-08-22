@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (FIX PORTAL TOUCH & RESPAWN FLOW)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (FIX VOO INFINITO & ANTI-FLING Y)
 -- ====================================================================
 
 -- [[ 1. SINGLETON & BOOTSTRAP ]]
@@ -170,12 +170,23 @@ function CharacterModule.ApplyPhysicsStabilizers(char)
     end
 end
 
+-- Limite de segurança de Y e estabilização de velocidade
 hoverConnection = RunService.Heartbeat:Connect(function()
     if SharedState.IsRunning and ConfigModule.Settings.AutoFarm and not SharedState.IsRespawning and not SharedState.EnteringPortal then
         local _, root, hum = CharacterModule.Get()
         if root and hum and hum.Health > 0 then
             root.AssemblyLinearVelocity = Vector3.zero
             root.AssemblyAngularVelocity = Vector3.zero
+
+            -- Trava Anti-Voo Infinito: Se passar dos limites de altura do mapa, reseta a posição
+            if root.Position.Y > 250 or root.Position.Y < -650 then
+                CharacterModule.StopMovement()
+                if ConfigModule.Settings.SelectedPhase == "One Piece" then
+                    root.CFrame = CFrame.new(root.Position.X, -80, root.Position.Z)
+                elseif ConfigModule.Settings.SelectedPhase == "Bleach (Fase 4)" then
+                    root.CFrame = CFrame.new(root.Position.X, -300, root.Position.Z)
+                end
+            end
         end
     end
 end)
@@ -210,19 +221,32 @@ function CharacterModule.FlyToEnemy(targetPart)
     local _, root = CharacterModule.Get()
     if not root or not targetPart or not targetPart.Parent then return end
 
+    local enemyPos = targetPart.Position
+    -- Validação matemática: se o monstro estiver em coordenadas corrompidas ou for destruído, cancela
+    if enemyPos.Magnitude > 20000 or enemyPos.Y > 500 or enemyPos.Y < -800 then
+        CharacterModule.StopMovement()
+        return
+    end
+
     local mode = ConfigModule.Settings.PositionMode
     local targetCFrame
 
     if mode == "Em Cima da Cabeça" then
-        local abovePos = targetPart.Position + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0)
-        targetCFrame = CFrame.lookAt(abovePos, targetPart.Position)
+        -- Pequeno offset de 0.05 no Z para evitar Gimbal Lock matemático do ângulo reto
+        local abovePos = enemyPos + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0.05)
+        targetCFrame = CFrame.lookAt(abovePos, enemyPos)
     elseif mode == "Nas Costas" then
-        local backOffset = -targetPart.CFrame.LookVector * ConfigModule.Settings.BackDistance + Vector3.new(0, 2.5, 0)
-        local backPos = targetPart.Position + backOffset
-        targetCFrame = CFrame.lookAt(backPos, targetPart.Position)
+        local lookVec = targetPart.CFrame.LookVector
+        if lookVec.Magnitude > 0.1 then
+            local backOffset = -lookVec * ConfigModule.Settings.BackDistance + Vector3.new(0, 2.5, 0)
+            local backPos = enemyPos + backOffset
+            targetCFrame = CFrame.lookAt(backPos, enemyPos)
+        else
+            targetCFrame = CFrame.lookAt(enemyPos + Vector3.new(0, 5, 5), enemyPos)
+        end
     else
-        local abovePos = targetPart.Position + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0)
-        targetCFrame = CharacterModule.GetSafeCFrame(abovePos, targetPart.Position)
+        local abovePos = enemyPos + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0)
+        targetCFrame = CharacterModule.GetSafeCFrame(abovePos, enemyPos)
     end
 
     local targetPos = targetCFrame.Position
@@ -238,7 +262,7 @@ function CharacterModule.FlyToEnemy(targetPart)
     end
 
     SharedState.CurrentTargetPos = targetPos
-    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 10), 0.05, 5)
+    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 10), 0.05, 4.0)
 
     if SharedState.CurrentTween then 
         SharedState.CurrentTween:Cancel() 
@@ -556,7 +580,7 @@ function FlowModule.GetWave()
 end
 
 function FlowModule.PassPortal(targetCFrame)
-    local char, root, hum = CharacterModule.Get()
+    local _, root, hum = CharacterModule.Get()
     if not root or not hum then return end
 
     if SharedState.EnteringPortal and (tick() - SharedState.LastPortalAttempt) > 2.5 then
@@ -574,17 +598,16 @@ function FlowModule.PassPortal(targetCFrame)
         SharedState.LastPortalAttempt = tick()
         CharacterModule.StopMovement()
 
-        -- 1. Mergulho físico no chão do portal para garantir gatilho de Touched
+        -- Mergulho no chão do portal para garantir Touched
         local floorTouchCFrame = targetCFrame * CFrame.new(0, -2.5, 0)
         local tweenInfo = TweenInfo.new(0.3, Enum.EasingStyle.Linear)
         local passTween = TweenService:Create(root, tweenInfo, {CFrame = floorTouchCFrame})
         passTween:Play()
         passTween.Completed:Wait()
 
-        root.AssemblyLinearVelocity = Vector3.new(0, -20, 0) -- Força o pé no chão
+        root.AssemblyLinearVelocity = Vector3.new(0, -20, 0)
         task.wait(0.4)
 
-        -- 2. Pequeno impulso de saída pós-teleporte
         local _, newRoot = CharacterModule.Get()
         if newRoot then
             newRoot.AssemblyLinearVelocity = Vector3.zero
@@ -648,7 +671,7 @@ function FlowModule.RunBleach()
     end
 end
 
--- Rota One Piece com Sincronização Estrita de Salas
+-- Rota One Piece
 function FlowModule.RunOnePiece()
     local _, root = CharacterModule.Get()
     if not root then return end
@@ -663,7 +686,6 @@ function FlowModule.RunOnePiece()
         return
     end
 
-    -- Identificação de sala
     local currentRoom = "Room1"
     if root.Position.X >= 2200 and root.Position.X <= 2650 and root.Position.Z >= 1950 then
         currentRoom = "BossRoom"
@@ -684,7 +706,6 @@ function FlowModule.RunOnePiece()
     if SharedState.EnteringPortal then return end
     local wave = FlowModule.GetWave()
 
-    -- Sequenciamento de Portais (Mesmo após renascer na Room1 na Wave 12)
     if wave >= 12 then
         if currentRoom == "Room1" then
             FlowModule.PassPortal(OP_PORTAL_1_WAVE7)
@@ -698,7 +719,6 @@ function FlowModule.RunOnePiece()
         return
     end
 
-    -- Combate de Mobs / Boss
     local _, enemyPart = TargetingModule.GetClosestEnemy("One Piece")
     if enemyPart then
         CharacterModule.FlyToEnemy(enemyPart)
