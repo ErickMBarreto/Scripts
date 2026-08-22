@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (FIX RESPAWN & DESTRAVAMENTO DE PORTAL)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (FLAG DE BYPASS DO PORTAL 2)
 -- ====================================================================
 
 -- [[ 1. SINGLETON & BOOTSTRAP ]]
@@ -28,7 +28,7 @@ for _, gui in ipairs({CoreGui, Players.LocalPlayer and Players.LocalPlayer:FindF
     end
 end
 
-local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Teste.lua"
+local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Loader.lua"
 local function queueNextExecution()
     local queueFunc = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or queueonteleport
     if queueFunc then
@@ -75,6 +75,7 @@ local SharedState = {
     IsClaiming = false,
     IsDungeonEnded = false,
     LastRoomState = "Room1",
+    BossPortalUnlocked = false, -- Flag de liberação direta do Boss
     CurrentTween = nil,
     CurrentTargetPos = nil,
     LastPortalAttempt = 0
@@ -537,6 +538,7 @@ local BLEACH_PORTAL_2 = CFrame.new(5411.5, -561.0, 2550.0)
 
 local OP_PORTAL_1_WAVE7  = CFrame.new(1196.6, -240.9, 1855.1)
 local OP_PORTAL_2_WAVE12 = CFrame.new(2909.3, -105.7, 2151.7)
+local OP_BOSS_SPAWN_POS  = CFrame.new(2457.1, -77.1, 2104.8)
 
 function FlowModule.GetWave()
     local stageLabel = pgui and pgui:FindFirstChild("Main")
@@ -559,7 +561,6 @@ function FlowModule.PassPortal(targetCFrame)
     local _, root, hum = CharacterModule.Get()
     if not root or not hum then return end
 
-    -- Watchdog anti-congelamento: se demorar mais de 2s tentando entrar, reseta a flag
     if SharedState.EnteringPortal and (tick() - SharedState.LastPortalAttempt) > 2.0 then
         SharedState.EnteringPortal = false
     end
@@ -583,7 +584,6 @@ function FlowModule.PassPortal(targetCFrame)
         root.AssemblyLinearVelocity = Vector3.zero
         task.wait(0.3)
 
-        -- Impulso suave para frente para garantir que o hitbox sai da área do portal
         local _, newRoot = CharacterModule.Get()
         if newRoot then
             newRoot.CFrame = newRoot.CFrame * CFrame.new(0, 0, -6)
@@ -645,7 +645,7 @@ function FlowModule.RunBleach()
     end
 end
 
--- Rota One Piece
+-- Rota One Piece com Bypass Pós-Morte no Boss
 function FlowModule.RunOnePiece()
     local _, root = CharacterModule.Get()
     if not root then return end
@@ -660,10 +660,10 @@ function FlowModule.RunOnePiece()
         return
     end
 
-    -- Identificação dinâmica de posição
     local currentRoom = "Room1"
     if root.Position.X >= 2200 and root.Position.X <= 2650 and root.Position.Z >= 1950 then
         currentRoom = "BossRoom"
+        SharedState.BossPortalUnlocked = true -- Portal já foi passado com sucesso
     elseif root.Position.X >= 1400 then
         currentRoom = "Room2"
     end
@@ -681,25 +681,40 @@ function FlowModule.RunOnePiece()
     if SharedState.EnteringPortal then return end
     local wave = FlowModule.GetWave()
 
-    -- 1. Na Wave 12: se estiver no Spawn inicial (morreu e voltou), atravessa o Portal 1 primeiro
-    if wave >= 12 and currentRoom == "Room1" then
-        FlowModule.PassPortal(OP_PORTAL_1_WAVE7)
+    -- 1. Se o Boss já está liberado ou já passou pelo portal 2, foca direto na arena do Boss
+    if SharedState.BossPortalUnlocked or (wave >= 12 and currentRoom == "BossRoom") then
+        local _, enemyPart = TargetingModule.GetClosestEnemy("One Piece")
+        if enemyPart then
+            CharacterModule.FlyToEnemy(enemyPart)
+        else
+            -- Se renasceu longe, voa direto ao ponto do boss sem passar por portais
+            local dist = (root.Position - OP_BOSS_SPAWN_POS.Position).Magnitude
+            if dist > 15 then
+                CharacterModule.FlyToPortal(OP_BOSS_SPAWN_POS)
+            else
+                CharacterModule.StopMovement()
+            end
+        end
         return
     end
 
-    -- 2. Na Wave 12: se estiver na Room 2, atravessa o Portal 2
-    if wave >= 12 and currentRoom == "Room2" then
-        FlowModule.PassPortal(OP_PORTAL_2_WAVE12)
+    -- 2. Primeira vez indo para o Boss (Wave 12)
+    if wave >= 12 and currentRoom ~= "BossRoom" then
+        if currentRoom == "Room1" then
+            FlowModule.PassPortal(OP_PORTAL_1_WAVE7)
+        else
+            FlowModule.PassPortal(OP_PORTAL_2_WAVE12)
+        end
         return
     end
 
-    -- 3. Na Wave 7 a 11: atravessa o Portal 1
+    -- 3. Transição da Room 1 para Room 2 (Waves 7 a 11)
     if wave >= 7 and currentRoom == "Room1" then
         FlowModule.PassPortal(OP_PORTAL_1_WAVE7)
         return
     end
 
-    -- 4. Combate
+    -- 4. Combate normal
     local _, enemyPart = TargetingModule.GetClosestEnemy("One Piece")
     if enemyPart then
         CharacterModule.FlyToEnemy(enemyPart)
@@ -728,6 +743,7 @@ function DungeonStateModule.CheckStart()
         if startBtn and startBtn:IsA("GuiObject") and startBtn.Visible then
             CharacterModule.TriggerButton(startBtn)
             SharedState.IsVirusActive = false
+            SharedState.BossPortalUnlocked = false -- Reseta a liberação para a nova dungeon
         end
     end
 end
@@ -763,7 +779,6 @@ local function onPlayerDiedHandler()
     CharacterModule.StopMovement()
     SharedState.EnteringPortal = false
     SharedState.IsTransitioning = false
-    SharedState.LastRoomState = "Room1"
 
     if not ConfigModule.Settings.HardcoreMode then return end
     task.spawn(function()
@@ -795,7 +810,6 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
     SharedState.IsRespawning = true
     SharedState.IsTransitioning = false
     SharedState.EnteringPortal = false
-    SharedState.LastRoomState = "Room1" -- Garante sincronização de rota após a morte
     CharacterModule.StopMovement()
     bindCharacterEvents(newChar)
     task.delay(0.8, function() SharedState.IsRespawning = false end)
@@ -845,6 +859,7 @@ task.spawn(function()
                 if ended and playAgainBtn then
                     SharedState.IsDungeonEnded = true
                     SharedState.IsVirusActive = false
+                    SharedState.BossPortalUnlocked = false
                     CharacterModule.StopMovement()
 
                     if ConfigModule.Settings.AutoClaimQuests then
