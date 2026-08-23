@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (ANTI-SUSPICIOUS MOVEMENT / SAFE FLY)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (PORTAL TRIGGER FIX & FIRETOUCH)
 -- ====================================================================
 
 -- [[ 1. SINGLETON & BOOTSTRAP ]]
@@ -98,7 +98,7 @@ ConfigModule.Settings = {
     SkillMaxDistance = 22,
     HeightAboveEnemy = 8.5,
     BackDistance = 6.0,
-    TweenSpeed = 48, -- Velocidade segura para passar no validador do servidor
+    TweenSpeed = 48,
     AttackSpeed = 0.15,
     AutoClaimQuests = false
 }
@@ -129,7 +129,7 @@ function ConfigModule.Load()
 end
 ConfigModule.Load()
 
--- [[ 3. MÓDULO DE PERSONAGEM & FÍSICA SEGURA ]]
+-- [[ 3. MÓDULO DE PERSONAGEM & FÍSICA ]]
 local CharacterModule = {}
 local diedConnection = nil
 local charConnection = nil
@@ -170,12 +170,10 @@ function CharacterModule.ApplyPhysicsStabilizers(char)
     end
 end
 
--- Estabilização de gravidade sem disparar alerta de velocidade zero
 flightStabilizer = RunService.Stepped:Connect(function()
     if SharedState.IsRunning and ConfigModule.Settings.AutoFarm and not SharedState.IsRespawning and not SharedState.EnteringPortal then
         local _, root, hum = CharacterModule.Get()
         if root and hum and hum.Health > 0 then
-            -- Aplica velocidade neutra legítima para o servidor validar que o personagem está em transição de física
             if SharedState.CurrentTween then
                 root.AssemblyAngularVelocity = Vector3.zero
             else
@@ -245,7 +243,6 @@ function CharacterModule.FlyToEnemy(targetPart)
     local targetPos = targetCFrame.Position
     local distance = (root.Position - targetPos).Magnitude
 
-    -- Se a distância for minúscula, não força CFrame direto (evita alerta de movimento suspeito)
     if distance <= 1.2 then
         return
     end
@@ -546,7 +543,7 @@ function QuestModule.ClaimAll()
     SharedState.IsClaiming = false
 end
 
--- [[ 7. MÓDULO DE FLUXO E NAVEGAÇÃO ]]
+-- [[ 7. MÓDULO DE FLUXO & PORTAL TRIGGER SYSTEM ]]
 local FlowModule = {}
 
 local BLEACH_PORTAL_1 = CFrame.new(4557.2, -305.5, 1925.0)
@@ -572,11 +569,32 @@ function FlowModule.GetWave()
     return 1
 end
 
+-- Dispara o evento de toque diretamente na zona de teleporte do jogo
+local function triggerZoneTouch(targetPos)
+    local char = player.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root or not firetouchinterest then return end
+
+    local gameFolder = workspace:FindFirstChild("Game")
+    local tps = (gameFolder and gameFolder:FindFirstChild("Teleports")) or workspace:FindFirstChild("Teleports")
+    if tps then
+        for _, part in ipairs(tps:GetDescendants()) do
+            if part:IsA("BasePart") and (part.Position - targetPos).Magnitude < 25 then
+                pcall(function()
+                    firetouchinterest(root, part, 0)
+                    task.wait(0.05)
+                    firetouchinterest(root, part, 1)
+                end)
+            end
+        end
+    end
+end
+
 function FlowModule.PassPortal(targetCFrame)
-    local _, root, hum = CharacterModule.Get()
+    local char, root, hum = CharacterModule.Get()
     if not root or not hum then return end
 
-    if SharedState.EnteringPortal and (tick() - SharedState.LastPortalAttempt) > 2.5 then
+    if SharedState.EnteringPortal and (tick() - SharedState.LastPortalAttempt) > 3.0 then
         SharedState.EnteringPortal = false
     end
 
@@ -584,21 +602,32 @@ function FlowModule.PassPortal(targetCFrame)
 
     local dist = (root.Position - targetCFrame.Position).Magnitude
 
-    if dist > 5 then
+    if dist > 5.5 then
         CharacterModule.FlyToPortal(targetCFrame)
     else
         SharedState.EnteringPortal = true
         SharedState.LastPortalAttempt = tick()
         CharacterModule.StopMovement()
 
-        -- Aproximação com velocidade física segura sem despencar
-        local floorTouchCFrame = targetCFrame * CFrame.new(0, -1.2, 0)
-        local tweenInfo = TweenInfo.new(0.4, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
-        local passTween = TweenService:Create(root, tweenInfo, {CFrame = floorTouchCFrame})
-        passTween:Play()
-        passTween.Completed:Wait()
+        -- 1. Restaura colisão temporária e desce suavemente no ponto do chão
+        root.CanCollide = true
+        local landCFrame = CFrame.new(targetCFrame.Position.X, targetCFrame.Position.Y + 0.5, targetCFrame.Position.Z)
+        root.CFrame = landCFrame
+        root.AssemblyLinearVelocity = Vector3.new(0, -10, 0)
 
-        task.wait(0.4)
+        -- 2. Dispara o toque interno via motor e script
+        triggerZoneTouch(targetCFrame.Position)
+        task.wait(0.35)
+
+        -- 3. Caso ainda não tenha teleportado, aplica um passo para frente na área
+        local _, curRoot = CharacterModule.Get()
+        if curRoot and (curRoot.Position - targetCFrame.Position).Magnitude < 10 then
+            curRoot.CFrame = targetCFrame * CFrame.new(0, 0, -3)
+            triggerZoneTouch(targetCFrame.Position)
+            task.wait(0.3)
+        end
+
+        root.CanCollide = false
         SharedState.EnteringPortal = false
     end
 end
@@ -690,6 +719,7 @@ function FlowModule.RunOnePiece()
     if SharedState.EnteringPortal then return end
     local wave = FlowModule.GetWave()
 
+    -- Sequenciamento Estrito de Portais
     if wave >= 12 then
         if currentRoom == "Room1" then
             FlowModule.PassPortal(OP_PORTAL_1_WAVE7)
@@ -703,6 +733,7 @@ function FlowModule.RunOnePiece()
         return
     end
 
+    -- Combate de Mobs / Boss
     local _, enemyPart = TargetingModule.GetClosestEnemy("One Piece")
     if enemyPart then
         CharacterModule.FlyToEnemy(enemyPart)
