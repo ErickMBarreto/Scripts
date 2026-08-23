@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (PORTAL TRIGGER FIX & FIRETOUCH)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (FIX SERVER TELEPORT OVERRIDE)
 -- ====================================================================
 
 -- [[ 1. SINGLETON & BOOTSTRAP ]]
@@ -151,7 +151,7 @@ function CharacterModule.StopMovement()
     SharedState.CurrentTargetPos = nil
     local _, root = CharacterModule.Get()
     if root and root.Parent then
-        root.AssemblyLinearVelocity = Vector3.new(0, -0.1, 0)
+        root.AssemblyLinearVelocity = Vector3.zero
         root.AssemblyAngularVelocity = Vector3.zero
     end
 end
@@ -171,13 +171,13 @@ function CharacterModule.ApplyPhysicsStabilizers(char)
 end
 
 flightStabilizer = RunService.Stepped:Connect(function()
-    if SharedState.IsRunning and ConfigModule.Settings.AutoFarm and not SharedState.IsRespawning and not SharedState.EnteringPortal then
+    if SharedState.IsRunning and ConfigModule.Settings.AutoFarm and not SharedState.IsRespawning and not SharedState.EnteringPortal and not SharedState.IsTransitioning then
         local _, root, hum = CharacterModule.Get()
         if root and hum and hum.Health > 0 then
-            if SharedState.CurrentTween then
+            if not SharedState.CurrentTween then
+                root.AssemblyLinearVelocity = Vector3.new(0, 0.05, 0)
                 root.AssemblyAngularVelocity = Vector3.zero
             else
-                root.AssemblyLinearVelocity = Vector3.new(0, 0.05, 0)
                 root.AssemblyAngularVelocity = Vector3.zero
             end
         end
@@ -243,9 +243,7 @@ function CharacterModule.FlyToEnemy(targetPart)
     local targetPos = targetCFrame.Position
     local distance = (root.Position - targetPos).Magnitude
 
-    if distance <= 1.2 then
-        return
-    end
+    if distance <= 1.2 then return end
 
     if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 1.8 and SharedState.CurrentTween then
         return
@@ -543,7 +541,7 @@ function QuestModule.ClaimAll()
     SharedState.IsClaiming = false
 end
 
--- [[ 7. MÓDULO DE FLUXO & PORTAL TRIGGER SYSTEM ]]
+-- [[ 7. MÓDULO DE FLUXO & PORTAIS COM PAUSA DE SERVIDOR ]]
 local FlowModule = {}
 
 local BLEACH_PORTAL_1 = CFrame.new(4557.2, -305.5, 1925.0)
@@ -569,7 +567,6 @@ function FlowModule.GetWave()
     return 1
 end
 
--- Dispara o evento de toque diretamente na zona de teleporte do jogo
 local function triggerZoneTouch(targetPos)
     local char = player.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
@@ -579,10 +576,10 @@ local function triggerZoneTouch(targetPos)
     local tps = (gameFolder and gameFolder:FindFirstChild("Teleports")) or workspace:FindFirstChild("Teleports")
     if tps then
         for _, part in ipairs(tps:GetDescendants()) do
-            if part:IsA("BasePart") and (part.Position - targetPos).Magnitude < 25 then
+            if part:IsA("BasePart") and (part.Position - targetPos).Magnitude < 30 then
                 pcall(function()
                     firetouchinterest(root, part, 0)
-                    task.wait(0.05)
+                    task.wait(0.04)
                     firetouchinterest(root, part, 1)
                 end)
             end
@@ -591,10 +588,10 @@ local function triggerZoneTouch(targetPos)
 end
 
 function FlowModule.PassPortal(targetCFrame)
-    local char, root, hum = CharacterModule.Get()
+    local _, root, hum = CharacterModule.Get()
     if not root or not hum then return end
 
-    if SharedState.EnteringPortal and (tick() - SharedState.LastPortalAttempt) > 3.0 then
+    if SharedState.EnteringPortal and (tick() - SharedState.LastPortalAttempt) > 4.0 then
         SharedState.EnteringPortal = false
     end
 
@@ -602,32 +599,46 @@ function FlowModule.PassPortal(targetCFrame)
 
     local dist = (root.Position - targetCFrame.Position).Magnitude
 
-    if dist > 5.5 then
+    if dist > 5.0 then
         CharacterModule.FlyToPortal(targetCFrame)
     else
         SharedState.EnteringPortal = true
         SharedState.LastPortalAttempt = tick()
         CharacterModule.StopMovement()
 
-        -- 1. Restaura colisão temporária e desce suavemente no ponto do chão
+        -- 1. Pousa o boneco na coordenada do chão
         root.CanCollide = true
-        local landCFrame = CFrame.new(targetCFrame.Position.X, targetCFrame.Position.Y + 0.5, targetCFrame.Position.Z)
-        root.CFrame = landCFrame
-        root.AssemblyLinearVelocity = Vector3.new(0, -10, 0)
-
-        -- 2. Dispara o toque interno via motor e script
+        root.CFrame = targetCFrame * CFrame.new(0, -0.5, 0)
         triggerZoneTouch(targetCFrame.Position)
-        task.wait(0.35)
 
-        -- 3. Caso ainda não tenha teleportado, aplica um passo para frente na área
-        local _, curRoot = CharacterModule.Get()
-        if curRoot and (curRoot.Position - targetCFrame.Position).Magnitude < 10 then
-            curRoot.CFrame = targetCFrame * CFrame.new(0, 0, -3)
-            triggerZoneTouch(targetCFrame.Position)
-            task.wait(0.3)
+        -- 2. PAUSA O SCRIPT E ESPERA O SERVIDOR EXECUTAR O TELEPORTE
+        local oldPos = root.Position
+        local startWait = tick()
+        local tpSuccess = false
+
+        while (tick() - startWait) < 3.0 do
+            task.wait(0.1)
+            local _, curRoot = CharacterModule.Get()
+            if curRoot and (curRoot.Position - oldPos).Magnitude > 60 then
+                tpSuccess = true
+                break
+            end
+            if curRoot then
+                triggerZoneTouch(targetCFrame.Position)
+            end
         end
 
-        root.CanCollide = false
+        -- 3. Respiro pós-teleporte para carregar a sala sem sobreposição de CFrame
+        if tpSuccess then
+            task.wait(0.6)
+        end
+
+        local _, finalRoot = CharacterModule.Get()
+        if finalRoot then
+            finalRoot.CanCollide = false
+            finalRoot.AssemblyLinearVelocity = Vector3.zero
+        end
+
         SharedState.EnteringPortal = false
     end
 end
@@ -719,7 +730,7 @@ function FlowModule.RunOnePiece()
     if SharedState.EnteringPortal then return end
     local wave = FlowModule.GetWave()
 
-    -- Sequenciamento Estrito de Portais
+    -- Sequenciamento de Portais
     if wave >= 12 then
         if currentRoom == "Room1" then
             FlowModule.PassPortal(OP_PORTAL_1_WAVE7)
@@ -733,7 +744,6 @@ function FlowModule.RunOnePiece()
         return
     end
 
-    -- Combate de Mobs / Boss
     local _, enemyPart = TargetingModule.GetClosestEnemy("One Piece")
     if enemyPart then
         CharacterModule.FlyToEnemy(enemyPart)
