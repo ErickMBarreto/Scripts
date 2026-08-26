@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (FIX SERVER TELEPORT OVERRIDE)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (COM AUTO-SELL & AUTO-FAVORITE)
 -- ====================================================================
 
 -- [[ 1. SINGLETON & BOOTSTRAP ]]
@@ -74,6 +74,7 @@ local SharedState = {
     IsSelling = false,
     IsClaiming = false,
     IsDungeonEnded = false,
+    HasExecutedSell = false,
     LastRoomState = "Room1",
     CurrentTween = nil,
     CurrentTargetPos = nil,
@@ -100,7 +101,17 @@ ConfigModule.Settings = {
     BackDistance = 6.0,
     TweenSpeed = 48,
     AttackSpeed = 0.15,
-    AutoClaimQuests = false
+    AutoClaimQuests = false,
+    -- Configurações Auto-Sell & Auto-Favorite
+    AutoSell = true,
+    SellDelaySeconds = 10,
+    AutoFavoriteSecrets = true,
+    AutoFavoriteMythics = false,
+    SellCommon = true,
+    SellRare = true,
+    SellEpic = true,
+    SellLegendary = true,
+    SellMythic = false
 }
 
 local CONFIG_FILE = "HubRapazes_Config.json"
@@ -480,7 +491,154 @@ function CombatModule.ExecuteSkills()
     end
 end
 
--- [[ 6. MÓDULO DE MISSÕES ]]
+-- [[ 6. MÓDULO DE AUTO-SELL & AUTO-FAVORITE ]]
+local AutoSellModule = {}
+local equipRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Equip", 10)
+local lastSellTick = 0
+
+function AutoSellModule.ResolveRarity(slot, itemObj)
+    if not itemObj then return "Unknown" end
+    local rAttr = itemObj:GetAttribute("Rarity") or itemObj:GetAttribute("Tier")
+    if rAttr then
+        local r = tostring(rAttr):lower()
+        if r:find("secret") then return "Secret"
+        elseif r:find("mythic") then return "Mythic"
+        elseif r:find("legendary") then return "Legendary"
+        elseif r:find("epic") then return "Epic"
+        elseif r:find("rare") then return "Rare"
+        elseif r:find("common") then return "Common"
+        end
+    end
+
+    local qualityLabel = slot:FindFirstChild("Quality", true)
+    if qualityLabel and qualityLabel:IsA("TextLabel") and qualityLabel.Text ~= "" then
+        local t = qualityLabel.Text:lower()
+        if t:find("secret") then return "Secret"
+        elseif t:find("mythic") then return "Mythic"
+        elseif t:find("legendary") then return "Legendary"
+        elseif t:find("epic") then return "Epic"
+        elseif t:find("rare") then return "Rare"
+        elseif t:find("common") then return "Common"
+        end
+    end
+
+    return "Unknown"
+end
+
+function AutoSellModule.LockHighTierItems()
+    if not equipRemote then return end
+    local scroll = pgui:FindFirstChild("Main")
+        and pgui.Main:FindFirstChild("MainFrame")
+        and pgui.Main.MainFrame:FindFirstChild("Items")
+        and pgui.Main.MainFrame.Items:FindFirstChild("Scroll")
+
+    if not scroll then return end
+    local favoritedCount = 0
+
+    for _, slot in ipairs(scroll:GetChildren()) do
+        if (slot:IsA("ImageButton") or slot:IsA("Frame")) and slot:FindFirstChild("Item") and slot.Item:IsA("ObjectValue") then
+            local itemObj = slot.Item.Value
+            if itemObj and itemObj.Parent then
+                local isFav = itemObj:GetAttribute("Favorite") == true
+                if not isFav then
+                    local rarity = AutoSellModule.ResolveRarity(slot, itemObj)
+                    local shouldLock = false
+
+                    if rarity == "Secret" and ConfigModule.Settings.AutoFavoriteSecrets then
+                        shouldLock = true
+                    elseif rarity == "Mythic" and ConfigModule.Settings.AutoFavoriteMythics then
+                        shouldLock = true
+                    end
+
+                    if shouldLock then
+                        pcall(function()
+                            equipRemote:FireServer("Favorite", itemObj)
+                            local favIcon = slot:FindFirstChild("Favorite", true)
+                            if favIcon then CharacterModule.TriggerButton(favIcon) end
+                        end)
+                        favoritedCount = favoritedCount + 1
+                        task.wait(0.1)
+                    end
+                end
+            end
+        end
+    end
+
+    if favoritedCount > 0 then
+        Fluent:Notify({
+            Title = "🔒 Auto-Favorite Ativo",
+            Content = string.format("%d itens de alto valor protegidos!", favoritedCount),
+            Duration = 4
+        })
+    end
+end
+
+function AutoSellModule.Execute()
+    if not ConfigModule.Settings.AutoSell or SharedState.IsSelling or not SharedState.IsRunning or not equipRemote then return end
+    if (tick() - lastSellTick) < 10 then return end
+
+    SharedState.IsSelling = true
+    lastSellTick = tick()
+
+    pcall(AutoSellModule.LockHighTierItems)
+    task.wait(0.3)
+
+    local scroll = pgui:FindFirstChild("Main")
+        and pgui.Main:FindFirstChild("MainFrame")
+        and pgui.Main.MainFrame:FindFirstChild("Items")
+        and pgui.Main.MainFrame.Items:FindFirstChild("Scroll")
+
+    local itemsToSell = {}
+    local processed = {}
+
+    if scroll then
+        for _, slot in ipairs(scroll:GetChildren()) do
+            if (slot:IsA("ImageButton") or slot:IsA("Frame")) and slot:FindFirstChild("Item") and slot.Item:IsA("ObjectValue") then
+                local itemObj = slot.Item.Value
+                if itemObj and itemObj.Parent and not processed[itemObj] then
+                    processed[itemObj] = true
+
+                    local isEquipped = itemObj:GetAttribute("Equipped") == true
+                    local isFav = itemObj:GetAttribute("Favorite") == true
+                    local itemType = tostring(itemObj:GetAttribute("Type") or ""):lower()
+
+                    if not isEquipped and not isFav and itemType ~= "material" then
+                        local rarity = AutoSellModule.ResolveRarity(slot, itemObj)
+                        local shouldSell = false
+
+                        if rarity == "Common" and ConfigModule.Settings.SellCommon then
+                            shouldSell = true
+                        elseif rarity == "Rare" and ConfigModule.Settings.SellRare then
+                            shouldSell = true
+                        elseif rarity == "Epic" and ConfigModule.Settings.SellEpic then
+                            shouldSell = true
+                        elseif rarity == "Legendary" and ConfigModule.Settings.SellLegendary then
+                            shouldSell = true
+                        elseif rarity == "Mythic" and ConfigModule.Settings.SellMythic then
+                            shouldSell = true
+                        end
+
+                        if shouldSell and rarity ~= "Secret" then
+                            table.insert(itemsToSell, itemObj)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if #itemsToSell > 0 then
+        pcall(function()
+            equipRemote:FireServer("Sell", itemsToSell)
+        end)
+        Fluent:Notify({ Title = "Auto-Sell", Content = string.format("%d itens vendidos!", #itemsToSell), Duration = 3 })
+        task.wait(2.0)
+    end
+
+    SharedState.IsSelling = false
+end
+
+-- [[ 7. MÓDULO DE MISSÕES ]]
 local QuestModule = {}
 local questRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Quest", 10)
 
@@ -541,7 +699,7 @@ function QuestModule.ClaimAll()
     SharedState.IsClaiming = false
 end
 
--- [[ 7. MÓDULO DE FLUXO & PORTAIS COM PAUSA DE SERVIDOR ]]
+-- [[ 8. MÓDULO DE FLUXO & PORTAIS COM PAUSA DE SERVIDOR ]]
 local FlowModule = {}
 
 local BLEACH_PORTAL_1 = CFrame.new(4557.2, -305.5, 1925.0)
@@ -606,12 +764,10 @@ function FlowModule.PassPortal(targetCFrame)
         SharedState.LastPortalAttempt = tick()
         CharacterModule.StopMovement()
 
-        -- 1. Pousa o boneco na coordenada do chão
         root.CanCollide = true
         root.CFrame = targetCFrame * CFrame.new(0, -0.5, 0)
         triggerZoneTouch(targetCFrame.Position)
 
-        -- 2. PAUSA O SCRIPT E ESPERA O SERVIDOR EXECUTAR O TELEPORTE
         local oldPos = root.Position
         local startWait = tick()
         local tpSuccess = false
@@ -628,7 +784,6 @@ function FlowModule.PassPortal(targetCFrame)
             end
         end
 
-        -- 3. Respiro pós-teleporte para carregar a sala sem sobreposição de CFrame
         if tpSuccess then
             task.wait(0.6)
         end
@@ -730,7 +885,6 @@ function FlowModule.RunOnePiece()
     if SharedState.EnteringPortal then return end
     local wave = FlowModule.GetWave()
 
-    -- Sequenciamento de Portais
     if wave >= 12 then
         if currentRoom == "Room1" then
             FlowModule.PassPortal(OP_PORTAL_1_WAVE7)
@@ -762,7 +916,7 @@ function FlowModule.RunIncursion()
     end
 end
 
--- [[ 8. MÓDULO DE ESTADOS DA DUNGEON ]]
+-- [[ 9. MÓDULO DE ESTADOS DA DUNGEON ]]
 local DungeonStateModule = {}
 
 function DungeonStateModule.CheckStart()
@@ -845,7 +999,7 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
     task.delay(0.8, function() SharedState.IsRespawning = false end)
 end)
 
--- [[ 9. MOTOR PRINCIPAL DE LOOPS ]]
+-- [[ 10. MOTOR PRINCIPAL DE LOOPS ]]
 local initialRoutinesScheduled = false
 
 task.spawn(function()
@@ -875,10 +1029,26 @@ task.spawn(function()
             if hum and hum.Health > 0 then
                 if not initialRoutinesScheduled then
                     initialRoutinesScheduled = true
+                    
+                    -- Rotina de Auto-Claim Quests
                     task.spawn(function()
                         task.wait(13)
                         if SharedState.IsRunning and ConfigModule.Settings.AutoClaimQuests and not SharedState.IsDungeonEnded then
                             QuestModule.ClaimAll()
+                        end
+                    end)
+
+                    -- Rotina de Auto-Sell e Auto-Favorite (Execução única no início da dungeon)
+                    task.spawn(function()
+                        task.wait(ConfigModule.Settings.SellDelaySeconds)
+                        if SharedState.IsRunning and not SharedState.IsDungeonEnded and not SharedState.HasExecutedSell then
+                            SharedState.HasExecutedSell = true
+                            if ConfigModule.Settings.AutoFavoriteSecrets or ConfigModule.Settings.AutoFavoriteMythics then
+                                AutoSellModule.LockHighTierItems()
+                            end
+                            if ConfigModule.Settings.AutoSell then
+                                AutoSellModule.Execute()
+                            end
                         end
                     end)
                 end
@@ -937,7 +1107,7 @@ task.spawn(function()
     end
 end)
 
--- [[ 10. INTERFACE VISUAL ]]
+-- [[ 11. INTERFACE VISUAL ]]
 local UIModule = {}
 
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
@@ -953,6 +1123,7 @@ local Window = Fluent:CreateWindow({
 
 local Tabs = {
     Farm = Window:AddTab({ Title = "Farm" }),
+    Sell = Window:AddTab({ Title = "Auto-Sell" }),
     Settings = Window:AddTab({ Title = "Settings" })
 }
 
@@ -1026,7 +1197,7 @@ task.spawn(function()
     end
 end)
 
--- Componentes da UI
+-- Componentes da UI (Aba Farm)
 local PhaseSection = Tabs.Farm:AddSection("Configurações de Fase & Posição")
 PhaseSection:AddDropdown("PhaseSelector", {
     Title = "Selecionar Fase",
@@ -1147,7 +1318,74 @@ CombatSection:AddSlider("SkillCooldownSlider", {
     Callback = function(Value) ConfigModule.Settings.SkillCooldown = Value ConfigModule.Save() end
 })
 
--- ABA SETTINGS
+-- Componentes da UI (Aba Auto-Sell & Favorite)
+local FavoriteSection = Tabs.Sell:AddSection("Proteção de Itens (Auto-Favorite)")
+FavoriteSection:AddToggle("AutoFavSecretsToggle", {
+    Title = "Auto-Favorite Secretos",
+    Description = "Bloqueia e favorita automaticamente qualquer item Secreto",
+    Default = ConfigModule.Settings.AutoFavoriteSecrets,
+    Callback = function(Value) ConfigModule.Settings.AutoFavoriteSecrets = Value ConfigModule.Save() end
+})
+FavoriteSection:AddToggle("AutoFavMythicsToggle", {
+    Title = "Auto-Favorite Míticos",
+    Description = "Bloqueia e favorita automaticamente qualquer item Mítico",
+    Default = ConfigModule.Settings.AutoFavoriteMythics,
+    Callback = function(Value) ConfigModule.Settings.AutoFavoriteMythics = Value ConfigModule.Save() end
+})
+FavoriteSection:AddButton({
+    Title = "🔒 Bloquear / Favoritar Raros Agora",
+    Description = "Varre o inventário e protege itens Secretos e Míticos",
+    Callback = function() pcall(AutoSellModule.LockHighTierItems) end
+})
+
+local SellMainSection = Tabs.Sell:AddSection("Controle Geral de Venda")
+SellMainSection:AddToggle("AutoSellToggle", {
+    Title = "Ativar Auto-Sell",
+    Description = "Vende automaticamente 1 vez logo após iniciar a dungeon",
+    Default = ConfigModule.Settings.AutoSell,
+    Callback = function(Value) ConfigModule.Settings.AutoSell = Value ConfigModule.Save() end
+})
+SellMainSection:AddSlider("SellDelaySlider", {
+    Title = "Tempo pós-início para Vender (s)",
+    Description = "Quantos segundos esperar após entrar na fase para disparar a venda única",
+    Default = ConfigModule.Settings.SellDelaySeconds,
+    Min = 1, Max = 30, Rounding = 0,
+    Callback = function(Value) ConfigModule.Settings.SellDelaySeconds = Value ConfigModule.Save() end
+})
+SellMainSection:AddButton({
+    Title = "💰 Executar Venda Imediata",
+    Description = "Varre o inventário e vende os itens configurados agora",
+    Callback = function() pcall(AutoSellModule.Execute) end
+})
+
+local SellRaritiesSection = Tabs.Sell:AddSection("Filtro de Raridades para Venda")
+SellRaritiesSection:AddToggle("SellCommonToggle", {
+    Title = "Vender Comuns",
+    Default = ConfigModule.Settings.SellCommon,
+    Callback = function(Value) ConfigModule.Settings.SellCommon = Value ConfigModule.Save() end
+})
+SellRaritiesSection:AddToggle("SellRareToggle", {
+    Title = "Vender Raros",
+    Default = ConfigModule.Settings.SellRare,
+    Callback = function(Value) ConfigModule.Settings.SellRare = Value ConfigModule.Save() end
+})
+SellRaritiesSection:AddToggle("SellEpicToggle", {
+    Title = "Vender Épicos",
+    Default = ConfigModule.Settings.SellEpic,
+    Callback = function(Value) ConfigModule.Settings.SellEpic = Value ConfigModule.Save() end
+})
+SellRaritiesSection:AddToggle("SellLegendaryToggle", {
+    Title = "Vender Lendários",
+    Default = ConfigModule.Settings.SellLegendary,
+    Callback = function(Value) ConfigModule.Settings.SellLegendary = Value ConfigModule.Save() end
+})
+SellRaritiesSection:AddToggle("SellMythicToggle", {
+    Title = "Vender Míticos",
+    Default = ConfigModule.Settings.SellMythic,
+    Callback = function(Value) ConfigModule.Settings.SellMythic = Value ConfigModule.Save() end
+})
+
+-- Componentes da UI (Aba Settings)
 local QuestsSection = Tabs.Settings:AddSection("Automação de Missões (Quests)")
 QuestsSection:AddToggle("AutoClaimQuestsToggle", {
     Title = "Auto-Claim de Missões (13s pós-início)",
