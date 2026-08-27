@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (WEBHOOK PADRÃO CONFIGURADO)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (FIX PLAY AGAIN INSTANTÂNEO & ENGAGE)
 -- ====================================================================
 
 -- [[ 1. SINGLETON & BOOTSTRAP ]]
@@ -231,7 +231,7 @@ function WebhookModule.ProcessDungeonDrops()
     end
 end
 
--- [[ 4. MÓDULO DE PERSONAGEM & FÍSICA ]]
+-- [[ 4. MÓDULO DE PERSONAGEM & FÍSICA ESTÁVEL ]]
 local CharacterModule = {}
 local diedConnection = nil
 local charConnection = nil
@@ -521,10 +521,7 @@ function CombatModule.DetectWeapon()
     local char = player.Character
     if char and char:FindFirstChildOfClass("Tool") then return char:FindFirstChildOfClass("Tool").Name end
     local bp = player:FindFirstChild("Backpack")
-    if bp then
-        local tool = bp:FindFirstChildOfClass("Tool")
-        if tool then return tool.Name end
-    end
+    if bp and bp:FindFirstChildOfClass("Tool") then return bp:FindFirstChildOfClass("Tool").Name end
     return nil
 end
 
@@ -1010,7 +1007,7 @@ function FlowModule.RunIncursion()
     end
 end
 
--- [[ 10. MÓDULO DE ESTADOS DA DUNGEON ]]
+-- [[ 10. MÓDULO DE ESTADOS DA DUNGEON (BUSCA ROBUSTA & RESPOSTA RÁPIDA) ]]
 local DungeonStateModule = {}
 
 function DungeonStateModule.CheckStart()
@@ -1041,12 +1038,24 @@ end
 
 function DungeonStateModule.CheckEnd()
     local main = pgui and pgui:FindFirstChild("Main")
-    local dungeonStats = main and main:FindFirstChild("DungeonFrame") and main.MainFrame and main.DungeonFrame:FindFirstChild("DungeonStats")
-    dungeonStats = dungeonStats or (main and main:FindFirstChild("DungeonFrame") and main.DungeonFrame:FindFirstChild("DungeonStats"))
-    local playAgainBtn = dungeonStats and dungeonStats:FindFirstChild("EndActions") and dungeonStats.EndActions:FindFirstChild("PlayAgain")
+    if not main then return false, nil end
 
-    if dungeonStats and dungeonStats.Visible and playAgainBtn and playAgainBtn.Visible then
-        return true, playAgainBtn
+    local df = main:FindFirstChild("DungeonFrame")
+    local dungeonStats = (df and df:FindFirstChild("DungeonStats")) or main:FindFirstChild("DungeonStats", true)
+
+    if dungeonStats and dungeonStats.Visible then
+        for _, obj in ipairs(dungeonStats:GetDescendants()) do
+            if obj:IsA("GuiButton") and obj.Visible then
+                local name = obj.Name:lower()
+                if name:find("playagain") or name:find("retry") or name:find("again") then
+                    return true, obj
+                end
+                local label = obj:FindFirstChildOfClass("TextLabel")
+                if label and (label.Text:lower():find("play again") or label.Text:lower():find("jogar novamente")) then
+                    return true, obj
+                end
+            end
+        end
     end
     return false, nil
 end
@@ -1065,7 +1074,7 @@ local function onPlayerDiedHandler()
         local _, retryBtn = DungeonStateModule.CheckEnd()
         if retryBtn then
             queueNextExecution()
-            task.wait(0.5)
+            task.wait(0.2)
             CharacterModule.TriggerButton(retryBtn)
             task.wait(3.0)
         end
@@ -1161,16 +1170,11 @@ task.spawn(function()
 
                     if ConfigModule.Settings.AutoClaimQuests then
                         pcall(QuestModule.ClaimAll)
-                        task.wait(0.2)
                     end
 
-                    if ConfigModule.Settings.AutoEngage and DungeonStateModule.CheckEngage() then
-                        SharedState.IsDungeonEnded = false
-                        SharedState.IsVirusActive = true
-                        task.wait(1.0)
-                    elseif ConfigModule.Settings.AutoPlayAgain then
+                    if ConfigModule.Settings.AutoPlayAgain then
                         queueNextExecution()
-                        task.wait(0.8)
+                        task.wait(0.15)
                         CharacterModule.TriggerButton(playAgainBtn)
                         task.wait(3.0)
                     end
