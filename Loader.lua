@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (FIX INCURSÃO & TARGETING COMPLETO)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (FIX INCURSÃO & SHUTDOWN TOTAL)
 -- ====================================================================
 
 -- [[ 1. SINGLETON & BOOTSTRAP ]]
@@ -49,9 +49,9 @@ local pgui = player:WaitForChild("PlayerGui", 20)
 
 local function isInsideDungeon()
     local main = pgui and pgui:FindFirstChild("Main")
-    if main and (main:FindFirstChild("DungeonFrame") or main:FindFirstChild("VirusFrame") or main:FindFirstChild("RaidFrame")) then return true end
+    if main and (main:FindFirstChild("DungeonFrame") or main:FindFirstChild("VirusFrame") or main:FindFirstChild("RaidFrame") or main:FindFirstChild("BossRushFrame")) then return true end
     if workspace:FindFirstChild("Game") and (workspace.Game:FindFirstChild("Enemies") or workspace.Game:FindFirstChild("Teleports") or workspace.Game:FindFirstChild("Stages") or workspace.Game:FindFirstChild("Raids") or workspace.Game:FindFirstChild("Incursion")) then return true end
-    if workspace:FindFirstChild("Enemies") or workspace:FindFirstChild("Raids") then return true end
+    if workspace:FindFirstChild("Enemies") or workspace:FindFirstChild("Raids") or workspace:FindFirstChild("Incursion") or workspace:FindFirstChild("Boss") then return true end
     return false
 end
 
@@ -170,7 +170,7 @@ end
 function WebhookModule.ProcessDungeonDrops()
     if SharedState.HasSentWebhook or not ConfigModule.Settings.WebhookEnabled then return end
     
-    local df = pgui and pgui:FindFirstChild("Main") and pgui.Main:FindFirstChild("DungeonFrame")
+    local df = pgui and pgui:FindFirstChild("Main") and (pgui.Main:FindFirstChild("DungeonFrame") or pgui.Main:FindFirstChild("BossRushFrame") or pgui.Main:FindFirstChild("RaidFrame"))
     local stats = df and df:FindFirstChild("DungeonStats")
     local rewardedHolder = stats and stats:FindFirstChild("RewardedHolder")
 
@@ -214,7 +214,7 @@ function WebhookModule.ProcessDungeonDrops()
         local embedColor = hasSecret and 16711680 or (hasMythic and 16744192 or 65450)
 
         local embed = {
-            ["title"] = "⚔️ Dungeon Concluída - " .. tostring(ConfigModule.Settings.SelectedPhase),
+            ["title"] = "⚔️ Fase Concluída - " .. tostring(ConfigModule.Settings.SelectedPhase),
             ["color"] = embedColor,
             ["fields"] = {
                 { ["name"] = "👤 Jogador", ["value"] = player.Name, ["inline"] = true },
@@ -312,7 +312,7 @@ function CharacterModule.GetSafeCFrame(targetPosition, lookAtPosition)
     return CFrame.new(safePos, lookAtPosition)
 end
 
-function CharacterModule.FlyToEnemy(targetPart)
+function CharacterModule.FlyToEnemy(targetPart, overrideMode)
     if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning then return end
     local _, root = CharacterModule.Get()
     if not root or not targetPart or not targetPart.Parent then return end
@@ -323,13 +323,10 @@ function CharacterModule.FlyToEnemy(targetPart)
         return
     end
 
-    local mode = ConfigModule.Settings.PositionMode
+    local mode = overrideMode or ConfigModule.Settings.PositionMode
     local targetCFrame
 
-    if mode == "Em Cima da Cabeça" then
-        local abovePos = enemyPos + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0.1)
-        targetCFrame = CFrame.lookAt(abovePos, enemyPos)
-    elseif mode == "Nas Costas" then
+    if mode == "Nas Costas" then
         local lookVec = targetPart.CFrame.LookVector
         if lookVec.Magnitude > 0.1 then
             local backOffset = -lookVec * ConfigModule.Settings.BackDistance + Vector3.new(0, 2.5, 0)
@@ -338,6 +335,9 @@ function CharacterModule.FlyToEnemy(targetPart)
         else
             targetCFrame = CFrame.lookAt(enemyPos + Vector3.new(0, 5, 5), enemyPos)
         end
+    elseif mode == "Em Cima da Cabeça" then
+        local abovePos = enemyPos + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0.1)
+        targetCFrame = CFrame.lookAt(abovePos, enemyPos)
     else
         local abovePos = enemyPos + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0)
         targetCFrame = CharacterModule.GetSafeCFrame(abovePos, enemyPos)
@@ -401,7 +401,7 @@ function CharacterModule.PressKey(keyCode)
     end)
 end
 
--- [[ 5. MÓDULO DE DETECÇÃO DE INIMIGOS (UNIVERSAL & ROBUSTO) ]]
+-- [[ 5. MÓDULO DE DETECÇÃO DE INIMIGOS ]]
 local TargetingModule = {}
 
 function TargetingModule.IsAlive(obj)
@@ -445,15 +445,19 @@ function TargetingModule.GetLivingEnemies(phase)
     local searchContainers = {
         gameFolder and gameFolder:FindFirstChild("Enemies"),
         workspace:FindFirstChild("Enemies"),
+        gameFolder and gameFolder:FindFirstChild("Incursion"),
+        gameFolder and gameFolder:FindFirstChild("Raids"),
+        gameFolder and gameFolder:FindFirstChild("Raid"),
+        gameFolder and gameFolder:FindFirstChild("BossRush"),
+        gameFolder and gameFolder:FindFirstChild("Boss"),
         gameFolder and gameFolder:FindFirstChild("Stages"),
         gameFolder and gameFolder:FindFirstChild("Spawns"),
         gameFolder and gameFolder:FindFirstChild("Virus"),
-        gameFolder and gameFolder:FindFirstChild("Boss"),
         gameFolder and gameFolder:FindFirstChild("SecretBoss"),
-        gameFolder and gameFolder:FindFirstChild("Raids"),
-        gameFolder and gameFolder:FindFirstChild("Incursion"),
+        workspace:FindFirstChild("Incursion"),
+        workspace:FindFirstChild("Raids"),
         workspace:FindFirstChild("Virus"),
-        workspace:FindFirstChild("Raids")
+        workspace:FindFirstChild("Boss")
     }
 
     for _, container in ipairs(searchContainers) do
@@ -465,8 +469,8 @@ function TargetingModule.GetLivingEnemies(phase)
         end
     end
 
-    -- Varredura geral de contingência
-    if #list == 0 then
+    -- Varredura específica de contingência para Incursão
+    if #list == 0 or phase == "Incursão" then
         if gameFolder then
             for _, child in ipairs(gameFolder:GetChildren()) do
                 if child:IsA("Model") and child ~= char and not Players:GetPlayerFromCharacter(child) then
@@ -477,7 +481,7 @@ function TargetingModule.GetLivingEnemies(phase)
         for _, obj in ipairs(workspace:GetChildren()) do
             if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
                 local n = obj.Name:lower()
-                if n:find("mob") or n:find("enemy") or n:find("boss") or n:find("virus") or n:find("raid") or obj:FindFirstChildOfClass("Humanoid") then
+                if n:find("mob") or n:find("enemy") or n:find("boss") or n:find("incursion") or n:find("raid") or n:find("virus") or obj:FindFirstChildOfClass("Humanoid") then
                     addEntity(obj)
                 end
             end
@@ -1014,7 +1018,7 @@ function FlowModule.RunOnePiece()
     end
 end
 
--- Rota Incursão (Execução Livre e Direta)
+-- Rota Incursão (Execução direta aos mobs da Raid)
 function FlowModule.RunIncursion()
     local _, enemyPart = TargetingModule.GetClosestEnemy("Incursão")
     if enemyPart then
@@ -1024,11 +1028,21 @@ function FlowModule.RunIncursion()
     end
 end
 
+-- Rota Boss Rush
+function FlowModule.RunBossRush()
+    local _, enemyPart = TargetingModule.GetClosestEnemy("Boss Rush")
+    if enemyPart then
+        CharacterModule.FlyToEnemy(enemyPart, "Nas Costas")
+    else
+        CharacterModule.StopMovement()
+    end
+end
+
 -- [[ 10. MÓDULO DE ESTADOS DA DUNGEON ]]
 local DungeonStateModule = {}
 
 function DungeonStateModule.CheckStart()
-    local df = pgui and pgui:FindFirstChild("Main") and (pgui.Main:FindFirstChild("DungeonFrame") or pgui.Main:FindFirstChild("RaidFrame"))
+    local df = pgui and pgui:FindFirstChild("Main") and (pgui.Main:FindFirstChild("DungeonFrame") or pgui.Main:FindFirstChild("RaidFrame") or pgui.Main:FindFirstChild("BossRushFrame"))
     if df and df.Visible then
         local startBtn = df:FindFirstChild("Start") or df:FindFirstChild("Play")
         if startBtn and startBtn:IsA("GuiObject") and startBtn.Visible then
@@ -1057,7 +1071,7 @@ function DungeonStateModule.CheckEnd()
     local main = pgui and pgui:FindFirstChild("Main")
     if not main then return false, nil end
 
-    local df = main:FindFirstChild("DungeonFrame") or main:FindFirstChild("RaidFrame")
+    local df = main:FindFirstChild("DungeonFrame") or main:FindFirstChild("RaidFrame") or main:FindFirstChild("BossRushFrame")
     local dungeonStats = (df and df:FindFirstChild("DungeonStats")) or main:FindFirstChild("DungeonStats", true)
 
     if dungeonStats and dungeonStats.Visible then
@@ -1183,7 +1197,6 @@ task.spawn(function()
                     SharedState.IsVirusActive = false
                     CharacterModule.StopMovement()
 
-                    -- Disparo do Webhook no fim da partida
                     pcall(WebhookModule.ProcessDungeonDrops)
 
                     if ConfigModule.Settings.AutoPlayAgain then
@@ -1210,6 +1223,8 @@ task.spawn(function()
                             FlowModule.RunBleach()
                         elseif ConfigModule.Settings.SelectedPhase == "Incursão" then
                             FlowModule.RunIncursion()
+                        elseif ConfigModule.Settings.SelectedPhase == "Boss Rush" then
+                            FlowModule.RunBossRush()
                         end
                     end
                 end
@@ -1290,6 +1305,13 @@ function UIModule.Shutdown()
     if flightStabilizer then flightStabilizer:Disconnect() end
     if singletonTag and singletonTag.Parent then singletonTag:Destroy() end
     if toggleGui and toggleGui.Parent then toggleGui:Destroy() end
+    
+    pcall(function()
+        if Window and Window.Destroy then
+            Window:Destroy()
+        end
+    end)
+
     for _, gui in ipairs({CoreGui, player.PlayerGui}) do
         for _, child in ipairs(gui:GetChildren()) do
             if child.Name == "IBdihP_PersistentToggle" or child.Name:find("Fluent") then
@@ -1318,7 +1340,7 @@ end)
 local PhaseSection = Tabs.Farm:AddSection("Configurações de Fase & Posição")
 PhaseSection:AddDropdown("PhaseSelector", {
     Title = "Selecionar Fase",
-    Values = { "One Piece", "Bleach (Fase 4)", "Incursão" },
+    Values = { "One Piece", "Bleach (Fase 4)", "Incursão", "Boss Rush" },
     Default = ConfigModule.Settings.SelectedPhase,
     Callback = function(Value) ConfigModule.Settings.SelectedPhase = Value ConfigModule.Save() end
 })
