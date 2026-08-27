@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (FIX PLAY AGAIN INSTANTÂNEO & ENGAGE)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (FIX INCURSÃO & TARGETING COMPLETO)
 -- ====================================================================
 
 -- [[ 1. SINGLETON & BOOTSTRAP ]]
@@ -49,9 +49,9 @@ local pgui = player:WaitForChild("PlayerGui", 20)
 
 local function isInsideDungeon()
     local main = pgui and pgui:FindFirstChild("Main")
-    if main and (main:FindFirstChild("DungeonFrame") or main:FindFirstChild("VirusFrame")) then return true end
-    if workspace:FindFirstChild("Game") and (workspace.Game:FindFirstChild("Enemies") or workspace.Game:FindFirstChild("Teleports") or workspace.Game:FindFirstChild("Stages")) then return true end
-    if workspace:FindFirstChild("Enemies") then return true end
+    if main and (main:FindFirstChild("DungeonFrame") or main:FindFirstChild("VirusFrame") or main:FindFirstChild("RaidFrame")) then return true end
+    if workspace:FindFirstChild("Game") and (workspace.Game:FindFirstChild("Enemies") or workspace.Game:FindFirstChild("Teleports") or workspace.Game:FindFirstChild("Stages") or workspace.Game:FindFirstChild("Raids") or workspace.Game:FindFirstChild("Incursion")) then return true end
+    if workspace:FindFirstChild("Enemies") or workspace:FindFirstChild("Raids") then return true end
     return false
 end
 
@@ -75,6 +75,7 @@ local SharedState = {
     IsClaiming = false,
     IsDungeonEnded = false,
     HasExecutedSell = false,
+    HasExecutedQuests = false,
     HasSentWebhook = false,
     LastRoomState = "Room1",
     CurrentTween = nil,
@@ -400,7 +401,7 @@ function CharacterModule.PressKey(keyCode)
     end)
 end
 
--- [[ 5. MÓDULO DE DETECÇÃO DE INIMIGOS ]]
+-- [[ 5. MÓDULO DE DETECÇÃO DE INIMIGOS (UNIVERSAL & ROBUSTO) ]]
 local TargetingModule = {}
 
 function TargetingModule.IsAlive(obj)
@@ -411,7 +412,7 @@ function TargetingModule.IsAlive(obj)
     if hpAttr then return tonumber(hpAttr) > 0 end
     local hpVal = obj:FindFirstChild("Health") or obj:FindFirstChild("HP")
     if hpVal and hpVal:IsA("ValueBase") then return tonumber(hpVal.Value) > 0 end
-    return false
+    return true
 end
 
 function TargetingModule.GetTargetPart(obj)
@@ -441,32 +442,45 @@ function TargetingModule.GetLivingEnemies(phase)
     end
 
     local gameFolder = workspace:FindFirstChild("Game")
-    local enemiesFolder = (gameFolder and gameFolder:FindFirstChild("Enemies")) or workspace:FindFirstChild("Enemies")
-    if enemiesFolder then
-        for _, enemy in ipairs(enemiesFolder:GetChildren()) do addEntity(enemy) end
+    local searchContainers = {
+        gameFolder and gameFolder:FindFirstChild("Enemies"),
+        workspace:FindFirstChild("Enemies"),
+        gameFolder and gameFolder:FindFirstChild("Stages"),
+        gameFolder and gameFolder:FindFirstChild("Spawns"),
+        gameFolder and gameFolder:FindFirstChild("Virus"),
+        gameFolder and gameFolder:FindFirstChild("Boss"),
+        gameFolder and gameFolder:FindFirstChild("SecretBoss"),
+        gameFolder and gameFolder:FindFirstChild("Raids"),
+        gameFolder and gameFolder:FindFirstChild("Incursion"),
+        workspace:FindFirstChild("Virus"),
+        workspace:FindFirstChild("Raids")
+    }
+
+    for _, container in ipairs(searchContainers) do
+        if container then
+            for _, desc in ipairs(container:GetDescendants()) do
+                if desc:IsA("Model") then addEntity(desc) end
+            end
+            if container:IsA("Model") then addEntity(container) end
+        end
     end
 
-    if SharedState.IsVirusActive or phase == "Incursão" then
-        local virusFolder = (gameFolder and (gameFolder:FindFirstChild("Virus") or gameFolder:FindFirstChild("Boss") or gameFolder:FindFirstChild("SecretBoss"))) or workspace:FindFirstChild("Virus")
-        if virusFolder then
-            for _, mob in ipairs(virusFolder:GetChildren()) do addEntity(mob) end
-            if TargetingModule.IsAlive(virusFolder) then addEntity(virusFolder) end
-        end
-
-        for _, obj in ipairs(workspace:GetChildren()) do
-            if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
-                local name = obj.Name:lower()
-                if name:find("mob") or name:find("enemy") or name:find("boss") or name:find("virus") or obj:FindFirstChildOfClass("Humanoid") then
-                    addEntity(obj)
+    -- Varredura geral de contingência
+    if #list == 0 then
+        if gameFolder then
+            for _, child in ipairs(gameFolder:GetChildren()) do
+                if child:IsA("Model") and child ~= char and not Players:GetPlayerFromCharacter(child) then
+                    addEntity(child)
                 end
             end
         end
-    end
-
-    if #list == 0 and gameFolder and gameFolder:FindFirstChild("Stages") then
-        for _, stage in ipairs(gameFolder.Stages:GetChildren()) do
-            local spawns = stage:FindFirstChild("Spawns") or stage
-            for _, mob in ipairs(spawns:GetChildren()) do addEntity(mob) end
+        for _, obj in ipairs(workspace:GetChildren()) do
+            if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
+                local n = obj.Name:lower()
+                if n:find("mob") or n:find("enemy") or n:find("boss") or n:find("virus") or n:find("raid") or obj:FindFirstChildOfClass("Humanoid") then
+                    addEntity(obj)
+                end
+            end
         end
     end
 
@@ -521,7 +535,10 @@ function CombatModule.DetectWeapon()
     local char = player.Character
     if char and char:FindFirstChildOfClass("Tool") then return char:FindFirstChildOfClass("Tool").Name end
     local bp = player:FindFirstChild("Backpack")
-    if bp and bp:FindFirstChildOfClass("Tool") then return bp:FindFirstChildOfClass("Tool").Name end
+    if bp then
+        local tool = bp:FindFirstChildOfClass("Tool")
+        if tool then return tool.Name end
+    end
     return nil
 end
 
@@ -997,7 +1014,7 @@ function FlowModule.RunOnePiece()
     end
 end
 
--- Rota Incursão
+-- Rota Incursão (Execução Livre e Direta)
 function FlowModule.RunIncursion()
     local _, enemyPart = TargetingModule.GetClosestEnemy("Incursão")
     if enemyPart then
@@ -1007,11 +1024,11 @@ function FlowModule.RunIncursion()
     end
 end
 
--- [[ 10. MÓDULO DE ESTADOS DA DUNGEON (BUSCA ROBUSTA & RESPOSTA RÁPIDA) ]]
+-- [[ 10. MÓDULO DE ESTADOS DA DUNGEON ]]
 local DungeonStateModule = {}
 
 function DungeonStateModule.CheckStart()
-    local df = pgui and pgui:FindFirstChild("Main") and pgui.Main:FindFirstChild("DungeonFrame")
+    local df = pgui and pgui:FindFirstChild("Main") and (pgui.Main:FindFirstChild("DungeonFrame") or pgui.Main:FindFirstChild("RaidFrame"))
     if df and df.Visible then
         local startBtn = df:FindFirstChild("Start") or df:FindFirstChild("Play")
         if startBtn and startBtn:IsA("GuiObject") and startBtn.Visible then
@@ -1040,7 +1057,7 @@ function DungeonStateModule.CheckEnd()
     local main = pgui and pgui:FindFirstChild("Main")
     if not main then return false, nil end
 
-    local df = main:FindFirstChild("DungeonFrame")
+    local df = main:FindFirstChild("DungeonFrame") or main:FindFirstChild("RaidFrame")
     local dungeonStats = (df and df:FindFirstChild("DungeonStats")) or main:FindFirstChild("DungeonStats", true)
 
     if dungeonStats and dungeonStats.Visible then
@@ -1134,15 +1151,16 @@ task.spawn(function()
                 if not initialRoutinesScheduled then
                     initialRoutinesScheduled = true
                     
-                    -- Rotina de Auto-Claim Quests
+                    -- Rotina de Auto-Claim Quests (Execução única no início da run)
                     task.spawn(function()
                         task.wait(13)
-                        if SharedState.IsRunning and ConfigModule.Settings.AutoClaimQuests and not SharedState.IsDungeonEnded then
+                        if SharedState.IsRunning and ConfigModule.Settings.AutoClaimQuests and not SharedState.IsDungeonEnded and not SharedState.HasExecutedQuests then
+                            SharedState.HasExecutedQuests = true
                             QuestModule.ClaimAll()
                         end
                     end)
 
-                    -- Rotina de Auto-Sell e Auto-Favorite (Execução única no início da dungeon)
+                    -- Rotina de Auto-Sell e Auto-Favorite (Execução única no início da run)
                     task.spawn(function()
                         task.wait(ConfigModule.Settings.SellDelaySeconds)
                         if SharedState.IsRunning and not SharedState.IsDungeonEnded and not SharedState.HasExecutedSell then
@@ -1167,10 +1185,6 @@ task.spawn(function()
 
                     -- Disparo do Webhook no fim da partida
                     pcall(WebhookModule.ProcessDungeonDrops)
-
-                    if ConfigModule.Settings.AutoClaimQuests then
-                        pcall(QuestModule.ClaimAll)
-                    end
 
                     if ConfigModule.Settings.AutoPlayAgain then
                         queueNextExecution()
