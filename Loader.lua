@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (FIX INCURSÃO & SHUTDOWN TOTAL)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (INCURSÃO CORRIGIDA VIA STAGES)
 -- ====================================================================
 
 -- [[ 1. SINGLETON & BOOTSTRAP ]]
@@ -50,8 +50,8 @@ local pgui = player:WaitForChild("PlayerGui", 20)
 local function isInsideDungeon()
     local main = pgui and pgui:FindFirstChild("Main")
     if main and (main:FindFirstChild("DungeonFrame") or main:FindFirstChild("VirusFrame") or main:FindFirstChild("RaidFrame") or main:FindFirstChild("BossRushFrame")) then return true end
-    if workspace:FindFirstChild("Game") and (workspace.Game:FindFirstChild("Enemies") or workspace.Game:FindFirstChild("Teleports") or workspace.Game:FindFirstChild("Stages") or workspace.Game:FindFirstChild("Raids") or workspace.Game:FindFirstChild("Incursion")) then return true end
-    if workspace:FindFirstChild("Enemies") or workspace:FindFirstChild("Raids") or workspace:FindFirstChild("Incursion") or workspace:FindFirstChild("Boss") then return true end
+    if workspace:FindFirstChild("Game") and (workspace.Game:FindFirstChild("Enemies") or workspace.Game:FindFirstChild("Teleports") or workspace.Game:FindFirstChild("Stages") or workspace.Game:FindFirstChild("Raids")) then return true end
+    if workspace:FindFirstChild("Enemies") or workspace:FindFirstChild("Raids") or workspace:FindFirstChild("Boss") then return true end
     return false
 end
 
@@ -442,22 +442,17 @@ function TargetingModule.GetLivingEnemies(phase)
     end
 
     local gameFolder = workspace:FindFirstChild("Game")
+    
+    -- Busca prioritária nas pastas oficiais detectadas
     local searchContainers = {
+        gameFolder and gameFolder:FindFirstChild("Stages"),
         gameFolder and gameFolder:FindFirstChild("Enemies"),
         workspace:FindFirstChild("Enemies"),
-        gameFolder and gameFolder:FindFirstChild("Incursion"),
-        gameFolder and gameFolder:FindFirstChild("Raids"),
-        gameFolder and gameFolder:FindFirstChild("Raid"),
-        gameFolder and gameFolder:FindFirstChild("BossRush"),
         gameFolder and gameFolder:FindFirstChild("Boss"),
-        gameFolder and gameFolder:FindFirstChild("Stages"),
-        gameFolder and gameFolder:FindFirstChild("Spawns"),
         gameFolder and gameFolder:FindFirstChild("Virus"),
         gameFolder and gameFolder:FindFirstChild("SecretBoss"),
-        workspace:FindFirstChild("Incursion"),
-        workspace:FindFirstChild("Raids"),
-        workspace:FindFirstChild("Virus"),
-        workspace:FindFirstChild("Boss")
+        gameFolder and gameFolder:FindFirstChild("BossRush"),
+        gameFolder and gameFolder:FindFirstChild("Destructibles")
     }
 
     for _, container in ipairs(searchContainers) do
@@ -469,21 +464,11 @@ function TargetingModule.GetLivingEnemies(phase)
         end
     end
 
-    -- Varredura específica de contingência para Incursão
-    if #list == 0 or phase == "Incursão" then
-        if gameFolder then
-            for _, child in ipairs(gameFolder:GetChildren()) do
-                if child:IsA("Model") and child ~= char and not Players:GetPlayerFromCharacter(child) then
-                    addEntity(child)
-                end
-            end
-        end
-        for _, obj in ipairs(workspace:GetChildren()) do
-            if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
-                local n = obj.Name:lower()
-                if n:find("mob") or n:find("enemy") or n:find("boss") or n:find("incursion") or n:find("raid") or n:find("virus") or obj:FindFirstChildOfClass("Humanoid") then
-                    addEntity(obj)
-                end
+    -- Varredura recursiva completa em workspace.Game
+    if #list == 0 and gameFolder then
+        for _, desc in ipairs(gameFolder:GetDescendants()) do
+            if desc:IsA("Model") and desc ~= char and not Players:GetPlayerFromCharacter(desc) then
+                addEntity(desc)
             end
         end
     end
@@ -1018,7 +1003,7 @@ function FlowModule.RunOnePiece()
     end
 end
 
--- Rota Incursão (Execução direta aos mobs da Raid)
+-- Rota Incursão (Varre os mobs direto em Stages)
 function FlowModule.RunIncursion()
     local _, enemyPart = TargetingModule.GetClosestEnemy("Incursão")
     if enemyPart then
