@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (3S DE ESPERA PARA PLAY AGAIN)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (FREIO IMEDIATO PÓS-MORTE DO BOSS)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON ]]
@@ -263,6 +263,9 @@ flightStabilizer = RunService.Stepped:Connect(function()
             if root and hum and hum.Health > 0 then
                 if SharedState.CurrentTween then
                     root.AssemblyAngularVelocity = Vector3.zero
+                else
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.AssemblyAngularVelocity = Vector3.zero
                 end
             end
         end
@@ -323,14 +326,20 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
     local targetPos = targetCFrame.Position
     local distance = (root.Position - targetPos).Magnitude
 
-    if distance <= 0.8 then return end
+    if distance <= 0.8 then 
+        if SharedState.CurrentTween then
+            SharedState.CurrentTween:Cancel()
+            SharedState.CurrentTween = nil
+        end
+        return 
+    end
 
     if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 1.0 and SharedState.CurrentTween then
         return
     end
 
     SharedState.CurrentTargetPos = targetPos
-    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 10), 0.04, 2.0)
+    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 10), 0.04, 1.5)
 
     if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
     SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = targetCFrame})
@@ -368,6 +377,10 @@ function CharacterModule.FollowBehindLive(targetPart)
         SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = targetCFrame})
         SharedState.CurrentTween:Play()
     else
+        if SharedState.CurrentTween then
+            SharedState.CurrentTween:Cancel()
+            SharedState.CurrentTween = nil
+        end
         root.CFrame = targetCFrame
     end
 end
@@ -404,7 +417,7 @@ function CharacterModule.TriggerButton(btn)
     end)
 end
 
--- [[ 5. DETECÇÃO DE INIMIGOS COM VALIDAÇÃO RÍGIDA DE VIDA ]]
+-- [[ 5. DETECÇÃO DE INIMIGOS COM FILTRO DEFINITIVO DE MORTE ]]
 local TargetingModule = {}
 
 function TargetingModule.IsAlive(obj)
@@ -412,7 +425,7 @@ function TargetingModule.IsAlive(obj)
     
     local hum = obj:FindFirstChildOfClass("Humanoid")
     if hum then 
-        if hum.Health <= 0 or hum:GetState() == Enum.HumanoidStateType.Dead then
+        if hum.Health <= 0 or hum:GetState() == Enum.HumanoidStateType.Dead or hum:GetState() == Enum.HumanoidStateType.Physics then
             return false
         end
     end
@@ -441,7 +454,7 @@ function TargetingModule.GetTargetPart(obj)
         or (obj:IsA("Model") and obj.PrimaryPart)
         or obj:FindFirstChildWhichIsA("BasePart")
     
-    if part and part.Position.Y > -2000 then
+    if part and part.Position.Y > -2000 and part.Transparency < 0.95 then
         return part
     end
     return nil
@@ -1107,10 +1120,9 @@ local function onPlayerDiedHandler()
     SharedState.IsTransitioning = false
     SharedState.LastRoomState = "Room1"
 
-    -- SE ESTIVER NO BOSS RUSH: ESPERA 3 SEGUNDOS E CLICA EM PLAY AGAIN
     if ConfigModule.Settings.SelectedPhase == "Boss Rush" and ConfigModule.Settings.AutoPlayAgain then
         task.spawn(function()
-            task.wait(3.0) -- Espera de 3s configurada
+            task.wait(3.0)
             for _ = 1, 15 do
                 if not SharedState.IsRunning then break end
                 local ended, retryBtn = DungeonStateModule.CheckEnd()
@@ -1244,7 +1256,6 @@ task.spawn(function()
                     pcall(WebhookModule.ProcessDungeonDrops)
 
                     if ConfigModule.Settings.AutoPlayAgain then
-                        -- ESPERA 3 SEGUNDOS ANTES DO PLAY AGAIN
                         task.wait(3.0)
                         queueNextExecution()
                         task.wait(0.2)
