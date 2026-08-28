@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (START 3S REAL + PARADA TOTAL PÓS-BOSS)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (SLIDER DINÂMICO & ISOLAMENTO TOTAL)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON ]]
@@ -73,7 +73,7 @@ local SharedState = {
 -- [[ 2. CONFIGURAÇÕES ]]
 local ConfigModule = {}
 ConfigModule.Settings = {
-    SelectedPhase = "Incursão",
+    SelectedPhase = "One Piece",
     PositionMode = "Nas Costas",
     CustomWeaponName = "VoidRods",
     AutoFarm = true,
@@ -83,7 +83,7 @@ ConfigModule.Settings = {
     AutoPlayAgain = true,
     AutoEngage = true,
     HardcoreMode = false,
-    StartWaitTime = 3.0,
+    StartWaitTime = 2.0,
     SkillCooldown = 0.8,
     SkillMaxDistance = 22,
     HeightAboveEnemy = 8.5,
@@ -259,12 +259,9 @@ end
 
 flightStabilizer = RunService.Stepped:Connect(function()
     if SharedState.IsRunning and ConfigModule.Settings.AutoFarm and not SharedState.IsRespawning and not SharedState.EnteringPortal and not SharedState.IsTransitioning then
-        local canMove = true
-        if SharedState.HasClickedStart and (tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime then
-            canMove = false
-        end
+        local isWaitingInitial = SharedState.HasClickedStart and ((tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime)
 
-        if canMove and SharedState.HasTarget then
+        if not isWaitingInitial and SharedState.HasTarget then
             local _, root, hum = CharacterModule.Get()
             if root and hum and hum.Health > 0 then
                 if not SharedState.CurrentTween then
@@ -982,7 +979,7 @@ function FlowModule.RunBleach()
     end
 end
 
--- Rota One Piece
+-- Rota One Piece (Isolada com checagem de salas e portais)
 function FlowModule.RunOnePiece()
     local _, root = CharacterModule.Get()
     if not root then return end
@@ -1092,7 +1089,7 @@ function DungeonStateModule.CheckStart()
                 CharacterModule.TriggerButton(startBtn)
                 SharedState.IsVirusActive = false
                 SharedState.HasClickedStart = true
-                SharedState.MatchStartTick = tick() -- Inicia a contagem de 3s EXATAMENTE no clique
+                SharedState.MatchStartTick = tick()
                 return
             end
         end
@@ -1317,7 +1314,6 @@ task.spawn(function()
                         SharedState.IsVirusActive = true
                         task.wait(1.0)
                     else
-                        -- Se clicou em Começar, aguarda estritamente os 3 segundos
                         local waitingStart = SharedState.HasClickedStart and ((tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime)
                         
                         if not waitingStart then
@@ -1455,7 +1451,7 @@ PhaseSection:AddDropdown("PhaseSelector", {
 })
 
 PhaseSection:AddDropdown("PositionModeSelector", {
-    Title = "Modo de Posicionamento (Incursão & Outras)",
+    Title = "Modo de Posicionamento",
     Values = { "Nas Costas", "Em Cima da Cabeça", "Padrão (Anterior)" },
     Default = ConfigModule.Settings.PositionMode,
     Callback = function(Value) ConfigModule.Settings.PositionMode = Value ConfigModule.Save() end
@@ -1533,8 +1529,9 @@ CombatSection:AddToggle("AutoStartToggle", {
 })
 CombatSection:AddSlider("StartWaitTimeSlider", {
     Title = "Espera Inicial Pós-Start (s)",
+    Description = "Tempo de espera após clicar no Start antes de começar a se mover e atacar",
     Default = ConfigModule.Settings.StartWaitTime,
-    Min = 0.5, Max = 6.0, Rounding = 1,
+    Min = 0.5, Max = 8.0, Rounding = 1,
     Callback = function(Value) ConfigModule.Settings.StartWaitTime = Value ConfigModule.Save() end
 })
 CombatSection:AddToggle("AutoAttackToggle", {
