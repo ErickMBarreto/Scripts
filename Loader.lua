@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (FREIO IMEDIATO PÓS-MORTE DO BOSS)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (FLUXO ESTÁVEL & ESPERA ISOLADA)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON ]]
@@ -81,7 +81,7 @@ ConfigModule.Settings = {
     AutoPlayAgain = true,
     AutoEngage = true,
     HardcoreMode = false,
-    StartWaitTime = 3.0,
+    StartWaitTime = 2.0,
     SkillCooldown = 0.8,
     SkillMaxDistance = 22,
     HeightAboveEnemy = 8.5,
@@ -131,12 +131,11 @@ function ConfigModule.Load()
 end
 ConfigModule.Load()
 
--- [[ 3. DISCORD WEBHOOK ASSÍNCRONO ]]
+-- [[ 3. DISCORD WEBHOOK ]]
 local WebhookModule = {}
 
 function WebhookModule.Send(payloadTable)
     if not ConfigModule.Settings.WebhookEnabled or ConfigModule.Settings.WebhookURL == "" then return end
-    
     task.spawn(function()
         local httpRequest = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
         if not httpRequest then return end
@@ -258,15 +257,13 @@ end
 
 flightStabilizer = RunService.Stepped:Connect(function()
     if SharedState.IsRunning and ConfigModule.Settings.AutoFarm and not SharedState.IsRespawning and not SharedState.EnteringPortal and not SharedState.IsTransitioning then
-        if (tick() - SharedState.MatchStartTick) >= ConfigModule.Settings.StartWaitTime then
-            local _, root, hum = CharacterModule.Get()
-            if root and hum and hum.Health > 0 then
-                if SharedState.CurrentTween then
-                    root.AssemblyAngularVelocity = Vector3.zero
-                else
-                    root.AssemblyLinearVelocity = Vector3.zero
-                    root.AssemblyAngularVelocity = Vector3.zero
-                end
+        local _, root, hum = CharacterModule.Get()
+        if root and hum and hum.Health > 0 then
+            if not SharedState.CurrentTween then
+                root.AssemblyLinearVelocity = Vector3.new(0, 0.05, 0)
+                root.AssemblyAngularVelocity = Vector3.zero
+            else
+                root.AssemblyAngularVelocity = Vector3.zero
             end
         end
     end
@@ -294,16 +291,9 @@ function CharacterModule.GetSafeCFrame(targetPosition, lookAtPosition)
 end
 
 function CharacterModule.FlyToEnemy(targetPart, overrideMode)
-    if (tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime then return end
-    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning then 
-        CharacterModule.StopMovement()
-        return 
-    end
+    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning then return end
     local _, root = CharacterModule.Get()
-    if not root or not targetPart or not targetPart.Parent then 
-        CharacterModule.StopMovement()
-        return 
-    end
+    if not root or not targetPart or not targetPart.Parent then return end
 
     local enemyPos = targetPart.Position
     local mode = overrideMode or ConfigModule.Settings.PositionMode
@@ -326,20 +316,14 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
     local targetPos = targetCFrame.Position
     local distance = (root.Position - targetPos).Magnitude
 
-    if distance <= 0.8 then 
-        if SharedState.CurrentTween then
-            SharedState.CurrentTween:Cancel()
-            SharedState.CurrentTween = nil
-        end
-        return 
-    end
+    if distance <= 0.8 then return end
 
     if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 1.0 and SharedState.CurrentTween then
         return
     end
 
     SharedState.CurrentTargetPos = targetPos
-    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 10), 0.04, 1.5)
+    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 10), 0.04, 2.0)
 
     if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
     SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = targetCFrame})
@@ -347,16 +331,9 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
 end
 
 function CharacterModule.FollowBehindLive(targetPart)
-    if (tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime then return end
-    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning then 
-        CharacterModule.StopMovement()
-        return 
-    end
+    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning then return end
     local _, root = CharacterModule.Get()
-    if not root or not targetPart or not targetPart.Parent then 
-        CharacterModule.StopMovement()
-        return 
-    end
+    if not root or not targetPart or not targetPart.Parent then return end
 
     local enemyPos = targetPart.Position
     local lookVec = targetPart.CFrame.LookVector
@@ -377,16 +354,11 @@ function CharacterModule.FollowBehindLive(targetPart)
         SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = targetCFrame})
         SharedState.CurrentTween:Play()
     else
-        if SharedState.CurrentTween then
-            SharedState.CurrentTween:Cancel()
-            SharedState.CurrentTween = nil
-        end
         root.CFrame = targetCFrame
     end
 end
 
 function CharacterModule.FlyToPortal(targetCFrame)
-    if (tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime then return end
     if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or not SharedState.IsRunning then return end
     local _, root = CharacterModule.Get()
     if not root or not root.Parent then return end
@@ -417,35 +389,23 @@ function CharacterModule.TriggerButton(btn)
     end)
 end
 
--- [[ 5. DETECÇÃO DE INIMIGOS COM FILTRO DEFINITIVO DE MORTE ]]
+-- [[ 5. DETECÇÃO DE INIMIGOS ]]
 local TargetingModule = {}
 
 function TargetingModule.IsAlive(obj)
     if not obj or not obj.Parent then return false end
-    
     local hum = obj:FindFirstChildOfClass("Humanoid")
-    if hum then 
-        if hum.Health <= 0 or hum:GetState() == Enum.HumanoidStateType.Dead or hum:GetState() == Enum.HumanoidStateType.Physics then
-            return false
-        end
-    end
-    
+    if hum then return (hum.Health > 0 and hum:GetState() ~= Enum.HumanoidStateType.Dead) end
     local hpAttr = obj:GetAttribute("Health") or obj:GetAttribute("HP") or obj:GetAttribute("CurrentHealth")
-    if hpAttr and tonumber(hpAttr) <= 0 then 
-        return false 
-    end
-    
+    if hpAttr then return tonumber(hpAttr) > 0 end
     local hpVal = obj:FindFirstChild("Health") or obj:FindFirstChild("HP")
-    if hpVal and hpVal:IsA("ValueBase") and tonumber(hpVal.Value) <= 0 then 
-        return false 
-    end
-    
+    if hpVal and hpVal:IsA("ValueBase") then return tonumber(hpVal.Value) > 0 end
     return true
 end
 
 function TargetingModule.GetTargetPart(obj)
     if not obj or not obj.Parent then return nil end
-    local part = obj:FindFirstChild("HumanoidRootPart")
+    return obj:FindFirstChild("HumanoidRootPart")
         or obj:FindFirstChild("RootPart")
         or obj:FindFirstChild("Hitbox")
         or obj:FindFirstChild("HitBox")
@@ -453,11 +413,6 @@ function TargetingModule.GetTargetPart(obj)
         or obj:FindFirstChild("Torso")
         or (obj:IsA("Model") and obj.PrimaryPart)
         or obj:FindFirstChildWhichIsA("BasePart")
-    
-    if part and part.Position.Y > -2000 and part.Transparency < 0.95 then
-        return part
-    end
-    return nil
 end
 
 function TargetingModule.GetLivingEnemies(phase)
@@ -1029,7 +984,7 @@ end
 -- Rota Boss Rush
 function FlowModule.RunBossRush()
     local _, enemyPart = TargetingModule.GetClosestEnemy("Boss Rush")
-    if enemyPart and enemyPart.Parent and enemyPart.Position.Y > -2000 then
+    if enemyPart and enemyPart.Parent then
         CharacterModule.FollowBehindLive(enemyPart)
     else
         CharacterModule.StopMovement()
@@ -1039,7 +994,7 @@ end
 -- Rota Incursão
 function FlowModule.RunIncursion()
     local _, enemyPart = TargetingModule.GetClosestEnemy("Incursão")
-    if enemyPart and enemyPart.Parent and enemyPart.Position.Y > -2000 then
+    if enemyPart and enemyPart.Parent then
         CharacterModule.FlyToEnemy(enemyPart, ConfigModule.Settings.PositionMode)
     else
         CharacterModule.StopMovement()
@@ -1183,6 +1138,7 @@ end)
 
 -- [[ 11. LOOPS PRINCIPAIS INDEPENDENTES ]]
 local initialRoutinesScheduled = false
+local isHandlingPlayAgain = false
 
 -- Loop 1: Ataque M1
 task.spawn(function()
@@ -1255,12 +1211,18 @@ task.spawn(function()
 
                     pcall(WebhookModule.ProcessDungeonDrops)
 
-                    if ConfigModule.Settings.AutoPlayAgain then
-                        task.wait(3.0)
-                        queueNextExecution()
-                        task.wait(0.2)
-                        CharacterModule.TriggerButton(playAgainBtn)
-                        task.wait(3.0)
+                    if ConfigModule.Settings.AutoPlayAgain and not isHandlingPlayAgain then
+                        isHandlingPlayAgain = true
+                        task.spawn(function()
+                            task.wait(3.0) -- Espera isolada em background sem travar o loop de combate
+                            if SharedState.IsRunning then
+                                queueNextExecution()
+                                task.wait(0.2)
+                                CharacterModule.TriggerButton(playAgainBtn)
+                            end
+                            task.wait(3.0)
+                            isHandlingPlayAgain = false
+                        end)
                     end
                 else
                     SharedState.IsDungeonEnded = false
