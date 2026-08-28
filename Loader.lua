@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (SLIDER DINÂMICO & ISOLAMENTO TOTAL)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (DETECÇÃO DE MONSTROS RESTAURADA)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON ]]
@@ -421,7 +421,7 @@ function CharacterModule.TriggerButton(btn)
     end)
 end
 
--- [[ 5. DETECÇÃO DE INIMIGOS ]]
+-- [[ 5. DETECÇÃO DE INIMIGOS (RESTAURADA E SEM FILTRO DE TRANSPARÊNCIA) ]]
 local TargetingModule = {}
 
 function TargetingModule.IsAlive(obj)
@@ -429,7 +429,7 @@ function TargetingModule.IsAlive(obj)
     
     local hum = obj:FindFirstChildOfClass("Humanoid")
     if hum then 
-        if hum.Health <= 0 or hum:GetState() == Enum.HumanoidStateType.Dead or hum:GetState() == Enum.HumanoidStateType.Physics then
+        if hum.Health <= 0 or hum:GetState() == Enum.HumanoidStateType.Dead then
             return false
         end
     end
@@ -458,7 +458,7 @@ function TargetingModule.GetTargetPart(obj)
         or (obj:IsA("Model") and obj.PrimaryPart)
         or obj:FindFirstChildWhichIsA("BasePart")
     
-    if part and part.Position.Y > -2000 and part.Transparency < 0.95 then
+    if part and part.Position.Y > -2000 then
         return part
     end
     return nil
@@ -979,7 +979,7 @@ function FlowModule.RunBleach()
     end
 end
 
--- Rota One Piece (Isolada com checagem de salas e portais)
+-- Rota One Piece (Totalmente Isolada)
 function FlowModule.RunOnePiece()
     local _, root = CharacterModule.Get()
     if not root then return end
@@ -1089,7 +1089,7 @@ function DungeonStateModule.CheckStart()
                 CharacterModule.TriggerButton(startBtn)
                 SharedState.IsVirusActive = false
                 SharedState.HasClickedStart = true
-                SharedState.MatchStartTick = tick()
+                SharedState.MatchStartTick = tick() -- Inicia contagem do slider na hora do clique
                 return
             end
         end
