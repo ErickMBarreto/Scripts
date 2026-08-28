@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (FIX: LOADING INFINITO & ASYNC WEBHOOK)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (PARADA IMEDIATA PÓS-KILL / SEM VOO LIVRE)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON ]]
@@ -64,7 +64,8 @@ local SharedState = {
     CurrentTween = nil,
     CurrentTargetPos = nil,
     LastPortalAttempt = 0,
-    LastStartAttempt = 0
+    LastStartAttempt = 0,
+    MatchStartTick = tick()
 }
 
 -- [[ 2. CONFIGURAÇÕES ]]
@@ -80,7 +81,7 @@ ConfigModule.Settings = {
     AutoPlayAgain = true,
     AutoEngage = true,
     HardcoreMode = false,
-    StartWaitTime = 2.0,
+    StartWaitTime = 3.0,
     SkillCooldown = 0.8,
     SkillMaxDistance = 22,
     HeightAboveEnemy = 8.5,
@@ -130,13 +131,12 @@ function ConfigModule.Load()
 end
 ConfigModule.Load()
 
--- [[ 3. DISCORD WEBHOOK TOTALMENTE ASSÍNCRONO ]]
+-- [[ 3. DISCORD WEBHOOK ASSÍNCRONO ]]
 local WebhookModule = {}
 
 function WebhookModule.Send(payloadTable)
     if not ConfigModule.Settings.WebhookEnabled or ConfigModule.Settings.WebhookURL == "" then return end
     
-    -- Disparo isolado em thread independente para jamais travar o client
     task.spawn(function()
         local httpRequest = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
         if not httpRequest then return end
@@ -235,6 +235,11 @@ function CharacterModule.StopMovement()
         SharedState.CurrentTween = nil
     end
     SharedState.CurrentTargetPos = nil
+    local _, root = CharacterModule.Get()
+    if root then
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end
 end
 
 function CharacterModule.ApplyPhysicsStabilizers(char)
@@ -253,13 +258,12 @@ end
 
 flightStabilizer = RunService.Stepped:Connect(function()
     if SharedState.IsRunning and ConfigModule.Settings.AutoFarm and not SharedState.IsRespawning and not SharedState.EnteringPortal and not SharedState.IsTransitioning then
-        local _, root, hum = CharacterModule.Get()
-        if root and hum and hum.Health > 0 then
-            if not SharedState.CurrentTween then
-                root.AssemblyLinearVelocity = Vector3.new(0, 0.05, 0)
-                root.AssemblyAngularVelocity = Vector3.zero
-            else
-                root.AssemblyAngularVelocity = Vector3.zero
+        if (tick() - SharedState.MatchStartTick) >= ConfigModule.Settings.StartWaitTime then
+            local _, root, hum = CharacterModule.Get()
+            if root and hum and hum.Health > 0 then
+                if SharedState.CurrentTween then
+                    root.AssemblyAngularVelocity = Vector3.zero
+                end
             end
         end
     end
@@ -287,9 +291,16 @@ function CharacterModule.GetSafeCFrame(targetPosition, lookAtPosition)
 end
 
 function CharacterModule.FlyToEnemy(targetPart, overrideMode)
-    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning then return end
+    if (tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime then return end
+    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning then 
+        CharacterModule.StopMovement()
+        return 
+    end
     local _, root = CharacterModule.Get()
-    if not root or not targetPart or not targetPart.Parent then return end
+    if not root or not targetPart or not targetPart.Parent then 
+        CharacterModule.StopMovement()
+        return 
+    end
 
     local enemyPos = targetPart.Position
     local mode = overrideMode or ConfigModule.Settings.PositionMode
@@ -327,9 +338,16 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
 end
 
 function CharacterModule.FollowBehindLive(targetPart)
-    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning then return end
+    if (tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime then return end
+    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning then 
+        CharacterModule.StopMovement()
+        return 
+    end
     local _, root = CharacterModule.Get()
-    if not root or not targetPart or not targetPart.Parent then return end
+    if not root or not targetPart or not targetPart.Parent then 
+        CharacterModule.StopMovement()
+        return 
+    end
 
     local enemyPos = targetPart.Position
     local lookVec = targetPart.CFrame.LookVector
@@ -355,6 +373,7 @@ function CharacterModule.FollowBehindLive(targetPart)
 end
 
 function CharacterModule.FlyToPortal(targetCFrame)
+    if (tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime then return end
     if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or not SharedState.IsRunning then return end
     local _, root = CharacterModule.Get()
     if not root or not root.Parent then return end
@@ -385,23 +404,35 @@ function CharacterModule.TriggerButton(btn)
     end)
 end
 
--- [[ 5. DETECÇÃO DE INIMIGOS ]]
+-- [[ 5. DETECÇÃO DE INIMIGOS COM VALIDAÇÃO RÍGIDA DE VIDA ]]
 local TargetingModule = {}
 
 function TargetingModule.IsAlive(obj)
     if not obj or not obj.Parent then return false end
+    
     local hum = obj:FindFirstChildOfClass("Humanoid")
-    if hum then return (hum.Health > 0 and hum:GetState() ~= Enum.HumanoidStateType.Dead) end
+    if hum then 
+        if hum.Health <= 0 or hum:GetState() == Enum.HumanoidStateType.Dead then
+            return false
+        end
+    end
+    
     local hpAttr = obj:GetAttribute("Health") or obj:GetAttribute("HP") or obj:GetAttribute("CurrentHealth")
-    if hpAttr then return tonumber(hpAttr) > 0 end
+    if hpAttr and tonumber(hpAttr) <= 0 then 
+        return false 
+    end
+    
     local hpVal = obj:FindFirstChild("Health") or obj:FindFirstChild("HP")
-    if hpVal and hpVal:IsA("ValueBase") then return tonumber(hpVal.Value) > 0 end
+    if hpVal and hpVal:IsA("ValueBase") and tonumber(hpVal.Value) <= 0 then 
+        return false 
+    end
+    
     return true
 end
 
 function TargetingModule.GetTargetPart(obj)
     if not obj or not obj.Parent then return nil end
-    return obj:FindFirstChild("HumanoidRootPart")
+    local part = obj:FindFirstChild("HumanoidRootPart")
         or obj:FindFirstChild("RootPart")
         or obj:FindFirstChild("Hitbox")
         or obj:FindFirstChild("HitBox")
@@ -409,6 +440,11 @@ function TargetingModule.GetTargetPart(obj)
         or obj:FindFirstChild("Torso")
         or (obj:IsA("Model") and obj.PrimaryPart)
         or obj:FindFirstChildWhichIsA("BasePart")
+    
+    if part and part.Position.Y > -2000 then
+        return part
+    end
+    return nil
 end
 
 function TargetingModule.GetLivingEnemies(phase)
@@ -820,6 +856,7 @@ local function triggerZoneTouch(targetPos)
 end
 
 function FlowModule.PassPortal(targetCFrame)
+    if (tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime then return end
     local _, root, hum = CharacterModule.Get()
     if not root or not hum then return end
 
@@ -979,20 +1016,17 @@ end
 -- Rota Boss Rush
 function FlowModule.RunBossRush()
     local _, enemyPart = TargetingModule.GetClosestEnemy("Boss Rush")
-    if enemyPart and enemyPart.Parent then
+    if enemyPart and enemyPart.Parent and enemyPart.Position.Y > -2000 then
         CharacterModule.FollowBehindLive(enemyPart)
     else
         CharacterModule.StopMovement()
     end
 end
 
--- Rota Incursão
+-- Rota Incursão (12 Waves - Para imediatamente ao matar cada mob/boss)
 function FlowModule.RunIncursion()
-    local _, root = CharacterModule.Get()
-    if not root then return end
-
     local _, enemyPart = TargetingModule.GetClosestEnemy("Incursão")
-    if enemyPart and enemyPart.Parent then
+    if enemyPart and enemyPart.Parent and enemyPart.Position.Y > -2000 then
         CharacterModule.FlyToEnemy(enemyPart, ConfigModule.Settings.PositionMode)
     else
         CharacterModule.StopMovement()
@@ -1021,6 +1055,7 @@ function DungeonStateModule.CheckStart()
             if startBtn and startBtn:IsA("GuiObject") and startBtn.Visible then
                 CharacterModule.TriggerButton(startBtn)
                 SharedState.IsVirusActive = false
+                SharedState.MatchStartTick = tick()
                 return
             end
         end
@@ -1127,6 +1162,7 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
     SharedState.EnteringPortal = false
     SharedState.HasSentWebhook = false
     SharedState.LastRoomState = "Room1"
+    SharedState.MatchStartTick = tick()
     CharacterModule.StopMovement()
     bindCharacterEvents(newChar)
     task.delay(0.8, function() SharedState.IsRespawning = false end)
@@ -1138,10 +1174,12 @@ local initialRoutinesScheduled = false
 -- Loop 1: Ataque M1
 task.spawn(function()
     while SharedState.IsRunning do
-        if ConfigModule.Settings.AutoAttack and not SharedState.IsDungeonEnded and not SharedState.IsRespawning and not SharedState.IsTransitioning and not SharedState.EnteringPortal then
-            local _, _, hum = CharacterModule.Get()
-            if hum and hum.Health > 0 then 
-                CombatModule.ExecuteM1() 
+        if (tick() - SharedState.MatchStartTick) >= ConfigModule.Settings.StartWaitTime then
+            if ConfigModule.Settings.AutoAttack and not SharedState.IsDungeonEnded and not SharedState.IsRespawning and not SharedState.IsTransitioning and not SharedState.EnteringPortal then
+                local _, _, hum = CharacterModule.Get()
+                if hum and hum.Health > 0 then 
+                    CombatModule.ExecuteM1() 
+                end
             end
         end
         task.wait(ConfigModule.Settings.AttackSpeed)
@@ -1151,10 +1189,12 @@ end)
 -- Loop 2: Skills
 task.spawn(function()
     while SharedState.IsRunning do
-        if ConfigModule.Settings.AutoSkills and not SharedState.IsDungeonEnded and not SharedState.IsRespawning and not SharedState.IsTransitioning and not SharedState.EnteringPortal then
-            local _, _, hum = CharacterModule.Get()
-            if hum and hum.Health > 0 then 
-                CombatModule.ExecuteSkills() 
+        if (tick() - SharedState.MatchStartTick) >= ConfigModule.Settings.StartWaitTime then
+            if ConfigModule.Settings.AutoSkills and not SharedState.IsDungeonEnded and not SharedState.IsRespawning and not SharedState.IsTransitioning and not SharedState.EnteringPortal then
+                local _, _, hum = CharacterModule.Get()
+                if hum and hum.Health > 0 then 
+                    CombatModule.ExecuteSkills() 
+                end
             end
         end
         task.wait(0.1)
@@ -1220,14 +1260,18 @@ task.spawn(function()
                         SharedState.IsVirusActive = true
                         task.wait(1.0)
                     else
-                        if ConfigModule.Settings.SelectedPhase == "One Piece" then
-                            FlowModule.RunOnePiece()
-                        elseif ConfigModule.Settings.SelectedPhase == "Bleach (Fase 4)" then
-                            FlowModule.RunBleach()
-                        elseif ConfigModule.Settings.SelectedPhase == "Boss Rush" then
-                            FlowModule.RunBossRush()
-                        elseif ConfigModule.Settings.SelectedPhase == "Incursão" then
-                            FlowModule.RunIncursion()
+                        if (tick() - SharedState.MatchStartTick) >= ConfigModule.Settings.StartWaitTime then
+                            if ConfigModule.Settings.SelectedPhase == "One Piece" then
+                                FlowModule.RunOnePiece()
+                            elseif ConfigModule.Settings.SelectedPhase == "Bleach (Fase 4)" then
+                                FlowModule.RunBleach()
+                            elseif ConfigModule.Settings.SelectedPhase == "Boss Rush" then
+                                FlowModule.RunBossRush()
+                            elseif ConfigModule.Settings.SelectedPhase == "Incursão" then
+                                FlowModule.RunIncursion()
+                            end
+                        else
+                            CharacterModule.StopMovement()
                         end
                     end
                 end
@@ -1306,7 +1350,6 @@ function UIModule.Shutdown()
     if charConnection then charConnection:Disconnect() end
     if diedConnection then diedConnection:Disconnect() end
     if flightStabilizer then flightStabilizer:Disconnect() end
-    if singletonTag and singletonTag.Parent then singletonTag:Destroy() end
     if toggleGui and toggleGui.Parent then toggleGui:Destroy() end
     
     pcall(function()
