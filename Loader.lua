@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (PARADA IMEDIATA PÓS-KILL / SEM VOO LIVRE)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (3S DE ESPERA PARA PLAY AGAIN)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON ]]
@@ -1023,7 +1023,7 @@ function FlowModule.RunBossRush()
     end
 end
 
--- Rota Incursão (12 Waves - Para imediatamente ao matar cada mob/boss)
+-- Rota Incursão
 function FlowModule.RunIncursion()
     local _, enemyPart = TargetingModule.GetClosestEnemy("Incursão")
     if enemyPart and enemyPart.Parent and enemyPart.Position.Y > -2000 then
@@ -1107,9 +1107,10 @@ local function onPlayerDiedHandler()
     SharedState.IsTransitioning = false
     SharedState.LastRoomState = "Room1"
 
+    -- SE ESTIVER NO BOSS RUSH: ESPERA 3 SEGUNDOS E CLICA EM PLAY AGAIN
     if ConfigModule.Settings.SelectedPhase == "Boss Rush" and ConfigModule.Settings.AutoPlayAgain then
         task.spawn(function()
-            task.wait(1.5)
+            task.wait(3.0) -- Espera de 3s configurada
             for _ = 1, 15 do
                 if not SharedState.IsRunning then break end
                 local ended, retryBtn = DungeonStateModule.CheckEnd()
@@ -1243,8 +1244,10 @@ task.spawn(function()
                     pcall(WebhookModule.ProcessDungeonDrops)
 
                     if ConfigModule.Settings.AutoPlayAgain then
+                        -- ESPERA 3 SEGUNDOS ANTES DO PLAY AGAIN
+                        task.wait(3.0)
                         queueNextExecution()
-                        task.wait(0.15)
+                        task.wait(0.2)
                         CharacterModule.TriggerButton(playAgainBtn)
                         task.wait(3.0)
                     end
