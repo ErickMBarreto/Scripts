@@ -1,8 +1,8 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (DETECÇÃO DE MONSTROS RESTAURADA)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (DROPDOWN DE ARMAS: YORU & EMPERORBISENTO)
 -- ====================================================================
 
--- [[ 1. TRAVA GLOBAL SINGLETON ]]
+-- [[ 1. TRAVA GLOBAL SINGLETON & CACHE LOCAL ]]
 if getgenv and getgenv().HubDosRapazes_Loaded then
     return
 end
@@ -18,6 +18,17 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Loader.lua"
+local SCRIPT_NAME = "HubRapazes_Local.lua"
+
+pcall(function()
+    if writefile then
+        local rawCode = game:HttpGet(scriptURL)
+        if rawCode and #rawCode > 500 then
+            writefile(SCRIPT_NAME, rawCode)
+        end
+    end
+end)
+
 local function queueNextExecution()
     local queueFunc = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or queueonteleport
     if queueFunc then
@@ -26,8 +37,13 @@ local function queueNextExecution()
                 if getgenv then getgenv().HubDosRapazes_Loaded = nil end
                 repeat task.wait(0.5) until game:IsLoaded() and game.Players.LocalPlayer
                 task.wait(2.5)
-                loadstring(game:HttpGet("%s"))()
-            ]], scriptURL))
+                
+                if readfile and isfile and isfile("%s") then
+                    loadstring(readfile("%s"))()
+                else
+                    loadstring(game:HttpGet("%s"))()
+                end
+            ]], SCRIPT_NAME, SCRIPT_NAME, scriptURL))
         end)
     end
 end
@@ -75,7 +91,7 @@ local ConfigModule = {}
 ConfigModule.Settings = {
     SelectedPhase = "One Piece",
     PositionMode = "Nas Costas",
-    CustomWeaponName = "VoidRods",
+    CustomWeaponName = "Yoru",
     AutoFarm = true,
     AutoAttack = true,
     AutoSkills = true,
@@ -421,7 +437,7 @@ function CharacterModule.TriggerButton(btn)
     end)
 end
 
--- [[ 5. DETECÇÃO DE INIMIGOS (RESTAURADA E SEM FILTRO DE TRANSPARÊNCIA) ]]
+-- [[ 5. DETECÇÃO DE INIMIGOS ]]
 local TargetingModule = {}
 
 function TargetingModule.IsAlive(obj)
@@ -542,40 +558,11 @@ local skillRemote = ReplicatedStorage:WaitForChild("Remotes", 10):FindFirstChild
 local lastSkillUse = 0
 local comboIndex = 1
 
-function CombatModule.DetectWeapon()
-    local char = player.Character
-    if char and char:FindFirstChildOfClass("Tool") then 
-        return char:FindFirstChildOfClass("Tool").Name 
-    end
-
-    local pguiRef = player:FindFirstChild("PlayerGui")
-    if pguiRef then
-        for _, desc in ipairs(pguiRef:GetDescendants()) do
-            if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Visible then
-                local txt = desc.Text:lower()
-                if txt:find("unequip") or txt:find("desequipar") or txt:find("equipped") then
-                    local parentSlot = desc:FindFirstAncestorWhichIsA("Frame") or desc:FindFirstAncestorWhichIsA("ImageLabel") or desc.Parent
-                    if parentSlot and parentSlot.Name ~= "Items" and parentSlot.Name ~= "Scroll" then
-                        return parentSlot.Name
-                    end
-                end
-            end
-        end
-    end
-
-    local bp = player:FindFirstChild("Backpack")
-    if bp then
-        local tool = bp:FindFirstChildOfClass("Tool")
-        if tool then return tool.Name end
-    end
-    return nil
-end
-
 function CombatModule.GetEffectiveWeapon()
     if ConfigModule.Settings.CustomWeaponName and ConfigModule.Settings.CustomWeaponName ~= "" then
         return ConfigModule.Settings.CustomWeaponName
     end
-    return CombatModule.DetectWeapon() or "VoidRods"
+    return "Yoru"
 end
 
 function CombatModule.GetHotbar()
@@ -979,7 +966,7 @@ function FlowModule.RunBleach()
     end
 end
 
--- Rota One Piece (Totalmente Isolada)
+-- Rota One Piece
 function FlowModule.RunOnePiece()
     local _, root = CharacterModule.Get()
     if not root then return end
@@ -1089,7 +1076,7 @@ function DungeonStateModule.CheckStart()
                 CharacterModule.TriggerButton(startBtn)
                 SharedState.IsVirusActive = false
                 SharedState.HasClickedStart = true
-                SharedState.MatchStartTick = tick() -- Inicia contagem do slider na hora do clique
+                SharedState.MatchStartTick = tick()
                 return
             end
         end
@@ -1458,27 +1445,13 @@ PhaseSection:AddDropdown("PositionModeSelector", {
 })
 
 local WeaponSection = Tabs.Farm:AddSection("Configuração de Arma")
-local WeaponInput = WeaponSection:AddInput("WeaponInputBox", {
-    Title = "Arma Equipada / Nome",
+WeaponSection:AddDropdown("WeaponSelector", {
+    Title = "Selecionar Arma Equipada",
+    Values = { "Yoru", "EmperorBisento" },
     Default = ConfigModule.Settings.CustomWeaponName,
-    Placeholder = "Ex: VoidRods, Katana...",
-    Finished = true,
-    Callback = function(Value) ConfigModule.Settings.CustomWeaponName = Value ConfigModule.Save() end
-})
-
-WeaponSection:AddButton({
-    Title = "🔍 Detectar Arma da Mão",
-    Description = "Lê automaticamente o nome da arma equipada",
-    Callback = function()
-        local detected = CombatModule.DetectWeapon()
-        if detected and detected ~= "" then
-            ConfigModule.Settings.CustomWeaponName = detected
-            WeaponInput:SetValue(detected)
-            ConfigModule.Save()
-            Fluent:Notify({ Title = "Arma Detectada", Content = "Identificada: " .. tostring(detected), Duration = 4 })
-        else
-            Fluent:Notify({ Title = "Não Encontrada", Content = "Digite o nome exato da arma.", Duration = 4 })
-        end
+    Callback = function(Value)
+        ConfigModule.Settings.CustomWeaponName = Value
+        ConfigModule.Save()
     end
 })
 
