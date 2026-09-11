@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (INFINITY COM AUTO SKIP WAVE)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (INFINITY COM SKIP WAVE VIA REMOTE)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON & CACHE LOCAL ]]
@@ -488,8 +488,9 @@ function InfinityMovement.HoldCenter()
     CharacterModule.StopMovement()
 end
 
--- [[ 6. MÓDULO DE SELEÇÃO DE CARTAS & SKIP WAVE (INFINITY) ]]
+-- [[ 6. MÓDULO DE SELEÇÃO DE CARTAS & SKIP WAVE DIRETO VIA REMOTE (INFINITY) ]]
 local InfinityBonusModule = {}
+local dungeonRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Dungeon", 10)
 
 function InfinityBonusModule.CheckBonus()
     local main = pgui:FindFirstChild("Main")
@@ -519,33 +520,16 @@ end
 
 function InfinityBonusModule.CheckSkipWave()
     if not ConfigModule.Settings.InfinityAutoSkipWave then return end
-    if (tick() - SharedState.LastSkipAttempt) < 0.8 then return end
+    if (tick() - SharedState.LastSkipAttempt) < 0.5 then return end
+    if SharedState.IsSelectingBonus or SharedState.IsDungeonEnded then return end
 
-    local main = pgui:FindFirstChild("Main")
-    local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
-    if not dungeonFrame or not dungeonFrame.Visible then return end
+    SharedState.LastSkipAttempt = tick()
 
-    for _, desc in ipairs(dungeonFrame:GetDescendants()) do
-        if (desc:IsA("ImageButton") or desc:IsA("TextButton")) and desc.Visible then
-            local nameLower = desc.Name:lower()
-            local textMatch = false
-
-            if desc:IsA("TextButton") and desc.Text then
-                local txt = desc.Text:lower()
-                if txt:find("skip") then textMatch = true end
-            else
-                local lbl = desc:FindFirstChildOfClass("TextLabel")
-                if lbl and lbl.Text and lbl.Text:lower():find("skip") then
-                    textMatch = true
-                end
-            end
-
-            if nameLower:find("skip") or textMatch then
-                SharedState.LastSkipAttempt = tick()
-                CharacterModule.TriggerButton(desc)
-                break
-            end
-        end
+    -- Disparo direto via RemoteEvent capturado
+    if dungeonRemote then
+        pcall(function()
+            dungeonRemote:FireServer("InfinitySkipWave")
+        end)
     end
 end
 
@@ -1176,7 +1160,7 @@ function FlowModule.RunInfinity()
         return
     end
 
-    -- 2. Tenta pular a wave caso o botão Skip Wave esteja disponível
+    -- 2. Dispara o Skip Wave direto pelo Remote (sem depender da UI)
     InfinityBonusModule.CheckSkipWave()
 
     -- 3. Busca inimigos vivos na arena
@@ -1685,8 +1669,8 @@ CombatSection:AddSlider("SkillCooldownSlider", {
 -- ABA INFINITY (EXCLUSIVA)
 local InfinitySection = Tabs.Infinity:AddSection("Configurações do Modo Roguelike (Infinity)")
 InfinitySection:AddToggle("InfinitySkipWaveToggle", {
-    Title = "Auto Skip Wave",
-    Description = "Clica automaticamente em 'Skip Wave' assim que a opção aparecer",
+    Title = "Auto Skip Wave (Direct Remote)",
+    Description = "Envia 'InfinitySkipWave' direto para o servidor a cada 0.5s",
     Default = ConfigModule.Settings.InfinityAutoSkipWave,
     Callback = function(Value)
         ConfigModule.Settings.InfinityAutoSkipWave = Value
