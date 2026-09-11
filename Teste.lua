@@ -1,24 +1,58 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (COM AUTO-SELL & AUTO-FAVORITE)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (FASE INFINITY TOTALMENTE ISOLADA)
 -- ====================================================================
 
--- [[ 1. SINGLETON & BOOTSTRAP ]]
+-- [[ 1. TRAVA GLOBAL SINGLETON & CACHE LOCAL ]]
+if getgenv and getgenv().HubDosRapazes_Loaded then
+    return
+end
+if getgenv then
+    getgenv().HubDosRapazes_Loaded = true
+end
+
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local TweenService = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local VirtualInputManager = game:GetService("VirtualInputManager")
 local RunService = game:GetService("RunService")
 
-local UNIQUE_ID = "HubRapazes_Singleton_Tag"
-if CoreGui:FindFirstChild(UNIQUE_ID) then return end
+local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Loader.lua"
+local SCRIPT_NAME = "HubRapazes_Local.lua"
 
-local singletonTag = Instance.new("Folder")
-singletonTag.Name = UNIQUE_ID
-pcall(function() singletonTag.Parent = CoreGui end)
+pcall(function()
+    if writefile then
+        local rawCode = game:HttpGet(scriptURL)
+        if rawCode and #rawCode > 500 then
+            writefile(SCRIPT_NAME, rawCode)
+        end
+    end
+end)
 
-for _, gui in ipairs({CoreGui, Players.LocalPlayer and Players.LocalPlayer:FindFirstChild("PlayerGui")}) do
+local function queueNextExecution()
+    local queueFunc = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or queueonteleport
+    if queueFunc then
+        pcall(function()
+            queueFunc(string.format([[
+                if getgenv then getgenv().HubDosRapazes_Loaded = nil end
+                repeat task.wait(0.5) until game:IsLoaded() and game.Players.LocalPlayer
+                task.wait(2.5)
+                
+                if readfile and isfile and isfile("%s") then
+                    loadstring(readfile("%s"))()
+                else
+                    loadstring(game:HttpGet("%s"))()
+                end
+            ]], SCRIPT_NAME, SCRIPT_NAME, scriptURL))
+        end)
+    end
+end
+
+if not game:IsLoaded() then game.Loaded:Wait() end
+local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
+local pgui = player:WaitForChild("PlayerGui", 20)
+
+for _, gui in ipairs({CoreGui, pgui}) do
     if gui then
         for _, child in ipairs(gui:GetChildren()) do
             if child.Name == "IBdihP_PersistentToggle" or child.Name:find("Fluent") then
@@ -28,42 +62,7 @@ for _, gui in ipairs({CoreGui, Players.LocalPlayer and Players.LocalPlayer:FindF
     end
 end
 
-local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Teste.lua"
-local function queueNextExecution()
-    local queueFunc = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or queueonteleport
-    if queueFunc then
-        pcall(function()
-            queueFunc(string.format([[
-                repeat task.wait(0.5) until game:IsLoaded() and game.Players.LocalPlayer
-                task.wait(1.5)
-                loadstring(game:HttpGet("%s"))()
-            ]], scriptURL))
-        end)
-    end
-end
-queueNextExecution()
-
-if not game:IsLoaded() then game.Loaded:Wait() end
-local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
-local pgui = player:WaitForChild("PlayerGui", 20)
-
-local function isInsideDungeon()
-    local main = pgui and pgui:FindFirstChild("Main")
-    if main and (main:FindFirstChild("DungeonFrame") or main:FindFirstChild("VirusFrame")) then return true end
-    if workspace:FindFirstChild("Game") and (workspace.Game:FindFirstChild("Enemies") or workspace.Game:FindFirstChild("Teleports") or workspace.Game:FindFirstChild("Stages")) then return true end
-    if workspace:FindFirstChild("Enemies") then return true end
-    return false
-end
-
-local inDungeon = false
-for _ = 1, 15 do
-    if isInsideDungeon() then inDungeon = true break end
-    task.wait(0.5)
-end
-if not inDungeon then
-    pcall(function() singletonTag:Destroy() end)
-    return
-end
+local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
 
 local SharedState = {
     IsRunning = true,
@@ -75,18 +74,25 @@ local SharedState = {
     IsClaiming = false,
     IsDungeonEnded = false,
     HasExecutedSell = false,
+    HasExecutedQuests = false,
+    HasSentWebhook = false,
     LastRoomState = "Room1",
     CurrentTween = nil,
     CurrentTargetPos = nil,
-    LastPortalAttempt = 0
+    LastPortalAttempt = 0,
+    LastStartAttempt = 0,
+    HasClickedStart = false,
+    MatchStartTick = 0,
+    HasTarget = false,
+    IsSelectingBonus = false
 }
 
 -- [[ 2. CONFIGURAÇÕES ]]
 local ConfigModule = {}
 ConfigModule.Settings = {
-    SelectedPhase = "One Piece",
-    PositionMode = "Em Cima da Cabeça",
-    CustomWeaponName = "VoidRods",
+    SelectedPhase = "Infinity",
+    PositionMode = "Nas Costas",
+    CustomWeaponName = "Yoru",
     AutoFarm = true,
     AutoAttack = true,
     AutoSkills = true,
@@ -98,11 +104,10 @@ ConfigModule.Settings = {
     SkillCooldown = 0.8,
     SkillMaxDistance = 22,
     HeightAboveEnemy = 8.5,
-    BackDistance = 6.0,
-    TweenSpeed = 48,
+    BackDistance = 4.5,
+    TweenSpeed = 60,
     AttackSpeed = 0.15,
     AutoClaimQuests = false,
-    -- Configurações Auto-Sell & Auto-Favorite
     AutoSell = true,
     SellDelaySeconds = 10,
     AutoFavoriteSecrets = true,
@@ -111,7 +116,13 @@ ConfigModule.Settings = {
     SellRare = true,
     SellEpic = true,
     SellLegendary = true,
-    SellMythic = false
+    SellMythic = false,
+    InfinityCardSlot = 1,
+    WebhookEnabled = true,
+    WebhookURL = "https://discord.com/api/webhooks/1542138848195248258/Xqpgk33GsjM5UrMxT0IqIvkKvKulvSJQVc6CSuPmrf6lmrjNXwjxCwGCOK0aJun-Y83o",
+    NotifySecrets = true,
+    NotifyMythics = true,
+    NotifyEveryRun = false
 }
 
 local CONFIG_FILE = "HubRapazes_Config.json"
@@ -140,7 +151,90 @@ function ConfigModule.Load()
 end
 ConfigModule.Load()
 
--- [[ 3. MÓDULO DE PERSONAGEM & FÍSICA ]]
+-- [[ 3. DISCORD WEBHOOK ]]
+local WebhookModule = {}
+
+function WebhookModule.Send(payloadTable)
+    if not ConfigModule.Settings.WebhookEnabled or ConfigModule.Settings.WebhookURL == "" then return end
+    task.spawn(function()
+        local httpRequest = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
+        if not httpRequest then return end
+
+        pcall(function()
+            httpRequest({
+                Url = ConfigModule.Settings.WebhookURL,
+                Method = "POST",
+                Headers = { ["Content-Type"] = "application/json" },
+                Body = HttpService:JSONEncode(payloadTable)
+            })
+        end)
+    end)
+end
+
+function WebhookModule.ProcessDungeonDrops()
+    if SharedState.HasSentWebhook or not ConfigModule.Settings.WebhookEnabled then return end
+    local df = pgui and pgui:FindFirstChild("Main") and (pgui.Main:FindFirstChild("DungeonFrame") or pgui.Main:FindFirstChild("BossRushFrame") or pgui.Main:FindFirstChild("RaidFrame"))
+    local stats = df and df:FindFirstChild("DungeonStats")
+    local rewardedHolder = stats and stats:FindFirstChild("RewardedHolder")
+
+    if not rewardedHolder then return end
+
+    local droppedItems = {}
+    local hasSecret = false
+    local hasMythic = false
+
+    for _, child in ipairs(rewardedHolder:GetChildren()) do
+        if child:IsA("Frame") or child:IsA("ImageLabel") or child:IsA("GuiObject") then
+            local itemName = child.Name
+            local itemVal = child:FindFirstChild("Item")
+            if itemVal and itemVal:IsA("ObjectValue") and itemVal.Value then
+                itemName = itemVal.Value.Name
+                local r = tostring(itemVal.Value:GetAttribute("Rarity") or ""):lower()
+                if r:find("secret") then hasSecret = true end
+                if r:find("mythic") then hasMythic = true end
+            end
+
+            local chanceLabel = child:FindFirstChild("DropChance")
+            local chanceTxt = (chanceLabel and chanceLabel:IsA("TextLabel")) and chanceLabel.Text or ""
+
+            table.insert(droppedItems, string.format("• **%s** %s", itemName, chanceTxt ~= "" and ("(" .. chanceTxt .. ")") or ""))
+        end
+    end
+
+    local shouldNotify = false
+    if ConfigModule.Settings.NotifyEveryRun then
+        shouldNotify = true
+    elseif ConfigModule.Settings.NotifySecrets and hasSecret then
+        shouldNotify = true
+    elseif ConfigModule.Settings.NotifyMythics and hasMythic then
+        shouldNotify = true
+    end
+
+    if shouldNotify then
+        SharedState.HasSentWebhook = true
+        local dropsText = #droppedItems > 0 and table.concat(droppedItems, "\n") or "Nenhum item especial"
+        local embedColor = hasSecret and 16711680 or (hasMythic and 16744192 or 65450)
+
+        local embed = {
+            ["title"] = "⚔️ Fase Concluída - " .. tostring(ConfigModule.Settings.SelectedPhase),
+            ["color"] = embedColor,
+            ["fields"] = {
+                { ["name"] = "👤 Jogador", ["value"] = player.Name, ["inline"] = true },
+                { ["name"] = "🗺️ Fase", ["value"] = ConfigModule.Settings.SelectedPhase, ["inline"] = true },
+                { ["name"] = "🎁 Drops da Partida", ["value"] = dropsText, ["inline"] = false }
+            },
+            ["footer"] = { ["text"] = "Hub dos Rapazes • " .. os.date("%X") }
+        }
+
+        WebhookModule.Send({
+            ["username"] = "Hub dos Rapazes Bot",
+            ["avatar_url"] = "https://i.imgur.com/8Qf9Z2N.png",
+            ["embeds"] = { embed }
+        })
+    end
+end
+
+-- [[ 4. PERSONAGEM & FÍSICA ESTÁVEL ]]
 local CharacterModule = {}
 local diedConnection = nil
 local charConnection = nil
@@ -161,7 +255,7 @@ function CharacterModule.StopMovement()
     end
     SharedState.CurrentTargetPos = nil
     local _, root = CharacterModule.Get()
-    if root and root.Parent then
+    if root then
         root.AssemblyLinearVelocity = Vector3.zero
         root.AssemblyAngularVelocity = Vector3.zero
     end
@@ -183,12 +277,22 @@ end
 
 flightStabilizer = RunService.Stepped:Connect(function()
     if SharedState.IsRunning and ConfigModule.Settings.AutoFarm and not SharedState.IsRespawning and not SharedState.EnteringPortal and not SharedState.IsTransitioning then
-        local _, root, hum = CharacterModule.Get()
-        if root and hum and hum.Health > 0 then
-            if not SharedState.CurrentTween then
-                root.AssemblyLinearVelocity = Vector3.new(0, 0.05, 0)
-                root.AssemblyAngularVelocity = Vector3.zero
-            else
+        local isWaitingInitial = SharedState.HasClickedStart and ((tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime)
+
+        if not isWaitingInitial and SharedState.HasTarget and not SharedState.IsSelectingBonus then
+            local _, root, hum = CharacterModule.Get()
+            if root and hum and hum.Health > 0 then
+                if not SharedState.CurrentTween then
+                    root.AssemblyLinearVelocity = Vector3.new(0, 0.05, 0)
+                    root.AssemblyAngularVelocity = Vector3.zero
+                else
+                    root.AssemblyAngularVelocity = Vector3.zero
+                end
+            end
+        else
+            local _, root = CharacterModule.Get()
+            if root then
+                root.AssemblyLinearVelocity = Vector3.zero
                 root.AssemblyAngularVelocity = Vector3.zero
             end
         end
@@ -202,73 +306,106 @@ function CharacterModule.GetSafeCFrame(targetPosition, lookAtPosition)
     
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
-    if char then
-        params.FilterDescendantsInstances = {char}
-    end
+    if char then params.FilterDescendantsInstances = {char} end
     
     local hit = workspace:Raycast(rayOrigin, rayDirection, params)
     local safeY = targetPosition.Y
 
     if hit then
         local floorY = hit.Position.Y
-        if safeY < (floorY + 3.5) then
-            safeY = floorY + 3.5
-        end
+        if safeY < (floorY + 2.0) then safeY = floorY + 2.0 end
     end
 
     local safePos = Vector3.new(targetPosition.X, safeY, targetPosition.Z)
     return CFrame.new(safePos, lookAtPosition)
 end
 
-function CharacterModule.FlyToEnemy(targetPart)
-    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning then return end
-    local _, root = CharacterModule.Get()
-    if not root or not targetPart or not targetPart.Parent then return end
-
-    local enemyPos = targetPart.Position
-    if enemyPos.Magnitude > 20000 or enemyPos.Y > 500 or enemyPos.Y < -800 then
+function CharacterModule.FlyToEnemy(targetPart, overrideMode)
+    if SharedState.HasClickedStart and (tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime then 
         CharacterModule.StopMovement()
-        return
+        return 
+    end
+    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning or SharedState.IsSelectingBonus then 
+        CharacterModule.StopMovement()
+        return 
+    end
+    local _, root = CharacterModule.Get()
+    if not root or not targetPart or not targetPart.Parent then 
+        CharacterModule.StopMovement()
+        return 
     end
 
-    local mode = ConfigModule.Settings.PositionMode
+    local enemyPos = targetPart.Position
+    local mode = overrideMode or ConfigModule.Settings.PositionMode
     local targetCFrame
 
-    if mode == "Em Cima da Cabeça" then
-        local abovePos = enemyPos + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0.1)
-        targetCFrame = CFrame.lookAt(abovePos, enemyPos)
-    elseif mode == "Nas Costas" then
+    if mode == "Nas Costas" then
         local lookVec = targetPart.CFrame.LookVector
-        if lookVec.Magnitude > 0.1 then
-            local backOffset = -lookVec * ConfigModule.Settings.BackDistance + Vector3.new(0, 2.5, 0)
-            local backPos = enemyPos + backOffset
-            targetCFrame = CFrame.lookAt(backPos, enemyPos)
-        else
-            targetCFrame = CFrame.lookAt(enemyPos + Vector3.new(0, 5, 5), enemyPos)
+        local horizontalLook = Vector3.new(lookVec.X, 0, lookVec.Z)
+        if horizontalLook.Magnitude > 0.05 then
+            lookVec = horizontalLook.Unit
         end
+        local backOffset = -lookVec * ConfigModule.Settings.BackDistance + Vector3.new(0, 0.8, 0)
+        targetCFrame = CFrame.lookAt(enemyPos + backOffset, enemyPos)
+    elseif mode == "Em Cima da Cabeça" then
+        targetCFrame = CFrame.lookAt(enemyPos + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0.1), enemyPos)
     else
-        local abovePos = enemyPos + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0)
-        targetCFrame = CharacterModule.GetSafeCFrame(abovePos, enemyPos)
+        targetCFrame = CharacterModule.GetSafeCFrame(enemyPos + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0), enemyPos)
     end
 
     local targetPos = targetCFrame.Position
     local distance = (root.Position - targetPos).Magnitude
 
-    if distance <= 1.2 then return end
+    if distance <= 0.8 then return end
 
-    if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 1.8 and SharedState.CurrentTween then
+    if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 1.0 and SharedState.CurrentTween then
         return
     end
 
     SharedState.CurrentTargetPos = targetPos
-    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 10), 0.08, 3.5)
+    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 10), 0.04, 2.0)
 
-    if SharedState.CurrentTween then 
-        SharedState.CurrentTween:Cancel() 
-    end
-
+    if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
     SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = targetCFrame})
     SharedState.CurrentTween:Play()
+end
+
+function CharacterModule.FollowBehindLive(targetPart)
+    if SharedState.HasClickedStart and (tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime then 
+        CharacterModule.StopMovement()
+        return 
+    end
+    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning or SharedState.IsSelectingBonus then 
+        CharacterModule.StopMovement()
+        return 
+    end
+    local _, root = CharacterModule.Get()
+    if not root or not targetPart or not targetPart.Parent then 
+        CharacterModule.StopMovement()
+        return 
+    end
+
+    local enemyPos = targetPart.Position
+    local lookVec = targetPart.CFrame.LookVector
+    local horizontalLook = Vector3.new(lookVec.X, 0, lookVec.Z)
+    if horizontalLook.Magnitude > 0.05 then
+        lookVec = horizontalLook.Unit
+    end
+
+    local backOffset = -lookVec * ConfigModule.Settings.BackDistance + Vector3.new(0, 0.8, 0)
+    local desiredPos = enemyPos + backOffset
+    local targetCFrame = CFrame.lookAt(desiredPos, enemyPos)
+
+    local distance = (root.Position - desiredPos).Magnitude
+
+    if distance > 1.2 then
+        local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 10), 0.03, 0.25)
+        if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
+        SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = targetCFrame})
+        SharedState.CurrentTween:Play()
+    else
+        root.CFrame = targetCFrame
+    end
 end
 
 function CharacterModule.FlyToPortal(targetCFrame)
@@ -280,10 +417,7 @@ function CharacterModule.FlyToPortal(targetCFrame)
     local distance = (root.Position - targetPos).Magnitude
     local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 10), 0.1, 5.0)
 
-    if SharedState.CurrentTween then 
-        SharedState.CurrentTween:Cancel() 
-    end
-
+    if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
     SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = targetCFrame})
     SharedState.CurrentTween:Play()
 end
@@ -291,41 +425,125 @@ end
 function CharacterModule.TriggerButton(btn)
     if not btn or not SharedState.IsRunning then return end
     pcall(function()
-        for _, evName in ipairs({"Activated", "MouseButton1Click", "MouseButton1Down", "MouseButton1Up"}) do
-            if btn[evName] and firesignal then firesignal(btn[evName]) end
-            if btn[evName] and getconnections then
-                for _, c in ipairs(getconnections(btn[evName])) do c:Fire() end
+        if firesignal then
+            if btn.Activated then firesignal(btn.Activated) end
+            if btn.MouseButton1Click then firesignal(btn.MouseButton1Click) end
+        end
+        if getconnections then
+            for _, evName in ipairs({"Activated", "MouseButton1Click"}) do
+                if btn[evName] then
+                    for _, c in ipairs(getconnections(btn[evName])) do c:Fire() end
+                end
             end
         end
     end)
 end
 
-function CharacterModule.PressKey(keyCode)
-    if not SharedState.IsRunning then return end
-    pcall(function()
-        VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
-        task.wait(0.02)
-        VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
-    end)
+-- [[ 5. MÓDULO EXCLUSIVO DE MOVIMENTAÇÃO DO INFINITY (ISOLADO) ]]
+local InfinityMovement = {}
+
+function InfinityMovement.Step(targetPart)
+    local _, root = CharacterModule.Get()
+    if not root or not targetPart or not targetPart.Parent then 
+        InfinityMovement.HoldCenter()
+        return 
+    end
+
+    local enemyPos = targetPart.Position
+    local lookVec = targetPart.CFrame.LookVector
+    local horizontalLook = Vector3.new(lookVec.X, 0, lookVec.Z)
+    if horizontalLook.Magnitude > 0.05 then
+        lookVec = horizontalLook.Unit
+    end
+
+    local backOffset = -lookVec * ConfigModule.Settings.BackDistance + Vector3.new(0, 1.2, 0)
+    local targetCFrame = CFrame.lookAt(enemyPos + backOffset, enemyPos)
+    local targetPos = targetCFrame.Position
+
+    local distance = (root.Position - targetPos).Magnitude
+
+    if distance <= 1.0 then 
+        if SharedState.CurrentTween then
+            SharedState.CurrentTween:Cancel()
+            SharedState.CurrentTween = nil
+        end
+        return 
+    end
+
+    if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 1.0 and SharedState.CurrentTween then
+        return
+    end
+
+    SharedState.CurrentTargetPos = targetPos
+    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 15), 0.04, 1.5)
+
+    if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
+    SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = targetCFrame})
+    SharedState.CurrentTween:Play()
 end
 
--- [[ 4. MÓDULO DE DETECÇÃO DE INIMIGOS ]]
+function InfinityMovement.HoldCenter()
+    CharacterModule.StopMovement()
+end
+
+-- [[ 6. MÓDULO DE SELEÇÃO DE CARTAS / BÔNUS DO INFINITY ]]
+local InfinityBonusModule = {}
+
+function InfinityBonusModule.CheckBonus()
+    local main = pgui:FindFirstChild("Main")
+    local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
+    local bonuses = dungeonFrame and dungeonFrame:FindFirstChild("Bonuses")
+
+    if bonuses and bonuses.Visible then
+        SharedState.IsSelectingBonus = true
+        CharacterModule.StopMovement()
+
+        local slotIndex = ConfigModule.Settings.InfinityCardSlot or 1
+        local targetCardName = "Bonus" .. tostring(slotIndex)
+        local cardButton = bonuses:FindFirstChild(targetCardName) or bonuses:FindFirstChild("Bonus1")
+
+        if cardButton and cardButton.Visible then
+            task.wait(0.2)
+            CharacterModule.TriggerButton(cardButton)
+            task.wait(0.5)
+        end
+
+        return true
+    end
+
+    SharedState.IsSelectingBonus = false
+    return false
+end
+
+-- [[ 7. DETECÇÃO DE INIMIGOS ]]
 local TargetingModule = {}
 
 function TargetingModule.IsAlive(obj)
     if not obj or not obj.Parent then return false end
+    
     local hum = obj:FindFirstChildOfClass("Humanoid")
-    if hum then return (hum.Health > 0 and hum:GetState() ~= Enum.HumanoidStateType.Dead) end
-    local hpAttr = obj:GetAttribute("Health") or obj:GetAttribute("HP")
-    if hpAttr then return tonumber(hpAttr) > 0 end
+    if hum then 
+        if hum.Health <= 0 or hum:GetState() == Enum.HumanoidStateType.Dead then
+            return false
+        end
+    end
+    
+    local hpAttr = obj:GetAttribute("Health") or obj:GetAttribute("HP") or obj:GetAttribute("CurrentHealth")
+    if hpAttr and tonumber(hpAttr) <= 0 then 
+        return false 
+    end
+    
     local hpVal = obj:FindFirstChild("Health") or obj:FindFirstChild("HP")
-    if hpVal and hpVal:IsA("ValueBase") then return tonumber(hpVal.Value) > 0 end
-    return false
+    if hpVal and hpVal:IsA("ValueBase") and tonumber(hpVal.Value) <= 0 then 
+        return false 
+    end
+    
+    return true
 end
 
 function TargetingModule.GetTargetPart(obj)
     if not obj or not obj.Parent then return nil end
-    return obj:FindFirstChild("HumanoidRootPart")
+    local part = obj:FindFirstChild("HumanoidRootPart")
         or obj:FindFirstChild("RootPart")
         or obj:FindFirstChild("Hitbox")
         or obj:FindFirstChild("HitBox")
@@ -333,6 +551,11 @@ function TargetingModule.GetTargetPart(obj)
         or obj:FindFirstChild("Torso")
         or (obj:IsA("Model") and obj.PrimaryPart)
         or obj:FindFirstChildWhichIsA("BasePart")
+    
+    if part and part.Position.Y > -2000 then
+        return part
+    end
+    return nil
 end
 
 function TargetingModule.GetLivingEnemies(phase)
@@ -350,32 +573,34 @@ function TargetingModule.GetLivingEnemies(phase)
     end
 
     local gameFolder = workspace:FindFirstChild("Game")
-    local enemiesFolder = (gameFolder and gameFolder:FindFirstChild("Enemies")) or workspace:FindFirstChild("Enemies")
-    if enemiesFolder then
-        for _, enemy in ipairs(enemiesFolder:GetChildren()) do addEntity(enemy) end
+    local searchContainers = {
+        gameFolder and gameFolder:FindFirstChild("Enemies"),
+        workspace:FindFirstChild("Enemies"),
+        gameFolder and gameFolder:FindFirstChild("Stages"),
+        gameFolder and gameFolder:FindFirstChild("Boss"),
+        gameFolder and gameFolder:FindFirstChild("Virus"),
+        gameFolder and gameFolder:FindFirstChild("SecretBoss"),
+        gameFolder and gameFolder:FindFirstChild("BossRush"),
+        gameFolder and gameFolder:FindFirstChild("Raids"),
+        gameFolder and gameFolder:FindFirstChild("Infinity")
+    }
+
+    for _, container in ipairs(searchContainers) do
+        if container then
+            for _, desc in ipairs(container:GetDescendants()) do
+                if desc:IsA("Model") then addEntity(desc) end
+            end
+            if container:IsA("Model") then addEntity(container) end
+        end
     end
 
-    if SharedState.IsVirusActive or phase == "Incursão" then
-        local virusFolder = (gameFolder and (gameFolder:FindFirstChild("Virus") or gameFolder:FindFirstChild("Boss") or gameFolder:FindFirstChild("SecretBoss"))) or workspace:FindFirstChild("Virus")
-        if virusFolder then
-            for _, mob in ipairs(virusFolder:GetChildren()) do addEntity(mob) end
-            if TargetingModule.IsAlive(virusFolder) then addEntity(virusFolder) end
-        end
-
-        for _, obj in ipairs(workspace:GetChildren()) do
-            if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
-                local name = obj.Name:lower()
-                if name:find("mob") or name:find("enemy") or name:find("boss") or name:find("virus") or obj:FindFirstChildOfClass("Humanoid") then
-                    addEntity(obj)
+    if #list == 0 and gameFolder then
+        for _, desc in ipairs(gameFolder:GetDescendants()) do
+            if desc:IsA("Model") and desc ~= char and not Players:GetPlayerFromCharacter(desc) then
+                if desc.Name ~= "Clothing" and not desc:FindFirstAncestor("Players") then
+                    addEntity(desc)
                 end
             end
-        end
-    end
-
-    if #list == 0 and gameFolder and gameFolder:FindFirstChild("Stages") then
-        for _, stage in ipairs(gameFolder.Stages:GetChildren()) do
-            local spawns = stage:FindFirstChild("Spawns") or stage
-            for _, mob in ipairs(spawns:GetChildren()) do addEntity(mob) end
         end
     end
 
@@ -405,40 +630,18 @@ function TargetingModule.GetClosestEnemy(phase)
     return closestEnemy, closestPart
 end
 
--- [[ 5. MÓDULO DE COMBATE ]]
+-- [[ 8. MÓDULO DE COMBATE ]]
 local CombatModule = {}
 local attackRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Attack", 10)
+local skillRemote = ReplicatedStorage:WaitForChild("Remotes", 10):FindFirstChild("Skill") or ReplicatedStorage:WaitForChild("Remotes", 10):FindFirstChild("Spell")
 local lastSkillUse = 0
 local comboIndex = 1
-
-function CombatModule.DetectWeapon()
-    local pguiRef = player:FindFirstChild("PlayerGui")
-    if pguiRef then
-        for _, desc in ipairs(pguiRef:GetDescendants()) do
-            if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Visible then
-                local txt = desc.Text:lower()
-                if txt:find("unequip") or txt:find("desequipar") or txt:find("equipped") then
-                    local parentSlot = desc:FindFirstAncestorWhichIsA("Frame") or desc:FindFirstAncestorWhichIsA("ImageLabel") or desc.Parent
-                    if parentSlot and parentSlot.Name ~= "Items" and parentSlot.Name ~= "Scroll" then
-                        return parentSlot.Name
-                    end
-                end
-            end
-        end
-    end
-
-    local char = player.Character
-    if char and char:FindFirstChildOfClass("Tool") then return char:FindFirstChildOfClass("Tool").Name end
-    local bp = player:FindFirstChild("Backpack")
-    if bp and bp:FindFirstChildOfClass("Tool") then return bp:FindFirstChildOfClass("Tool").Name end
-    return nil
-end
 
 function CombatModule.GetEffectiveWeapon()
     if ConfigModule.Settings.CustomWeaponName and ConfigModule.Settings.CustomWeaponName ~= "" then
         return ConfigModule.Settings.CustomWeaponName
     end
-    return CombatModule.DetectWeapon() or "VoidRods"
+    return "Yoru"
 end
 
 function CombatModule.GetHotbar()
@@ -452,16 +655,23 @@ function CombatModule.GetHotbar()
 end
 
 function CombatModule.ExecuteM1()
-    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning then return end
+    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning or SharedState.IsSelectingBonus then return end
     comboIndex = (comboIndex % 4) + 1
     local weapon = CombatModule.GetEffectiveWeapon()
-    if attackRemote then pcall(function() attackRemote:FireServer("M1", weapon, comboIndex, 0, 0, 2) end) end
+    
+    if attackRemote then 
+        pcall(function() attackRemote:FireServer("M1", weapon, comboIndex, 0, 0, 2) end) 
+    end
 
     local char = player.Character
-    if char and char:FindFirstChildOfClass("Tool") then pcall(function() char:FindFirstChildOfClass("Tool"):Activate() end) end
+    if char then
+        local tool = char:FindFirstChildOfClass("Tool")
+        if tool then pcall(function() tool:Activate() end) end
+    end
 end
 
 function CombatModule.ExecuteSkills()
+    if SharedState.IsSelectingBonus then return end
     if (tick() - lastSkillUse) < ConfigModule.Settings.SkillCooldown then return end
     local _, root = CharacterModule.Get()
     if not root then return end
@@ -475,23 +685,24 @@ function CombatModule.ExecuteSkills()
             local s2 = hotbarList:FindFirstChild("Spell2", true) or hotbarList:FindFirstChild("X", true)
             local s3 = hotbarList:FindFirstChild("Ultimate", true) or hotbarList:FindFirstChild("Spell3", true) or hotbarList:FindFirstChild("C", true)
 
-            if s1 then CharacterModule.TriggerButton(s1) else CharacterModule.PressKey(Enum.KeyCode.Z) end
-            task.wait(0.06)
-            if s2 then CharacterModule.TriggerButton(s2) else CharacterModule.PressKey(Enum.KeyCode.X) end
-            task.wait(0.06)
+            if s1 then CharacterModule.TriggerButton(s1) end
+            task.wait(0.04)
+            if s2 then CharacterModule.TriggerButton(s2) end
+            task.wait(0.04)
             if s3 then CharacterModule.TriggerButton(s3) end
-            CharacterModule.PressKey(Enum.KeyCode.C)
-        else
-            CharacterModule.PressKey(Enum.KeyCode.Z)
-            task.wait(0.06)
-            CharacterModule.PressKey(Enum.KeyCode.X)
-            task.wait(0.06)
-            CharacterModule.PressKey(Enum.KeyCode.C)
+        end
+
+        if skillRemote then
+            pcall(function()
+                skillRemote:FireServer(1)
+                skillRemote:FireServer(2)
+                skillRemote:FireServer(3)
+            end)
         end
     end
 end
 
--- [[ 6. MÓDULO DE AUTO-SELL & AUTO-FAVORITE ]]
+-- [[ 9. AUTO-SELL & AUTO-FAVORITE ]]
 local AutoSellModule = {}
 local equipRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Equip", 10)
 local lastSellTick = 0
@@ -509,19 +720,6 @@ function AutoSellModule.ResolveRarity(slot, itemObj)
         elseif r:find("common") then return "Common"
         end
     end
-
-    local qualityLabel = slot:FindFirstChild("Quality", true)
-    if qualityLabel and qualityLabel:IsA("TextLabel") and qualityLabel.Text ~= "" then
-        local t = qualityLabel.Text:lower()
-        if t:find("secret") then return "Secret"
-        elseif t:find("mythic") then return "Mythic"
-        elseif t:find("legendary") then return "Legendary"
-        elseif t:find("epic") then return "Epic"
-        elseif t:find("rare") then return "Rare"
-        elseif t:find("common") then return "Common"
-        end
-    end
-
     return "Unknown"
 end
 
@@ -566,7 +764,7 @@ function AutoSellModule.LockHighTierItems()
 
     if favoritedCount > 0 then
         Fluent:Notify({
-            Title = "🔒 Auto-Favorite Ativo",
+            Title = "🔒 Auto-Favorite",
             Content = string.format("%d itens de alto valor protegidos!", favoritedCount),
             Duration = 4
         })
@@ -628,9 +826,7 @@ function AutoSellModule.Execute()
     end
 
     if #itemsToSell > 0 then
-        pcall(function()
-            equipRemote:FireServer("Sell", itemsToSell)
-        end)
+        pcall(function() equipRemote:FireServer("Sell", itemsToSell) end)
         Fluent:Notify({ Title = "Auto-Sell", Content = string.format("%d itens vendidos!", #itemsToSell), Duration = 3 })
         task.wait(2.0)
     end
@@ -638,7 +834,7 @@ function AutoSellModule.Execute()
     SharedState.IsSelling = false
 end
 
--- [[ 7. MÓDULO DE MISSÕES ]]
+-- [[ 10. MÓDULO DE MISSÕES ]]
 local QuestModule = {}
 local questRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Quest", 10)
 
@@ -679,8 +875,6 @@ function QuestModule.ClaimAll()
                                 pcall(function()
                                     questRemote:FireServer("Claim", slot.Name)
                                     questRemote:FireServer(slot.Name)
-                                    local num = tonumber(slot.Name:match("%d+"))
-                                    if num then questRemote:FireServer(num) end
                                 end)
                             end
                             claimed = claimed + 1
@@ -699,7 +893,7 @@ function QuestModule.ClaimAll()
     SharedState.IsClaiming = false
 end
 
--- [[ 8. MÓDULO DE FLUXO & PORTAIS COM PAUSA DE SERVIDOR ]]
+-- [[ 11. FLUXO DE FASES & ROTAS ]]
 local FlowModule = {}
 
 local BLEACH_PORTAL_1 = CFrame.new(4557.2, -305.5, 1925.0)
@@ -719,7 +913,7 @@ function FlowModule.GetWave()
         local cur = stageLabel.Text:match("(%d+)%s*/%s*%d+") or stageLabel.Text:match("(%d+)")
         if cur then
             local n = tonumber(cur)
-            if n and n >= 1 and n <= 15 then return n end
+            if n and n >= 1 and n <= 100 then return n end
         end
     end
     return 1
@@ -779,14 +973,10 @@ function FlowModule.PassPortal(targetCFrame)
                 tpSuccess = true
                 break
             end
-            if curRoot then
-                triggerZoneTouch(targetCFrame.Position)
-            end
+            if curRoot then triggerZoneTouch(targetCFrame.Position) end
         end
 
-        if tpSuccess then
-            task.wait(0.6)
-        end
+        if tpSuccess then task.wait(0.6) end
 
         local _, finalRoot = CharacterModule.Get()
         if finalRoot then
@@ -806,8 +996,10 @@ function FlowModule.RunBleach()
     if SharedState.IsVirusActive then
         local _, enemyPart = TargetingModule.GetClosestEnemy("Bleach (Fase 4)")
         if enemyPart then
+            SharedState.HasTarget = true
             CharacterModule.FlyToEnemy(enemyPart)
         else
+            SharedState.HasTarget = false
             CharacterModule.StopMovement()
         end
         return
@@ -834,18 +1026,22 @@ function FlowModule.RunBleach()
     local wave = FlowModule.GetWave()
 
     if wave >= 12 and currentRoom ~= "BossRoom" then
+        SharedState.HasTarget = true
         FlowModule.PassPortal(BLEACH_PORTAL_2)
         return
     end
     if wave >= 8 and currentRoom == "Room1" then
+        SharedState.HasTarget = true
         FlowModule.PassPortal(BLEACH_PORTAL_1)
         return
     end
 
     local _, enemyPart = TargetingModule.GetClosestEnemy("Bleach (Fase 4)")
     if enemyPart then
+        SharedState.HasTarget = true
         CharacterModule.FlyToEnemy(enemyPart)
     else
+        SharedState.HasTarget = false
         CharacterModule.StopMovement()
     end
 end
@@ -858,8 +1054,10 @@ function FlowModule.RunOnePiece()
     if SharedState.IsVirusActive then
         local _, enemyPart = TargetingModule.GetClosestEnemy("One Piece")
         if enemyPart then
+            SharedState.HasTarget = true
             CharacterModule.FlyToEnemy(enemyPart)
         else
+            SharedState.HasTarget = false
             CharacterModule.StopMovement()
         end
         return
@@ -887,21 +1085,38 @@ function FlowModule.RunOnePiece()
 
     if wave >= 12 then
         if currentRoom == "Room1" then
+            SharedState.HasTarget = true
             FlowModule.PassPortal(OP_PORTAL_1_WAVE7)
             return
         elseif currentRoom == "Room2" then
+            SharedState.HasTarget = true
             FlowModule.PassPortal(OP_PORTAL_2_WAVE12)
             return
         end
     elseif wave >= 7 and currentRoom == "Room1" then
+        SharedState.HasTarget = true
         FlowModule.PassPortal(OP_PORTAL_1_WAVE7)
         return
     end
 
     local _, enemyPart = TargetingModule.GetClosestEnemy("One Piece")
     if enemyPart then
+        SharedState.HasTarget = true
         CharacterModule.FlyToEnemy(enemyPart)
     else
+        SharedState.HasTarget = false
+        CharacterModule.StopMovement()
+    end
+end
+
+-- Rota Boss Rush
+function FlowModule.RunBossRush()
+    local _, enemyPart = TargetingModule.GetClosestEnemy("Boss Rush")
+    if enemyPart and enemyPart.Parent then
+        SharedState.HasTarget = true
+        CharacterModule.FollowBehindLive(enemyPart)
+    else
+        SharedState.HasTarget = false
         CharacterModule.StopMovement()
     end
 end
@@ -909,23 +1124,65 @@ end
 -- Rota Incursão
 function FlowModule.RunIncursion()
     local _, enemyPart = TargetingModule.GetClosestEnemy("Incursão")
-    if enemyPart then
-        CharacterModule.FlyToEnemy(enemyPart)
+    if enemyPart and enemyPart.Parent then
+        SharedState.HasTarget = true
+        CharacterModule.FlyToEnemy(enemyPart, ConfigModule.Settings.PositionMode)
     else
+        SharedState.HasTarget = false
         CharacterModule.StopMovement()
     end
 end
 
--- [[ 9. MÓDULO DE ESTADOS DA DUNGEON ]]
+-- [[ ROTA EXCLUSIVA DO INFINITY (ISOLADA) ]]
+function FlowModule.RunInfinity()
+    -- 1. Verifica se a tela de 3 cartas/bônus está aberta
+    if InfinityBonusModule.CheckBonus() then
+        SharedState.HasTarget = false
+        InfinityMovement.HoldCenter()
+        return
+    end
+
+    -- 2. Busca inimigos vivos na arena
+    local _, enemyPart = TargetingModule.GetClosestEnemy("Infinity")
+    if enemyPart and enemyPart.Parent and enemyPart.Position.Y > -2000 then
+        SharedState.HasTarget = true
+        InfinityMovement.Step(enemyPart)
+    else
+        SharedState.HasTarget = false
+        InfinityMovement.HoldCenter()
+    end
+end
+
+-- [[ 12. ESTADOS DA DUNGEON & AUTO-START ]]
 local DungeonStateModule = {}
 
 function DungeonStateModule.CheckStart()
-    local df = pgui and pgui:FindFirstChild("Main") and pgui.Main:FindFirstChild("DungeonFrame")
-    if df and df.Visible then
-        local startBtn = df:FindFirstChild("Start") or df:FindFirstChild("Play")
-        if startBtn and startBtn:IsA("GuiObject") and startBtn.Visible then
-            CharacterModule.TriggerButton(startBtn)
-            SharedState.IsVirusActive = false
+    if not pgui or (tick() - SharedState.LastStartAttempt) < 1.0 then return end
+    SharedState.LastStartAttempt = tick()
+    
+    local main = pgui:FindFirstChild("Main")
+    if not main then return end
+
+    local targetFrames = {
+        main:FindFirstChild("DungeonFrame"),
+        main:FindFirstChild("BossRushFrame"),
+        main:FindFirstChild("RaidFrame"),
+        main:FindFirstChild("InfinityCreator")
+    }
+
+    for _, frame in ipairs(targetFrames) do
+        if frame and frame.Visible then
+            local startBtn = frame:FindFirstChild("Start", true) 
+                or frame:FindFirstChild("Play", true) 
+                or (frame:FindFirstChild("DungeonStart") and frame.DungeonStart:FindFirstChild("Play"))
+                
+            if startBtn and startBtn:IsA("GuiObject") and startBtn.Visible then
+                CharacterModule.TriggerButton(startBtn)
+                SharedState.IsVirusActive = false
+                SharedState.HasClickedStart = true
+                SharedState.MatchStartTick = tick()
+                return
+            end
         end
     end
 end
@@ -947,12 +1204,24 @@ end
 
 function DungeonStateModule.CheckEnd()
     local main = pgui and pgui:FindFirstChild("Main")
-    local dungeonStats = main and main:FindFirstChild("DungeonFrame") and main.MainFrame and main.DungeonFrame:FindFirstChild("DungeonStats")
-    dungeonStats = dungeonStats or (main and main:FindFirstChild("DungeonFrame") and main.DungeonFrame:FindFirstChild("DungeonStats"))
-    local playAgainBtn = dungeonStats and dungeonStats:FindFirstChild("EndActions") and dungeonStats.EndActions:FindFirstChild("PlayAgain")
+    if not main then return false, nil end
 
-    if dungeonStats and dungeonStats.Visible and playAgainBtn and playAgainBtn.Visible then
-        return true, playAgainBtn
+    local df = main:FindFirstChild("DungeonFrame") or main:FindFirstChild("RaidFrame") or main:FindFirstChild("BossRushFrame")
+    local dungeonStats = (df and df:FindFirstChild("DungeonStats")) or main:FindFirstChild("DungeonStats", true)
+
+    if dungeonStats and dungeonStats.Visible then
+        for _, obj in ipairs(dungeonStats:GetDescendants()) do
+            if obj:IsA("GuiButton") and obj.Visible then
+                local name = obj.Name:lower()
+                if name:find("playagain") or name:find("retry") or name:find("again") then
+                    return true, obj
+                end
+                local label = obj:FindFirstChildOfClass("TextLabel")
+                if label and (label.Text:lower():find("play again") or label.Text:lower():find("jogar novamente")) then
+                    return true, obj
+                end
+            end
+        end
     end
     return false, nil
 end
@@ -962,6 +1231,31 @@ local function onPlayerDiedHandler()
     SharedState.EnteringPortal = false
     SharedState.IsTransitioning = false
     SharedState.LastRoomState = "Room1"
+    SharedState.HasTarget = false
+    SharedState.IsSelectingBonus = false
+
+    if (ConfigModule.Settings.SelectedPhase == "Boss Rush" or ConfigModule.Settings.SelectedPhase == "Infinity") and ConfigModule.Settings.AutoPlayAgain then
+        task.spawn(function()
+            task.wait(3.0)
+            for _ = 1, 15 do
+                if not SharedState.IsRunning then break end
+                local ended, retryBtn = DungeonStateModule.CheckEnd()
+                if ended and retryBtn then
+                    SharedState.IsDungeonEnded = true
+                    queueNextExecution()
+                    task.wait(0.2)
+                    CharacterModule.TriggerButton(retryBtn)
+                    break
+                end
+                task.wait(0.5)
+            end
+        end)
+        return
+    end
+
+    if ConfigModule.Settings.SelectedPhase == "Incursão" then
+        return
+    end
 
     if not ConfigModule.Settings.HardcoreMode then return end
     task.spawn(function()
@@ -971,7 +1265,7 @@ local function onPlayerDiedHandler()
         local _, retryBtn = DungeonStateModule.CheckEnd()
         if retryBtn then
             queueNextExecution()
-            task.wait(0.5)
+            task.wait(0.2)
             CharacterModule.TriggerButton(retryBtn)
             task.wait(3.0)
         end
@@ -993,52 +1287,78 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
     SharedState.IsRespawning = true
     SharedState.IsTransitioning = false
     SharedState.EnteringPortal = false
+    SharedState.HasSentWebhook = false
     SharedState.LastRoomState = "Room1"
+    SharedState.HasTarget = false
+    SharedState.IsSelectingBonus = false
     CharacterModule.StopMovement()
     bindCharacterEvents(newChar)
     task.delay(0.8, function() SharedState.IsRespawning = false end)
 end)
 
--- [[ 10. MOTOR PRINCIPAL DE LOOPS ]]
+-- [[ 13. LOOPS PRINCIPAIS INDEPENDENTES ]]
 local initialRoutinesScheduled = false
+local isHandlingPlayAgain = false
 
+-- Loop 1: Ataque M1
 task.spawn(function()
     while SharedState.IsRunning do
-        if ConfigModule.Settings.AutoAttack and not SharedState.IsDungeonEnded and not SharedState.IsRespawning and not SharedState.IsTransitioning and not SharedState.EnteringPortal then
-            local _, _, hum = CharacterModule.Get()
-            if hum and hum.Health > 0 then CombatModule.ExecuteM1() end
+        local canAttack = true
+        if SharedState.HasClickedStart and (tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime then
+            canAttack = false
+        end
+
+        if canAttack and SharedState.HasTarget and not SharedState.IsSelectingBonus then
+            if ConfigModule.Settings.AutoAttack and not SharedState.IsDungeonEnded and not SharedState.IsRespawning and not SharedState.IsTransitioning and not SharedState.EnteringPortal then
+                local _, _, hum = CharacterModule.Get()
+                if hum and hum.Health > 0 then 
+                    CombatModule.ExecuteM1() 
+                end
+            end
         end
         task.wait(ConfigModule.Settings.AttackSpeed)
     end
 end)
 
+-- Loop 2: Skills
 task.spawn(function()
     while SharedState.IsRunning do
-        if ConfigModule.Settings.AutoSkills and not SharedState.IsDungeonEnded and not SharedState.IsRespawning and not SharedState.IsTransitioning and not SharedState.EnteringPortal then
-            local _, _, hum = CharacterModule.Get()
-            if hum and hum.Health > 0 then CombatModule.ExecuteSkills() end
+        local canSkill = true
+        if SharedState.HasClickedStart and (tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime then
+            canSkill = false
+        end
+
+        if canSkill and SharedState.HasTarget and not SharedState.IsSelectingBonus then
+            if ConfigModule.Settings.AutoSkills and not SharedState.IsDungeonEnded and not SharedState.IsRespawning and not SharedState.IsTransitioning and not SharedState.EnteringPortal then
+                local _, _, hum = CharacterModule.Get()
+                if hum and hum.Health > 0 then 
+                    CombatModule.ExecuteSkills() 
+                end
+            end
         end
         task.wait(0.1)
     end
 end)
 
+-- Loop 3: Farm, Movimento e Estados
 task.spawn(function()
     while SharedState.IsRunning do
+        if ConfigModule.Settings.AutoStart then DungeonStateModule.CheckStart() end
+
         if ConfigModule.Settings.AutoFarm and not SharedState.IsRespawning then
             local _, _, hum = CharacterModule.Get()
             if hum and hum.Health > 0 then
                 if not initialRoutinesScheduled then
                     initialRoutinesScheduled = true
                     
-                    -- Rotina de Auto-Claim Quests
                     task.spawn(function()
                         task.wait(13)
-                        if SharedState.IsRunning and ConfigModule.Settings.AutoClaimQuests and not SharedState.IsDungeonEnded then
+                        if SharedState.IsRunning and ConfigModule.Settings.AutoClaimQuests and not SharedState.IsDungeonEnded and not SharedState.HasExecutedQuests then
+                            SharedState.HasExecutedQuests = true
                             QuestModule.ClaimAll()
                         end
                     end)
 
-                    -- Rotina de Auto-Sell e Auto-Favorite (Execução única no início da dungeon)
                     task.spawn(function()
                         task.wait(ConfigModule.Settings.SellDelaySeconds)
                         if SharedState.IsRunning and not SharedState.IsDungeonEnded and not SharedState.HasExecutedSell then
@@ -1053,28 +1373,27 @@ task.spawn(function()
                     end)
                 end
 
-                if ConfigModule.Settings.AutoStart then DungeonStateModule.CheckStart() end
-
                 local ended, playAgainBtn = DungeonStateModule.CheckEnd()
                 if ended and playAgainBtn then
                     SharedState.IsDungeonEnded = true
                     SharedState.IsVirusActive = false
+                    SharedState.HasTarget = false
                     CharacterModule.StopMovement()
 
-                    if ConfigModule.Settings.AutoClaimQuests then
-                        pcall(QuestModule.ClaimAll)
-                        task.wait(0.2)
-                    end
+                    pcall(WebhookModule.ProcessDungeonDrops)
 
-                    if ConfigModule.Settings.AutoEngage and DungeonStateModule.CheckEngage() then
-                        SharedState.IsDungeonEnded = false
-                        SharedState.IsVirusActive = true
-                        task.wait(1.0)
-                    elseif ConfigModule.Settings.AutoPlayAgain then
-                        queueNextExecution()
-                        task.wait(0.8)
-                        CharacterModule.TriggerButton(playAgainBtn)
-                        task.wait(3.0)
+                    if ConfigModule.Settings.AutoPlayAgain and not isHandlingPlayAgain then
+                        isHandlingPlayAgain = true
+                        task.spawn(function()
+                            task.wait(3.0)
+                            if SharedState.IsRunning then
+                                queueNextExecution()
+                                task.wait(0.2)
+                                CharacterModule.TriggerButton(playAgainBtn)
+                            end
+                            task.wait(3.0)
+                            isHandlingPlayAgain = false
+                        end)
                     end
                 else
                     SharedState.IsDungeonEnded = false
@@ -1088,29 +1407,41 @@ task.spawn(function()
                         SharedState.IsVirusActive = true
                         task.wait(1.0)
                     else
-                        if ConfigModule.Settings.SelectedPhase == "One Piece" then
-                            FlowModule.RunOnePiece()
-                        elseif ConfigModule.Settings.SelectedPhase == "Bleach (Fase 4)" then
-                            FlowModule.RunBleach()
-                        elseif ConfigModule.Settings.SelectedPhase == "Incursão" then
-                            FlowModule.RunIncursion()
+                        local waitingStart = SharedState.HasClickedStart and ((tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime)
+                        
+                        if not waitingStart then
+                            if ConfigModule.Settings.SelectedPhase == "Infinity" then
+                                FlowModule.RunInfinity()
+                            elseif ConfigModule.Settings.SelectedPhase == "One Piece" then
+                                FlowModule.RunOnePiece()
+                            elseif ConfigModule.Settings.SelectedPhase == "Bleach (Fase 4)" then
+                                FlowModule.RunBleach()
+                            elseif ConfigModule.Settings.SelectedPhase == "Boss Rush" then
+                                FlowModule.RunBossRush()
+                            elseif ConfigModule.Settings.SelectedPhase == "Incursão" then
+                                FlowModule.RunIncursion()
+                            end
+                        else
+                            SharedState.HasTarget = false
+                            CharacterModule.StopMovement()
                         end
                     end
                 end
             else
+                SharedState.HasTarget = false
                 CharacterModule.StopMovement()
             end
         else
+            SharedState.HasTarget = false
             CharacterModule.StopMovement()
         end
         task.wait(0.04)
     end
 end)
 
--- [[ 11. INTERFACE VISUAL ]]
+-- [[ 14. INTERFACE VISUAL FLUENT ]]
 local UIModule = {}
 
-local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
 local Window = Fluent:CreateWindow({
     Title = "Hub dos Rapazes",
     SubTitle = "Anime Dungeons",
@@ -1123,7 +1454,9 @@ local Window = Fluent:CreateWindow({
 
 local Tabs = {
     Farm = Window:AddTab({ Title = "Farm" }),
+    Infinity = Window:AddTab({ Title = "Infinity" }),
     Sell = Window:AddTab({ Title = "Auto-Sell" }),
+    Webhook = Window:AddTab({ Title = "Discord" }),
     Settings = Window:AddTab({ Title = "Settings" })
 }
 
@@ -1167,12 +1500,19 @@ floatBtn.MouseButton1Click:Connect(function() toggleUI(true) end)
 
 function UIModule.Shutdown()
     SharedState.IsRunning = false
+    if getgenv then getgenv().HubDosRapazes_Loaded = nil end
     CharacterModule.StopMovement()
     if charConnection then charConnection:Disconnect() end
     if diedConnection then diedConnection:Disconnect() end
     if flightStabilizer then flightStabilizer:Disconnect() end
-    if singletonTag and singletonTag.Parent then singletonTag:Destroy() end
     if toggleGui and toggleGui.Parent then toggleGui:Destroy() end
+    
+    pcall(function()
+        if Window and Window.Destroy then
+            Window:Destroy()
+        end
+    end)
+
     for _, gui in ipairs({CoreGui, player.PlayerGui}) do
         for _, child in ipairs(gui:GetChildren()) do
             if child.Name == "IBdihP_PersistentToggle" or child.Name:find("Fluent") then
@@ -1197,44 +1537,30 @@ task.spawn(function()
     end
 end)
 
--- Componentes da UI (Aba Farm)
+-- ABA FARM
 local PhaseSection = Tabs.Farm:AddSection("Configurações de Fase & Posição")
 PhaseSection:AddDropdown("PhaseSelector", {
     Title = "Selecionar Fase",
-    Values = { "One Piece", "Bleach (Fase 4)", "Incursão" },
+    Values = { "Infinity", "One Piece", "Bleach (Fase 4)", "Boss Rush", "Incursão" },
     Default = ConfigModule.Settings.SelectedPhase,
     Callback = function(Value) ConfigModule.Settings.SelectedPhase = Value ConfigModule.Save() end
 })
 
 PhaseSection:AddDropdown("PositionModeSelector", {
     Title = "Modo de Posicionamento",
-    Values = { "Em Cima da Cabeça", "Nas Costas", "Padrão (Anterior)" },
+    Values = { "Nas Costas", "Em Cima da Cabeça", "Padrão (Anterior)" },
     Default = ConfigModule.Settings.PositionMode,
     Callback = function(Value) ConfigModule.Settings.PositionMode = Value ConfigModule.Save() end
 })
 
 local WeaponSection = Tabs.Farm:AddSection("Configuração de Arma")
-local WeaponInput = WeaponSection:AddInput("WeaponInputBox", {
-    Title = "Arma Equipada / Nome",
+WeaponSection:AddDropdown("WeaponSelector", {
+    Title = "Selecionar Arma Equipada",
+    Values = { "Yoru", "EmperorBisento" },
     Default = ConfigModule.Settings.CustomWeaponName,
-    Placeholder = "Ex: VoidRods, Katana...",
-    Finished = true,
-    Callback = function(Value) ConfigModule.Settings.CustomWeaponName = Value ConfigModule.Save() end
-})
-
-WeaponSection:AddButton({
-    Title = "🔍 Detectar Arma da Mão",
-    Description = "Lê automaticamente o nome da arma equipada",
-    Callback = function()
-        local detected = CombatModule.DetectWeapon()
-        if detected and detected ~= "" then
-            ConfigModule.Settings.CustomWeaponName = detected
-            WeaponInput:SetValue(detected)
-            ConfigModule.Save()
-            Fluent:Notify({ Title = "Arma Detectada", Content = "Identificada: " .. tostring(detected), Duration = 4 })
-        else
-            Fluent:Notify({ Title = "Não Encontrada", Content = "Digite o nome exato da arma.", Duration = 4 })
-        end
+    Callback = function(Value)
+        ConfigModule.Settings.CustomWeaponName = Value
+        ConfigModule.Save()
     end
 })
 
@@ -1247,7 +1573,7 @@ CombatSection:AddToggle("AutoFarmToggle", {
 CombatSection:AddSlider("HeightAboveEnemy", {
     Title = "Altura Vertical (Y)",
     Default = ConfigModule.Settings.HeightAboveEnemy,
-    Min = 2, Max = 18, Rounding = 1,
+    Min = 1, Max = 18, Rounding = 1,
     Callback = function(Value) ConfigModule.Settings.HeightAboveEnemy = Value ConfigModule.Save() end
 })
 CombatSection:AddSlider("BackDistance", {
@@ -1264,7 +1590,7 @@ CombatSection:AddSlider("TweenSpeed", {
 })
 CombatSection:AddToggle("HardcoreToggle", {
     Title = "Modo Hardcore",
-    Description = "Espera 23s após a morte e clica em Play Again",
+    Description = "Espera 23s após a morte e clica em Play Again (Bleach/One Piece)",
     Default = ConfigModule.Settings.HardcoreMode,
     Callback = function(Value) ConfigModule.Settings.HardcoreMode = Value ConfigModule.Save() end
 })
@@ -1284,9 +1610,10 @@ CombatSection:AddToggle("AutoStartToggle", {
     Callback = function(Value) ConfigModule.Settings.AutoStart = Value end
 })
 CombatSection:AddSlider("StartWaitTimeSlider", {
-    Title = "Espera Inicial (segundos)",
+    Title = "Espera Inicial Pós-Start (s)",
+    Description = "Tempo de espera após clicar no Start antes de começar a se mover e atacar",
     Default = ConfigModule.Settings.StartWaitTime,
-    Min = 0.5, Max = 6.0, Rounding = 1,
+    Min = 0.5, Max = 8.0, Rounding = 1,
     Callback = function(Value) ConfigModule.Settings.StartWaitTime = Value ConfigModule.Save() end
 })
 CombatSection:AddToggle("AutoAttackToggle", {
@@ -1318,7 +1645,23 @@ CombatSection:AddSlider("SkillCooldownSlider", {
     Callback = function(Value) ConfigModule.Settings.SkillCooldown = Value ConfigModule.Save() end
 })
 
--- Componentes da UI (Aba Auto-Sell & Favorite)
+-- ABA INFINITY (EXCLUSIVA)
+local InfinitySection = Tabs.Infinity:AddSection("Configurações do Modo Roguelike (Infinity)")
+InfinitySection:AddDropdown("CardSlotSelector", {
+    Title = "Carta Padrão para Seleção",
+    Description = "Qual das 3 opções de bônus o script escolhe automaticamente",
+    Values = { "Carta 1 (Esquerda)", "Carta 2 (Centro)", "Carta 3 (Direita)" },
+    Default = "Carta 1 (Esquerda)",
+    Callback = function(Value)
+        if Value == "Carta 1 (Esquerda)" then ConfigModule.Settings.InfinityCardSlot = 1
+        elseif Value == "Carta 2 (Centro)" then ConfigModule.Settings.InfinityCardSlot = 2
+        elseif Value == "Carta 3 (Direita)" then ConfigModule.Settings.InfinityCardSlot = 3
+        end
+        ConfigModule.Save()
+    end
+})
+
+-- ABA AUTO-SELL & FAVORITE
 local FavoriteSection = Tabs.Sell:AddSection("Proteção de Itens (Auto-Favorite)")
 FavoriteSection:AddToggle("AutoFavSecretsToggle", {
     Title = "Auto-Favorite Secretos",
@@ -1385,7 +1728,60 @@ SellRaritiesSection:AddToggle("SellMythicToggle", {
     Callback = function(Value) ConfigModule.Settings.SellMythic = Value ConfigModule.Save() end
 })
 
--- Componentes da UI (Aba Settings)
+-- ABA WEBHOOK DISCORD
+local WebhookSection = Tabs.Webhook:AddSection("Configuração do Webhook")
+WebhookSection:AddToggle("WebhookEnableToggle", {
+    Title = "Ativar Notificações no Discord",
+    Default = ConfigModule.Settings.WebhookEnabled,
+    Callback = function(Value) ConfigModule.Settings.WebhookEnabled = Value ConfigModule.Save() end
+})
+local WebhookInput = WebhookSection:AddInput("WebhookURLBox", {
+    Title = "URL do Webhook Discord",
+    Default = ConfigModule.Settings.WebhookURL,
+    Placeholder = "Cole o link https://discord.com/api/webhooks/...",
+    Finished = true,
+    Callback = function(Value) ConfigModule.Settings.WebhookURL = Value ConfigModule.Save() end
+})
+WebhookSection:AddButton({
+    Title = "🧪 Testar Envio no Discord",
+    Description = "Envia uma mensagem de teste imediata para verificar seu link",
+    Callback = function()
+        if ConfigModule.Settings.WebhookURL ~= "" then
+            WebhookModule.Send({
+                ["username"] = "Hub dos Rapazes Bot",
+                ["avatar_url"] = "https://i.imgur.com/8Qf9Z2N.png",
+                ["embeds"] = {{
+                    ["title"] = "✅ Webhook Conectado com Sucesso!",
+                    ["description"] = "As notificações de drops raros estão ativas.",
+                    ["color"] = 65450,
+                    ["footer"] = { ["text"] = "Hub dos Rapazes • Teste" }
+                }}
+            })
+            Fluent:Notify({ Title = "Webhook", Content = "Mensagem de teste enviada!", Duration = 4 })
+        else
+            Fluent:Notify({ Title = "Erro", Content = "Cole a URL do webhook primeiro.", Duration = 4 })
+        end
+    end
+})
+
+local WebhookFilters = Tabs.Webhook:AddSection("Filtros de Alerta")
+WebhookFilters:AddToggle("NotifySecretsToggle", {
+    Title = "Avisar Drops Secretos",
+    Default = ConfigModule.Settings.NotifySecrets,
+    Callback = function(Value) ConfigModule.Settings.NotifySecrets = Value ConfigModule.Save() end
+})
+WebhookFilters:AddToggle("NotifyMythicsToggle", {
+    Title = "Avisar Drops Míticos",
+    Default = ConfigModule.Settings.NotifyMythics,
+    Callback = function(Value) ConfigModule.Settings.NotifyMythics = Value ConfigModule.Save() end
+})
+WebhookFilters:AddToggle("NotifyEveryRunToggle", {
+    Title = "Avisar Todas as Runs (Resumo Geral)",
+    Default = ConfigModule.Settings.NotifyEveryRun,
+    Callback = function(Value) ConfigModule.Settings.NotifyEveryRun = Value ConfigModule.Save() end
+})
+
+-- ABA SETTINGS
 local QuestsSection = Tabs.Settings:AddSection("Automação de Missões (Quests)")
 QuestsSection:AddToggle("AutoClaimQuestsToggle", {
     Title = "Auto-Claim de Missões (13s pós-início)",
