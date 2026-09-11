@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (INFINITY DESTRAVADO & COMBATE FLUIDO)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (INFINITY ESTABILIZADO - SEM SKIP REMOTO)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON & CACHE LOCAL ]]
@@ -81,12 +81,10 @@ local SharedState = {
     CurrentTargetPos = nil,
     LastPortalAttempt = 0,
     LastStartAttempt = 0,
-    LastSkipAttempt = 0,
     HasClickedStart = false,
     MatchStartTick = 0,
     HasTarget = false,
-    IsSelectingBonus = false,
-    BonusSelectionTick = 0
+    IsSelectingBonus = false
 }
 
 -- [[ 2. CONFIGURAÇÕES ]]
@@ -120,8 +118,6 @@ ConfigModule.Settings = {
     SellLegendary = true,
     SellMythic = false,
     InfinityCardSlot = 1,
-    InfinityAutoSkipWave = true,
-    InfinitySkipInterval = 2.5,
     WebhookEnabled = true,
     WebhookURL = "https://discord.com/api/webhooks/1542138848195248258/Xqpgk33GsjM5UrMxT0IqIvkKvKulvSJQVc6CSuPmrf6lmrjNXwjxCwGCOK0aJun-Y83o",
     NotifySecrets = true,
@@ -281,11 +277,6 @@ end
 
 flightStabilizer = RunService.Stepped:Connect(function()
     if SharedState.IsRunning and ConfigModule.Settings.AutoFarm and not SharedState.IsRespawning and not SharedState.EnteringPortal and not SharedState.IsTransitioning then
-        -- Desbloqueia timeout de segurança de seleção de carta
-        if SharedState.IsSelectingBonus and (tick() - SharedState.BonusSelectionTick) > 1.2 then
-            SharedState.IsSelectingBonus = false
-        end
-
         local isWaitingInitial = SharedState.HasClickedStart and ((tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime)
 
         if not isWaitingInitial and SharedState.HasTarget and not SharedState.IsSelectingBonus then
@@ -440,29 +431,16 @@ function CharacterModule.TriggerButton(btn)
     end)
 end
 
--- [[ 5. MÓDULO EXCLUSIVO DE MOVIMENTAÇÃO DO INFINITY (ISOLADO) ]]
-local InfinityMovement = {}
+-- [[ 5. MÓDULO EXCLUSIVO DO INFINITY ]]
+local InfinityModule = {}
 
-function InfinityMovement.Step(targetPart)
-    CharacterModule.FlyToEnemy(targetPart, ConfigModule.Settings.PositionMode)
-end
-
-function InfinityMovement.HoldCenter()
-    CharacterModule.StopMovement()
-end
-
--- [[ 6. MÓDULO DE SELEÇÃO DE CARTAS & SKIP WAVE (INFINITY) ]]
-local InfinityBonusModule = {}
-local dungeonRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Dungeon", 10)
-
-function InfinityBonusModule.CheckBonus()
+function InfinityModule.CheckBonus()
     local main = pgui:FindFirstChild("Main")
     local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
     local bonuses = dungeonFrame and dungeonFrame:FindFirstChild("Bonuses")
 
     if bonuses and bonuses.Visible then
         SharedState.IsSelectingBonus = true
-        SharedState.BonusSelectionTick = tick()
         CharacterModule.StopMovement()
 
         local slotIndex = ConfigModule.Settings.InfinityCardSlot or 1
@@ -479,46 +457,7 @@ function InfinityBonusModule.CheckBonus()
     return false
 end
 
-function InfinityBonusModule.CheckSkipWave()
-    if not ConfigModule.Settings.InfinityAutoSkipWave then return end
-    local interval = ConfigModule.Settings.InfinitySkipInterval or 2.5
-    if (tick() - SharedState.LastSkipAttempt) < interval then return end
-    if SharedState.IsSelectingBonus or SharedState.IsDungeonEnded then return end
-
-    SharedState.LastSkipAttempt = tick()
-
-    if dungeonRemote then
-        pcall(function()
-            dungeonRemote:FireServer("InfinitySkipWave")
-        end)
-    end
-
-    local main = pgui:FindFirstChild("Main")
-    local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
-    if dungeonFrame and dungeonFrame.Visible then
-        for _, desc in ipairs(dungeonFrame:GetDescendants()) do
-            if (desc:IsA("ImageButton") or desc:IsA("TextButton")) and desc.Visible then
-                local nameLower = desc.Name:lower()
-                local textMatch = false
-                if desc:IsA("TextButton") and desc.Text and desc.Text:lower():find("skip") then
-                    textMatch = true
-                else
-                    local lbl = desc:FindFirstChildOfClass("TextLabel")
-                    if lbl and lbl.Text and lbl.Text:lower():find("skip") then
-                        textMatch = true
-                    end
-                end
-
-                if nameLower:find("skip") or textMatch then
-                    CharacterModule.TriggerButton(desc)
-                    break
-                end
-            end
-        end
-    end
-end
-
--- [[ 7. DETECÇÃO DE INIMIGOS ]]
+-- [[ 6. DETECÇÃO DE INIMIGOS ]]
 local TargetingModule = {}
 
 function TargetingModule.IsAlive(obj)
@@ -633,7 +572,7 @@ function TargetingModule.GetClosestEnemy(phase)
     return closestEnemy, closestPart
 end
 
--- [[ 8. MÓDULO DE COMBATE ]]
+-- [[ 7. MÓDULO DE COMBATE ]]
 local CombatModule = {}
 local attackRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Attack", 10)
 local skillRemote = ReplicatedStorage:WaitForChild("Remotes", 10):FindFirstChild("Skill") or ReplicatedStorage:WaitForChild("Remotes", 10):FindFirstChild("Spell")
@@ -705,7 +644,7 @@ function CombatModule.ExecuteSkills()
     end
 end
 
--- [[ 9. AUTO-SELL & AUTO-FAVORITE ]]
+-- [[ 8. AUTO-SELL & AUTO-FAVORITE ]]
 local AutoSellModule = {}
 local equipRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Equip", 10)
 local lastSellTick = 0
@@ -837,7 +776,7 @@ function AutoSellModule.Execute()
     SharedState.IsSelling = false
 end
 
--- [[ 10. MÓDULO DE MISSÕES ]]
+-- [[ 9. MÓDULO DE MISSÕES ]]
 local QuestModule = {}
 local questRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Quest", 10)
 
@@ -896,7 +835,7 @@ function QuestModule.ClaimAll()
     SharedState.IsClaiming = false
 end
 
--- [[ 11. FLUXO DE FASES & ROTAS ]]
+-- [[ 10. FLUXO DE FASES & ROTAS ]]
 local FlowModule = {}
 
 local BLEACH_PORTAL_1 = CFrame.new(4557.2, -305.5, 1925.0)
@@ -1114,27 +1053,25 @@ function FlowModule.RunIncursion()
     end
 end
 
--- [[ ROTA EXCLUSIVA DO INFINITY (ISOLADA) ]]
+-- [[ ROTA EXCLUSIVA DO INFINITY ]]
 function FlowModule.RunInfinity()
-    if InfinityBonusModule.CheckBonus() then
+    if InfinityModule.CheckBonus() then
         SharedState.HasTarget = false
-        InfinityMovement.HoldCenter()
+        CharacterModule.StopMovement()
         return
     end
-
-    InfinityBonusModule.CheckSkipWave()
 
     local _, enemyPart = TargetingModule.GetClosestEnemy("Infinity")
     if enemyPart and enemyPart.Parent and enemyPart.Position.Y > -2000 then
         SharedState.HasTarget = true
-        InfinityMovement.Step(enemyPart)
+        CharacterModule.FlyToEnemy(enemyPart, ConfigModule.Settings.PositionMode)
     else
         SharedState.HasTarget = false
-        InfinityMovement.HoldCenter()
+        CharacterModule.StopMovement()
     end
 end
 
--- [[ 12. ESTADOS DA DUNGEON & AUTO-START ]]
+-- [[ 11. ESTADOS DA DUNGEON & AUTO-START ]]
 local DungeonStateModule = {}
 
 function DungeonStateModule.CheckStart()
@@ -1277,7 +1214,7 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
     task.delay(0.8, function() SharedState.IsRespawning = false end)
 end)
 
--- [[ 13. LOOPS PRINCIPAIS INDEPENDENTES ]]
+-- [[ 12. LOOPS PRINCIPAIS INDEPENDENTES ]]
 local initialRoutinesScheduled = false
 local isHandlingPlayAgain = false
 
@@ -1403,7 +1340,7 @@ task.spawn(function()
     end
 end)
 
--- [[ 14. INTERFACE VISUAL FLUENT ]]
+-- [[ 13. INTERFACE VISUAL FLUENT ]]
 local UIModule = {}
 
 local Window = Fluent:CreateWindow({
@@ -1611,25 +1548,6 @@ CombatSection:AddSlider("SkillCooldownSlider", {
 
 -- ABA INFINITY (EXCLUSIVA)
 local InfinitySection = Tabs.Infinity:AddSection("Configurações do Modo Roguelike (Infinity)")
-InfinitySection:AddToggle("InfinitySkipWaveToggle", {
-    Title = "Auto Skip Wave",
-    Description = "Dispara 'InfinitySkipWave' e clica no botão quando disponível",
-    Default = ConfigModule.Settings.InfinityAutoSkipWave,
-    Callback = function(Value)
-        ConfigModule.Settings.InfinityAutoSkipWave = Value
-        ConfigModule.Save()
-    end
-})
-InfinitySection:AddSlider("InfinitySkipIntervalSlider", {
-    Title = "Intervalo do Skip Wave (s)",
-    Description = "Tempo entre cada checagem/tentativa de pular a wave",
-    Default = ConfigModule.Settings.InfinitySkipInterval,
-    Min = 1.0, Max = 6.0, Rounding = 1,
-    Callback = function(Value)
-        ConfigModule.Settings.InfinitySkipInterval = Value
-        ConfigModule.Save()
-    end
-})
 InfinitySection:AddDropdown("CardSlotSelector", {
     Title = "Carta Padrão para Seleção",
     Description = "Qual das 3 opções de bônus o script escolhe automaticamente",
