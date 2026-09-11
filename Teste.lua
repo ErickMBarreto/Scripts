@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (FASE INFINITY TOTALMENTE ISOLADA)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (INFINITY COM AUTO SKIP WAVE)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON & CACHE LOCAL ]]
@@ -17,7 +17,7 @@ local TweenService = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
-local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Loader.lua"
+local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Teste.lua"
 local SCRIPT_NAME = "HubRapazes_Local.lua"
 
 pcall(function()
@@ -81,6 +81,7 @@ local SharedState = {
     CurrentTargetPos = nil,
     LastPortalAttempt = 0,
     LastStartAttempt = 0,
+    LastSkipAttempt = 0,
     HasClickedStart = false,
     MatchStartTick = 0,
     HasTarget = false,
@@ -118,6 +119,7 @@ ConfigModule.Settings = {
     SellLegendary = true,
     SellMythic = false,
     InfinityCardSlot = 1,
+    InfinityAutoSkipWave = true,
     WebhookEnabled = true,
     WebhookURL = "https://discord.com/api/webhooks/1542138848195248258/Xqpgk33GsjM5UrMxT0IqIvkKvKulvSJQVc6CSuPmrf6lmrjNXwjxCwGCOK0aJun-Y83o",
     NotifySecrets = true,
@@ -486,7 +488,7 @@ function InfinityMovement.HoldCenter()
     CharacterModule.StopMovement()
 end
 
--- [[ 6. MÓDULO DE SELEÇÃO DE CARTAS / BÔNUS DO INFINITY ]]
+-- [[ 6. MÓDULO DE SELEÇÃO DE CARTAS & SKIP WAVE (INFINITY) ]]
 local InfinityBonusModule = {}
 
 function InfinityBonusModule.CheckBonus()
@@ -513,6 +515,38 @@ function InfinityBonusModule.CheckBonus()
 
     SharedState.IsSelectingBonus = false
     return false
+end
+
+function InfinityBonusModule.CheckSkipWave()
+    if not ConfigModule.Settings.InfinityAutoSkipWave then return end
+    if (tick() - SharedState.LastSkipAttempt) < 0.8 then return end
+
+    local main = pgui:FindFirstChild("Main")
+    local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
+    if not dungeonFrame or not dungeonFrame.Visible then return end
+
+    for _, desc in ipairs(dungeonFrame:GetDescendants()) do
+        if (desc:IsA("ImageButton") or desc:IsA("TextButton")) and desc.Visible then
+            local nameLower = desc.Name:lower()
+            local textMatch = false
+
+            if desc:IsA("TextButton") and desc.Text then
+                local txt = desc.Text:lower()
+                if txt:find("skip") then textMatch = true end
+            else
+                local lbl = desc:FindFirstChildOfClass("TextLabel")
+                if lbl and lbl.Text and lbl.Text:lower():find("skip") then
+                    textMatch = true
+                end
+            end
+
+            if nameLower:find("skip") or textMatch then
+                SharedState.LastSkipAttempt = tick()
+                CharacterModule.TriggerButton(desc)
+                break
+            end
+        end
+    end
 end
 
 -- [[ 7. DETECÇÃO DE INIMIGOS ]]
@@ -1142,7 +1176,10 @@ function FlowModule.RunInfinity()
         return
     end
 
-    -- 2. Busca inimigos vivos na arena
+    -- 2. Tenta pular a wave caso o botão Skip Wave esteja disponível
+    InfinityBonusModule.CheckSkipWave()
+
+    -- 3. Busca inimigos vivos na arena
     local _, enemyPart = TargetingModule.GetClosestEnemy("Infinity")
     if enemyPart and enemyPart.Parent and enemyPart.Position.Y > -2000 then
         SharedState.HasTarget = true
@@ -1647,6 +1684,15 @@ CombatSection:AddSlider("SkillCooldownSlider", {
 
 -- ABA INFINITY (EXCLUSIVA)
 local InfinitySection = Tabs.Infinity:AddSection("Configurações do Modo Roguelike (Infinity)")
+InfinitySection:AddToggle("InfinitySkipWaveToggle", {
+    Title = "Auto Skip Wave",
+    Description = "Clica automaticamente em 'Skip Wave' assim que a opção aparecer",
+    Default = ConfigModule.Settings.InfinityAutoSkipWave,
+    Callback = function(Value)
+        ConfigModule.Settings.InfinityAutoSkipWave = Value
+        ConfigModule.Save()
+    end
+})
 InfinitySection:AddDropdown("CardSlotSelector", {
     Title = "Carta Padrão para Seleção",
     Description = "Qual das 3 opções de bônus o script escolhe automaticamente",
