@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (INFINITY COM SKIP WAVE VIA REMOTE)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (INFINITY SKIP WAVE COM INTERVALO SEGURO)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON & CACHE LOCAL ]]
@@ -120,6 +120,7 @@ ConfigModule.Settings = {
     SellMythic = false,
     InfinityCardSlot = 1,
     InfinityAutoSkipWave = true,
+    InfinitySkipInterval = 2.5,
     WebhookEnabled = true,
     WebhookURL = "https://discord.com/api/webhooks/1542138848195248258/Xqpgk33GsjM5UrMxT0IqIvkKvKulvSJQVc6CSuPmrf6lmrjNXwjxCwGCOK0aJun-Y83o",
     NotifySecrets = true,
@@ -488,7 +489,7 @@ function InfinityMovement.HoldCenter()
     CharacterModule.StopMovement()
 end
 
--- [[ 6. MÓDULO DE SELEÇÃO DE CARTAS & SKIP WAVE DIRETO VIA REMOTE (INFINITY) ]]
+-- [[ 6. MÓDULO DE SELEÇÃO DE CARTAS & SKIP WAVE (INFINITY) ]]
 local InfinityBonusModule = {}
 local dungeonRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Dungeon", 10)
 
@@ -506,7 +507,7 @@ function InfinityBonusModule.CheckBonus()
         local cardButton = bonuses:FindFirstChild(targetCardName) or bonuses:FindFirstChild("Bonus1")
 
         if cardButton and cardButton.Visible then
-            task.wait(0.2)
+            task.wait(0.25)
             CharacterModule.TriggerButton(cardButton)
             task.wait(0.5)
         end
@@ -520,16 +521,42 @@ end
 
 function InfinityBonusModule.CheckSkipWave()
     if not ConfigModule.Settings.InfinityAutoSkipWave then return end
-    if (tick() - SharedState.LastSkipAttempt) < 0.5 then return end
+    local interval = ConfigModule.Settings.InfinitySkipInterval or 2.5
+    if (tick() - SharedState.LastSkipAttempt) < interval then return end
     if SharedState.IsSelectingBonus or SharedState.IsDungeonEnded then return end
 
     SharedState.LastSkipAttempt = tick()
 
-    -- Disparo direto via RemoteEvent capturado
+    -- 1. Tentativa direta via RemoteEvent
     if dungeonRemote then
         pcall(function()
             dungeonRemote:FireServer("InfinitySkipWave")
         end)
+    end
+
+    -- 2. Tentativa complementar via UI caso o botão esteja renderizado
+    local main = pgui:FindFirstChild("Main")
+    local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
+    if dungeonFrame and dungeonFrame.Visible then
+        for _, desc in ipairs(dungeonFrame:GetDescendants()) do
+            if (desc:IsA("ImageButton") or desc:IsA("TextButton")) and desc.Visible then
+                local nameLower = desc.Name:lower()
+                local textMatch = false
+                if desc:IsA("TextButton") and desc.Text and desc.Text:lower():find("skip") then
+                    textMatch = true
+                else
+                    local lbl = desc:FindFirstChildOfClass("TextLabel")
+                    if lbl and lbl.Text and lbl.Text:lower():find("skip") then
+                        textMatch = true
+                    end
+                end
+
+                if nameLower:find("skip") or textMatch then
+                    CharacterModule.TriggerButton(desc)
+                    break
+                end
+            end
+        end
     end
 end
 
@@ -1160,7 +1187,7 @@ function FlowModule.RunInfinity()
         return
     end
 
-    -- 2. Dispara o Skip Wave direto pelo Remote (sem depender da UI)
+    -- 2. Tenta pular a wave caso esteja ativado
     InfinityBonusModule.CheckSkipWave()
 
     -- 3. Busca inimigos vivos na arena
@@ -1669,11 +1696,21 @@ CombatSection:AddSlider("SkillCooldownSlider", {
 -- ABA INFINITY (EXCLUSIVA)
 local InfinitySection = Tabs.Infinity:AddSection("Configurações do Modo Roguelike (Infinity)")
 InfinitySection:AddToggle("InfinitySkipWaveToggle", {
-    Title = "Auto Skip Wave (Direct Remote)",
-    Description = "Envia 'InfinitySkipWave' direto para o servidor a cada 0.5s",
+    Title = "Auto Skip Wave",
+    Description = "Dispara 'InfinitySkipWave' e clica no botão quando disponível",
     Default = ConfigModule.Settings.InfinityAutoSkipWave,
     Callback = function(Value)
         ConfigModule.Settings.InfinityAutoSkipWave = Value
+        ConfigModule.Save()
+    end
+})
+InfinitySection:AddSlider("InfinitySkipIntervalSlider", {
+    Title = "Intervalo do Skip Wave (s)",
+    Description = "Tempo entre cada checagem/tentativa de pular a wave",
+    Default = ConfigModule.Settings.InfinitySkipInterval,
+    Min = 1.0, Max = 6.0, Rounding = 1,
+    Callback = function(Value)
+        ConfigModule.Settings.InfinitySkipInterval = Value
         ConfigModule.Save()
     end
 })
@@ -1829,4 +1866,4 @@ SettingsSection:AddButton({
     Callback = UIModule.Shutdown
 })
 
-Window:SelectTab(Tabs.Farm)
+Window:SelectTab(Tabs.Infinity)
