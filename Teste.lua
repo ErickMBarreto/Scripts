@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (INFINITY ESTABILIZADO - SEM SKIP REMOTO)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (INFINITY COM SKIPWAVE REATIVO NATIVO)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON & CACHE LOCAL ]]
@@ -118,6 +118,7 @@ ConfigModule.Settings = {
     SellLegendary = true,
     SellMythic = false,
     InfinityCardSlot = 1,
+    InfinityAutoSkipWave = true,
     WebhookEnabled = true,
     WebhookURL = "https://discord.com/api/webhooks/1542138848195248258/Xqpgk33GsjM5UrMxT0IqIvkKvKulvSJQVc6CSuPmrf6lmrjNXwjxCwGCOK0aJun-Y83o",
     NotifySecrets = true,
@@ -431,8 +432,9 @@ function CharacterModule.TriggerButton(btn)
     end)
 end
 
--- [[ 5. MÓDULO EXCLUSIVO DO INFINITY ]]
+-- [[ 5. MÓDULO EXCLUSIVO DO INFINITY (COM GATILHO REATIVO) ]]
 local InfinityModule = {}
+local dungeonRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Dungeon", 10)
 
 function InfinityModule.CheckBonus()
     local main = pgui:FindFirstChild("Main")
@@ -456,6 +458,26 @@ function InfinityModule.CheckBonus()
     SharedState.IsSelectingBonus = false
     return false
 end
+
+-- Thread passiva: Escuta o evento de visibilidade do SkipWave nativo
+task.spawn(function()
+    while SharedState.IsRunning do
+        if ConfigModule.Settings.SelectedPhase == "Infinity" and ConfigModule.Settings.InfinityAutoSkipWave then
+            local main = pgui:FindFirstChild("Main")
+            local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
+            local skipBtn = dungeonFrame and dungeonFrame:FindFirstChild("SkipWave")
+
+            if skipBtn and skipBtn:IsA("GuiObject") and skipBtn.Visible then
+                CharacterModule.TriggerButton(skipBtn)
+                if dungeonRemote then
+                    pcall(function() dungeonRemote:FireServer("InfinitySkipWave") end)
+                end
+                task.wait(1.5)
+            end
+        end
+        task.wait(0.25)
+    end
+end)
 
 -- [[ 6. DETECÇÃO DE INIMIGOS ]]
 local TargetingModule = {}
@@ -1548,6 +1570,15 @@ CombatSection:AddSlider("SkillCooldownSlider", {
 
 -- ABA INFINITY (EXCLUSIVA)
 local InfinitySection = Tabs.Infinity:AddSection("Configurações do Modo Roguelike (Infinity)")
+InfinitySection:AddToggle("InfinitySkipWaveToggle", {
+    Title = "Auto Skip Wave (Reativo)",
+    Description = "Aciona o botão de Skip Wave assim que ele aparecer na tela",
+    Default = ConfigModule.Settings.InfinityAutoSkipWave,
+    Callback = function(Value)
+        ConfigModule.Settings.InfinityAutoSkipWave = Value
+        ConfigModule.Save()
+    end
+})
 InfinitySection:AddDropdown("CardSlotSelector", {
     Title = "Carta Padrão para Seleção",
     Description = "Qual das 3 opções de bônus o script escolhe automaticamente",
