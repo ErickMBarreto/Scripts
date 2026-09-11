@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (INFINITY SKIP WAVE COM INTERVALO SEGURO)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (INFINITY DESTRAVADO & COMBATE FLUIDO)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON & CACHE LOCAL ]]
@@ -85,7 +85,8 @@ local SharedState = {
     HasClickedStart = false,
     MatchStartTick = 0,
     HasTarget = false,
-    IsSelectingBonus = false
+    IsSelectingBonus = false,
+    BonusSelectionTick = 0
 }
 
 -- [[ 2. CONFIGURAÇÕES ]]
@@ -101,7 +102,7 @@ ConfigModule.Settings = {
     AutoPlayAgain = true,
     AutoEngage = true,
     HardcoreMode = false,
-    StartWaitTime = 2.0,
+    StartWaitTime = 1.0,
     SkillCooldown = 0.8,
     SkillMaxDistance = 22,
     HeightAboveEnemy = 8.5,
@@ -280,6 +281,11 @@ end
 
 flightStabilizer = RunService.Stepped:Connect(function()
     if SharedState.IsRunning and ConfigModule.Settings.AutoFarm and not SharedState.IsRespawning and not SharedState.EnteringPortal and not SharedState.IsTransitioning then
+        -- Desbloqueia timeout de segurança de seleção de carta
+        if SharedState.IsSelectingBonus and (tick() - SharedState.BonusSelectionTick) > 1.2 then
+            SharedState.IsSelectingBonus = false
+        end
+
         local isWaitingInitial = SharedState.HasClickedStart and ((tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime)
 
         if not isWaitingInitial and SharedState.HasTarget and not SharedState.IsSelectingBonus then
@@ -324,10 +330,6 @@ function CharacterModule.GetSafeCFrame(targetPosition, lookAtPosition)
 end
 
 function CharacterModule.FlyToEnemy(targetPart, overrideMode)
-    if SharedState.HasClickedStart and (tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime then 
-        CharacterModule.StopMovement()
-        return 
-    end
     if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning or SharedState.IsSelectingBonus then 
         CharacterModule.StopMovement()
         return 
@@ -348,7 +350,7 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
         if horizontalLook.Magnitude > 0.05 then
             lookVec = horizontalLook.Unit
         end
-        local backOffset = -lookVec * ConfigModule.Settings.BackDistance + Vector3.new(0, 0.8, 0)
+        local backOffset = -lookVec * ConfigModule.Settings.BackDistance + Vector3.new(0, 1.2, 0)
         targetCFrame = CFrame.lookAt(enemyPos + backOffset, enemyPos)
     elseif mode == "Em Cima da Cabeça" then
         targetCFrame = CFrame.lookAt(enemyPos + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0.1), enemyPos)
@@ -359,14 +361,14 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
     local targetPos = targetCFrame.Position
     local distance = (root.Position - targetPos).Magnitude
 
-    if distance <= 0.8 then return end
+    if distance <= 1.0 then return end
 
     if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 1.0 and SharedState.CurrentTween then
         return
     end
 
     SharedState.CurrentTargetPos = targetPos
-    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 10), 0.04, 2.0)
+    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 15), 0.04, 1.5)
 
     if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
     SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = targetCFrame})
@@ -374,10 +376,6 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
 end
 
 function CharacterModule.FollowBehindLive(targetPart)
-    if SharedState.HasClickedStart and (tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime then 
-        CharacterModule.StopMovement()
-        return 
-    end
     if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning or SharedState.IsSelectingBonus then 
         CharacterModule.StopMovement()
         return 
@@ -446,43 +444,7 @@ end
 local InfinityMovement = {}
 
 function InfinityMovement.Step(targetPart)
-    local _, root = CharacterModule.Get()
-    if not root or not targetPart or not targetPart.Parent then 
-        InfinityMovement.HoldCenter()
-        return 
-    end
-
-    local enemyPos = targetPart.Position
-    local lookVec = targetPart.CFrame.LookVector
-    local horizontalLook = Vector3.new(lookVec.X, 0, lookVec.Z)
-    if horizontalLook.Magnitude > 0.05 then
-        lookVec = horizontalLook.Unit
-    end
-
-    local backOffset = -lookVec * ConfigModule.Settings.BackDistance + Vector3.new(0, 1.2, 0)
-    local targetCFrame = CFrame.lookAt(enemyPos + backOffset, enemyPos)
-    local targetPos = targetCFrame.Position
-
-    local distance = (root.Position - targetPos).Magnitude
-
-    if distance <= 1.0 then 
-        if SharedState.CurrentTween then
-            SharedState.CurrentTween:Cancel()
-            SharedState.CurrentTween = nil
-        end
-        return 
-    end
-
-    if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 1.0 and SharedState.CurrentTween then
-        return
-    end
-
-    SharedState.CurrentTargetPos = targetPos
-    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 15), 0.04, 1.5)
-
-    if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
-    SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = targetCFrame})
-    SharedState.CurrentTween:Play()
+    CharacterModule.FlyToEnemy(targetPart, ConfigModule.Settings.PositionMode)
 end
 
 function InfinityMovement.HoldCenter()
@@ -500,6 +462,7 @@ function InfinityBonusModule.CheckBonus()
 
     if bonuses and bonuses.Visible then
         SharedState.IsSelectingBonus = true
+        SharedState.BonusSelectionTick = tick()
         CharacterModule.StopMovement()
 
         local slotIndex = ConfigModule.Settings.InfinityCardSlot or 1
@@ -507,11 +470,8 @@ function InfinityBonusModule.CheckBonus()
         local cardButton = bonuses:FindFirstChild(targetCardName) or bonuses:FindFirstChild("Bonus1")
 
         if cardButton and cardButton.Visible then
-            task.wait(0.25)
             CharacterModule.TriggerButton(cardButton)
-            task.wait(0.5)
         end
-
         return true
     end
 
@@ -527,14 +487,12 @@ function InfinityBonusModule.CheckSkipWave()
 
     SharedState.LastSkipAttempt = tick()
 
-    -- 1. Tentativa direta via RemoteEvent
     if dungeonRemote then
         pcall(function()
             dungeonRemote:FireServer("InfinitySkipWave")
         end)
     end
 
-    -- 2. Tentativa complementar via UI caso o botão esteja renderizado
     local main = pgui:FindFirstChild("Main")
     local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
     if dungeonFrame and dungeonFrame.Visible then
@@ -964,26 +922,6 @@ function FlowModule.GetWave()
     return 1
 end
 
-local function triggerZoneTouch(targetPos)
-    local char = player.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    if not root or not firetouchinterest then return end
-
-    local gameFolder = workspace:FindFirstChild("Game")
-    local tps = (gameFolder and gameFolder:FindFirstChild("Teleports")) or workspace:FindFirstChild("Teleports")
-    if tps then
-        for _, part in ipairs(tps:GetDescendants()) do
-            if part:IsA("BasePart") and (part.Position - targetPos).Magnitude < 30 then
-                pcall(function()
-                    firetouchinterest(root, part, 0)
-                    task.wait(0.04)
-                    firetouchinterest(root, part, 1)
-                end)
-            end
-        end
-    end
-end
-
 function FlowModule.PassPortal(targetCFrame)
     local _, root, hum = CharacterModule.Get()
     if not root or not hum then return end
@@ -1005,7 +943,6 @@ function FlowModule.PassPortal(targetCFrame)
 
         root.CanCollide = true
         root.CFrame = targetCFrame * CFrame.new(0, -0.5, 0)
-        triggerZoneTouch(targetCFrame.Position)
 
         local oldPos = root.Position
         local startWait = tick()
@@ -1018,7 +955,6 @@ function FlowModule.PassPortal(targetCFrame)
                 tpSuccess = true
                 break
             end
-            if curRoot then triggerZoneTouch(targetCFrame.Position) end
         end
 
         if tpSuccess then task.wait(0.6) end
@@ -1180,17 +1116,14 @@ end
 
 -- [[ ROTA EXCLUSIVA DO INFINITY (ISOLADA) ]]
 function FlowModule.RunInfinity()
-    -- 1. Verifica se a tela de 3 cartas/bônus está aberta
     if InfinityBonusModule.CheckBonus() then
         SharedState.HasTarget = false
         InfinityMovement.HoldCenter()
         return
     end
 
-    -- 2. Tenta pular a wave caso esteja ativado
     InfinityBonusModule.CheckSkipWave()
 
-    -- 3. Busca inimigos vivos na arena
     local _, enemyPart = TargetingModule.GetClosestEnemy("Infinity")
     if enemyPart and enemyPart.Parent and enemyPart.Position.Y > -2000 then
         SharedState.HasTarget = true
@@ -1351,12 +1284,7 @@ local isHandlingPlayAgain = false
 -- Loop 1: Ataque M1
 task.spawn(function()
     while SharedState.IsRunning do
-        local canAttack = true
-        if SharedState.HasClickedStart and (tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime then
-            canAttack = false
-        end
-
-        if canAttack and SharedState.HasTarget and not SharedState.IsSelectingBonus then
+        if SharedState.HasTarget and not SharedState.IsSelectingBonus then
             if ConfigModule.Settings.AutoAttack and not SharedState.IsDungeonEnded and not SharedState.IsRespawning and not SharedState.IsTransitioning and not SharedState.EnteringPortal then
                 local _, _, hum = CharacterModule.Get()
                 if hum and hum.Health > 0 then 
@@ -1371,12 +1299,7 @@ end)
 -- Loop 2: Skills
 task.spawn(function()
     while SharedState.IsRunning do
-        local canSkill = true
-        if SharedState.HasClickedStart and (tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime then
-            canSkill = false
-        end
-
-        if canSkill and SharedState.HasTarget and not SharedState.IsSelectingBonus then
+        if SharedState.HasTarget and not SharedState.IsSelectingBonus then
             if ConfigModule.Settings.AutoSkills and not SharedState.IsDungeonEnded and not SharedState.IsRespawning and not SharedState.IsTransitioning and not SharedState.EnteringPortal then
                 local _, _, hum = CharacterModule.Get()
                 if hum and hum.Health > 0 then 
@@ -1455,23 +1378,16 @@ task.spawn(function()
                         SharedState.IsVirusActive = true
                         task.wait(1.0)
                     else
-                        local waitingStart = SharedState.HasClickedStart and ((tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime)
-                        
-                        if not waitingStart then
-                            if ConfigModule.Settings.SelectedPhase == "Infinity" then
-                                FlowModule.RunInfinity()
-                            elseif ConfigModule.Settings.SelectedPhase == "One Piece" then
-                                FlowModule.RunOnePiece()
-                            elseif ConfigModule.Settings.SelectedPhase == "Bleach (Fase 4)" then
-                                FlowModule.RunBleach()
-                            elseif ConfigModule.Settings.SelectedPhase == "Boss Rush" then
-                                FlowModule.RunBossRush()
-                            elseif ConfigModule.Settings.SelectedPhase == "Incursão" then
-                                FlowModule.RunIncursion()
-                            end
-                        else
-                            SharedState.HasTarget = false
-                            CharacterModule.StopMovement()
+                        if ConfigModule.Settings.SelectedPhase == "Infinity" then
+                            FlowModule.RunInfinity()
+                        elseif ConfigModule.Settings.SelectedPhase == "One Piece" then
+                            FlowModule.RunOnePiece()
+                        elseif ConfigModule.Settings.SelectedPhase == "Bleach (Fase 4)" then
+                            FlowModule.RunBleach()
+                        elseif ConfigModule.Settings.SelectedPhase == "Boss Rush" then
+                            FlowModule.RunBossRush()
+                        elseif ConfigModule.Settings.SelectedPhase == "Incursão" then
+                            FlowModule.RunIncursion()
                         end
                     end
                 end
