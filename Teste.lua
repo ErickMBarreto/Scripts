@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (SAO: PORTAL 1 APENAS NA WAVE 12)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (SAO ESTABILIZADO - SEM VOO NO START)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON & CACHE LOCAL ]]
@@ -102,7 +102,7 @@ ConfigModule.Settings = {
     AutoPlayAgain = true,
     AutoEngage = true,
     HardcoreMode = false,
-    StartWaitTime = 1.5,
+    StartWaitTime = 2.0,
     SkillCooldown = 0.8,
     SkillMaxDistance = 22,
     HeightAboveEnemy = 8.5,
@@ -283,7 +283,7 @@ end
 
 flightStabilizer = RunService.Stepped:Connect(function()
     if SharedState.IsRunning and ConfigModule.Settings.AutoFarm and not SharedState.IsRespawning and not SharedState.EnteringPortal and not SharedState.IsTransitioning then
-        local isWaitingInitial = SharedState.HasClickedStart and ((tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime)
+        local isWaitingInitial = (tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime
 
         if not isWaitingInitial and SharedState.HasTarget and not SharedState.IsSelectingBonus then
             local _, root, hum = CharacterModule.Get()
@@ -1001,12 +1001,12 @@ function FlowModule.PassPortal(targetCFrame)
         while (tick() - startWait) < 2.0 do
             task.wait(0.08)
             local _, curRoot = CharacterModule.Get()
-            if curRoot and (curRoot.Position - oldPos).Magnitude > 15 then
+            if curRoot and (curRoot.Position - oldPos).Magnitude > 8 then
                 break
             end
         end
 
-        task.wait(0.4)
+        task.wait(0.5)
 
         local _, finalRoot = CharacterModule.Get()
         if finalRoot then
@@ -1018,12 +1018,12 @@ function FlowModule.PassPortal(targetCFrame)
     end
 end
 
--- Rota SAO Estabilizada (Portal 1 estrito na Wave 12)
+-- Rota SAO Estabilizada com Zona de Proteção no Início
 function FlowModule.RunSAO()
     local _, root = CharacterModule.Get()
     if not root then return end
 
-    -- 1. Escolha inteligente de cartas (Tempo > Dano > Fallback)
+    -- 1. Cartas Inteligentes
     if SAOModule.CheckBonus() then
         SharedState.HasTarget = false
         CharacterModule.StopMovement()
@@ -1043,34 +1043,36 @@ function FlowModule.RunSAO()
         return
     end
 
+    -- 3. Proteção temporal contra falso-positivo no início da partida (3.5s)
+    local isEarlyMatch = (tick() - SharedState.MatchStartTick) < 3.5
+
     local wave = FlowModule.GetWave()
     local enemies = TargetingModule.GetLivingEnemies("SAO")
 
-    -- 3. Transição Inteligente por Portais:
-    -- Só avança se a sala estiver 100% limpa (#enemies == 0)
-    if #enemies == 0 and not SharedState.EnteringPortal then
-        -- Portal 2: Exclusivo na Wave 16 (Boss Room)
-        if not SharedState.HasPassedSAOPortal2 and wave == 16 then
+    -- 4. Transição de Portais
+    if not isEarlyMatch and #enemies == 0 and not SharedState.EnteringPortal then
+        -- Portal 2: Wave 16 (Boss Final)
+        if not SharedState.HasPassedSAOPortal2 and wave >= 16 then
             SharedState.HasTarget = true
             FlowModule.PassPortal(SAO_PORTAL_2_WAVE15)
             local distP2 = (root.Position - SAO_PORTAL_2_WAVE15.Position).Magnitude
-            if distP2 > 12 then
+            if distP2 > 8 then
                 SharedState.HasPassedSAOPortal2 = true
             end
             return
-        -- Portal 1: Estritamente na Wave 12 (Wave 13 já possui novo checkpoint de respawn)
+        -- Portal 1: Estritamente na Wave 12
         elseif not SharedState.HasPassedSAOPortal1 and wave == 12 then
             SharedState.HasTarget = true
             FlowModule.PassPortal(SAO_PORTAL_1_WAVE11)
             local distP1 = (root.Position - SAO_PORTAL_1_WAVE11.Position).Magnitude
-            if distP1 > 12 then
+            if distP1 > 8 then
                 SharedState.HasPassedSAOPortal1 = true
             end
             return
         end
     end
 
-    -- 4. Combate Regular contra Inimigos
+    -- 5. Combate Regular contra Inimigos
     local _, enemyPart = TargetingModule.GetClosestEnemy("SAO")
     if enemyPart then
         SharedState.HasTarget = true
@@ -1272,6 +1274,8 @@ function DungeonStateModule.CheckStart()
                 SharedState.IsVirusActive = false
                 SharedState.HasClickedStart = true
                 SharedState.MatchStartTick = tick()
+                SharedState.HasPassedSAOPortal1 = false
+                SharedState.HasPassedSAOPortal2 = false
                 return
             end
         end
@@ -1325,7 +1329,6 @@ local function onPlayerDiedHandler()
     SharedState.HasTarget = false
     SharedState.IsSelectingBonus = false
 
-    -- Se morrer antes da wave 13 no SAO, libera para entrar no portal 1 novamente
     local curWave = FlowModule.GetWave()
     if curWave < 13 then
         SharedState.HasPassedSAOPortal1 = false
@@ -1389,6 +1392,7 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
     SharedState.LastRoomState = "Room1"
     SharedState.HasTarget = false
     SharedState.IsSelectingBonus = false
+    SharedState.MatchStartTick = tick()
 
     local curWave = FlowModule.GetWave()
     if curWave < 13 then
