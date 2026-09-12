@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (SAO: TEMPO > DAMAGE > FALLBACK)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (MOVIMENTAÇÃO 100% FLUIDA / ANTI-TP)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON & CACHE LOCAL ]]
@@ -105,7 +105,7 @@ ConfigModule.Settings = {
     SkillMaxDistance = 22,
     HeightAboveEnemy = 8.5,
     BackDistance = 4.5,
-    TweenSpeed = 60,
+    TweenSpeed = 55,
     AttackSpeed = 0.15,
     AutoClaimQuests = false,
     AutoSell = true,
@@ -121,7 +121,7 @@ ConfigModule.Settings = {
     InfinityAutoSkipWave = true,
     InfinityOrbitRadius = 10.0,
     InfinityOrbitHeight = 12.5,
-    InfinityOrbitSpeed = 3.5,
+    InfinityOrbitSpeed = 3.0,
     WebhookEnabled = true,
     WebhookURL = "https://discord.com/api/webhooks/1542138848195248258/Xqpgk33GsjM5UrMxT0IqIvkKvKulvSJQVc6CSuPmrf6lmrjNXwjxCwGCOK0aJun-Y83o",
     NotifySecrets = true,
@@ -286,11 +286,9 @@ flightStabilizer = RunService.Stepped:Connect(function()
         if not isWaitingInitial and SharedState.HasTarget and not SharedState.IsSelectingBonus then
             local _, root, hum = CharacterModule.Get()
             if root and hum and hum.Health > 0 then
+                root.AssemblyAngularVelocity = Vector3.zero
                 if not SharedState.CurrentTween then
                     root.AssemblyLinearVelocity = Vector3.new(0, 0.05, 0)
-                    root.AssemblyAngularVelocity = Vector3.zero
-                else
-                    root.AssemblyAngularVelocity = Vector3.zero
                 end
             end
         else
@@ -356,14 +354,16 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
     local targetPos = targetCFrame.Position
     local distance = (root.Position - targetPos).Magnitude
 
-    if distance <= 1.0 then return end
+    -- Se já estiver muito perto do alvo, não faz nada para não engasgar o movimento
+    if distance <= 1.2 then return end
 
-    if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 1.0 and SharedState.CurrentTween then
+    -- Se o destino mudou menos de 2 studs e já existe um Tween rodando suave, deixa ele concluir
+    if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 2.0 and SharedState.CurrentTween then
         return
     end
 
     SharedState.CurrentTargetPos = targetPos
-    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 15), 0.04, 1.5)
+    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 15), 0.15, 2.0)
 
     if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
     SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = targetCFrame})
@@ -371,37 +371,7 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
 end
 
 function CharacterModule.FollowBehindLive(targetPart)
-    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning or SharedState.IsSelectingBonus then 
-        CharacterModule.StopMovement()
-        return 
-    end
-    local _, root = CharacterModule.Get()
-    if not root or not targetPart or not targetPart.Parent then 
-        CharacterModule.StopMovement()
-        return 
-    end
-
-    local enemyPos = targetPart.Position
-    local lookVec = targetPart.CFrame.LookVector
-    local horizontalLook = Vector3.new(lookVec.X, 0, lookVec.Z)
-    if horizontalLook.Magnitude > 0.05 then
-        lookVec = horizontalLook.Unit
-    end
-
-    local backOffset = -lookVec * ConfigModule.Settings.BackDistance + Vector3.new(0, 0.8, 0)
-    local desiredPos = enemyPos + backOffset
-    local targetCFrame = CFrame.lookAt(desiredPos, enemyPos)
-
-    local distance = (root.Position - desiredPos).Magnitude
-
-    if distance > 1.2 then
-        local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 10), 0.03, 0.25)
-        if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
-        SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = targetCFrame})
-        SharedState.CurrentTween:Play()
-    else
-        root.CFrame = targetCFrame
-    end
+    CharacterModule.FlyToEnemy(targetPart, "Nas Costas")
 end
 
 function CharacterModule.FlyToPortal(targetCFrame)
@@ -411,8 +381,13 @@ function CharacterModule.FlyToPortal(targetCFrame)
 
     local targetPos = targetCFrame.Position
     local distance = (root.Position - targetPos).Magnitude
-    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 10), 0.1, 5.0)
+    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 10), 0.2, 5.0)
 
+    if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 2.0 and SharedState.CurrentTween then
+        return
+    end
+
+    SharedState.CurrentTargetPos = targetPos
     if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
     SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = targetCFrame})
     SharedState.CurrentTween:Play()
@@ -447,7 +422,7 @@ function InfinityMovement.Step(targetPart)
     end
 
     local enemyPos = targetPart.Position
-    local speed = ConfigModule.Settings.InfinityOrbitSpeed or 3.5
+    local speed = ConfigModule.Settings.InfinityOrbitSpeed or 3.0
     local radius = ConfigModule.Settings.InfinityOrbitRadius or 10.0
     local height = ConfigModule.Settings.InfinityOrbitHeight or 12.5
 
@@ -460,17 +435,19 @@ function InfinityMovement.Step(targetPart)
     local targetCFrame = CFrame.lookAt(desiredPosition, enemyPos)
     local distance = (root.Position - desiredPosition).Magnitude
 
-    if distance > 18 then
+    -- Se estiver longe, vai com Tween suave
+    if distance > 14 then
         if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
-        local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 20), 0.1, 1.2)
+        local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 20), 0.2, 1.2)
         SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = targetCFrame})
         SharedState.CurrentTween:Play()
     else
+        -- Em combate próximo: interpolação sem teletransporte brusco
         if SharedState.CurrentTween then
             SharedState.CurrentTween:Cancel()
             SharedState.CurrentTween = nil
         end
-        root.CFrame = root.CFrame:Lerp(targetCFrame, 0.35)
+        root.CFrame = root.CFrame:Lerp(targetCFrame, 0.18)
     end
 end
 
@@ -525,7 +502,7 @@ function InfinityModule.ForceSkip()
     return executed
 end
 
--- Listener reativo do SkipWave
+-- Listener do SkipWave
 task.spawn(function()
     while SharedState.IsRunning do
         if ConfigModule.Settings.SelectedPhase == "Infinity" and ConfigModule.Settings.InfinityAutoSkipWave then
@@ -542,7 +519,7 @@ task.spawn(function()
     end
 end)
 
--- MÓDULO INTELIGENTE DE CARTAS DO SAO (PRIORIDADE: TEMPO > DAMAGE > QUALQUER UMA)
+-- MÓDULO INTELIGENTE DE CARTAS DO SAO (TEMPO > DAMAGE > FALLBACK)
 local SAOModule = {}
 
 function SAOModule.CheckBonus()
@@ -568,17 +545,14 @@ function SAOModule.CheckBonus()
                                      ((bDesc and bDesc:IsA("TextLabel")) and bDesc.Text or "")
                 combinedText = combinedText:lower()
 
-                -- 1. Verifica se é carta de Tempo
                 if combinedText:find("second") or combinedText:find("tempo") or combinedText:find("timer") then
                     timeCard = card
-                -- 2. Verifica se é carta de Dano
                 elseif combinedText:find("damage") or combinedText:find("dano") or combinedText:find("atk") or combinedText:find("attack") then
                     damageCard = card
                 end
             end
         end
 
-        -- Aplicação estrita da hierarquia: Tempo -> Dano -> Fallback
         local targetToClick = timeCard or damageCard or fallbackCard
         if targetToClick then
             CharacterModule.TriggerButton(targetToClick)
@@ -1047,7 +1021,7 @@ function FlowModule.PassPortal(targetCFrame)
     end
 end
 
--- Rota SAO (Isolada)
+-- Rota SAO (Isolada e Fluida)
 function FlowModule.RunSAO()
     local _, root = CharacterModule.Get()
     if not root then return end
@@ -1072,30 +1046,26 @@ function FlowModule.RunSAO()
         return
     end
 
-    -- 3. Transição pelos Portais
+    -- 3. Transição segura pelos Portais (somente após matar mobs da wave)
     if SharedState.EnteringPortal then return end
     local wave = FlowModule.GetWave()
 
-    -- Portal 2: Fim da Wave 15 -> 16 (Boss Room)
-    if wave >= 16 then
-        local distToPortal2 = (root.Position - SAO_PORTAL_2_WAVE15.Position).Magnitude
-        if distToPortal2 < 350 then
+    local closestMob, enemyPart = TargetingModule.GetClosestEnemy("SAO")
+
+    -- Se não há mais inimigos vivos na sala e atingiu as waves de corte:
+    if not closestMob then
+        if wave >= 16 then
             SharedState.HasTarget = true
             FlowModule.PassPortal(SAO_PORTAL_2_WAVE15)
             return
-        end
-    -- Portal 1: Fim da Wave 11 -> 12
-    elseif wave >= 12 then
-        local distToPortal1 = (root.Position - SAO_PORTAL_1_WAVE11.Position).Magnitude
-        if distToPortal1 < 350 then
+        elseif wave >= 12 then
             SharedState.HasTarget = true
             FlowModule.PassPortal(SAO_PORTAL_1_WAVE11)
             return
         end
     end
 
-    -- 4. Movimentação e Combate Padrão (Nas costas)
-    local _, enemyPart = TargetingModule.GetClosestEnemy("SAO")
+    -- 4. Movimentação suave contínua em direção ao mob
     if enemyPart then
         SharedState.HasTarget = true
         CharacterModule.FlyToEnemy(enemyPart)
