@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (INFINITY COM SKIPWAVE REATIVO NATIVO)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (INFINITY COM KITING ORBITAL 3D)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON & CACHE LOCAL ]]
@@ -119,6 +119,9 @@ ConfigModule.Settings = {
     SellMythic = false,
     InfinityCardSlot = 1,
     InfinityAutoSkipWave = true,
+    InfinityOrbitRadius = 10.0,
+    InfinityOrbitHeight = 12.5,
+    InfinityOrbitSpeed = 3.5,
     WebhookEnabled = true,
     WebhookURL = "https://discord.com/api/webhooks/1542138848195248258/Xqpgk33GsjM5UrMxT0IqIvkKvKulvSJQVc6CSuPmrf6lmrjNXwjxCwGCOK0aJun-Y83o",
     NotifySecrets = true,
@@ -432,7 +435,49 @@ function CharacterModule.TriggerButton(btn)
     end)
 end
 
--- [[ 5. MÓDULO EXCLUSIVO DO INFINITY (COM GATILHO REATIVO) ]]
+-- [[ 5. MÓDULO EXCLUSIVO DO INFINITY (COM KITING ORBITAL 3D) ]]
+local InfinityMovement = {}
+local orbitAngle = 0
+
+function InfinityMovement.Step(targetPart)
+    local _, root = CharacterModule.Get()
+    if not root or not targetPart or not targetPart.Parent then 
+        InfinityMovement.HoldCenter()
+        return 
+    end
+
+    local enemyPos = targetPart.Position
+    local speed = ConfigModule.Settings.InfinityOrbitSpeed or 3.5
+    local radius = ConfigModule.Settings.InfinityOrbitRadius or 10.0
+    local height = ConfigModule.Settings.InfinityOrbitHeight or 12.5
+
+    orbitAngle = (orbitAngle + (RunService.Heartbeat:Wait() * speed)) % (math.pi * 2)
+
+    local offsetX = math.cos(orbitAngle) * radius
+    local offsetZ = math.sin(orbitAngle) * radius
+    local desiredPosition = enemyPos + Vector3.new(offsetX, height, offsetZ)
+
+    local targetCFrame = CFrame.lookAt(desiredPosition, enemyPos)
+    local distance = (root.Position - desiredPosition).Magnitude
+
+    if distance > 18 then
+        if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
+        local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 20), 0.1, 1.2)
+        SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = targetCFrame})
+        SharedState.CurrentTween:Play()
+    else
+        if SharedState.CurrentTween then
+            SharedState.CurrentTween:Cancel()
+            SharedState.CurrentTween = nil
+        end
+        root.CFrame = root.CFrame:Lerp(targetCFrame, 0.35)
+    end
+end
+
+function InfinityMovement.HoldCenter()
+    CharacterModule.StopMovement()
+end
+
 local InfinityModule = {}
 local dungeonRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Dungeon", 10)
 
@@ -459,7 +504,28 @@ function InfinityModule.CheckBonus()
     return false
 end
 
--- Thread passiva: Escuta o evento de visibilidade do SkipWave nativo
+function InfinityModule.ForceSkip()
+    local executed = false
+
+    if dungeonRemote then
+        pcall(function()
+            dungeonRemote:FireServer("InfinitySkipWave")
+            executed = true
+        end)
+    end
+
+    local main = pgui:FindFirstChild("Main")
+    local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
+    local skipBtn = dungeonFrame and dungeonFrame:FindFirstChild("SkipWave")
+    if skipBtn and skipBtn:IsA("GuiObject") then
+        CharacterModule.TriggerButton(skipBtn)
+        executed = true
+    end
+
+    return executed
+end
+
+-- Listener reativo do botão de Skip da GUI
 task.spawn(function()
     while SharedState.IsRunning do
         if ConfigModule.Settings.SelectedPhase == "Infinity" and ConfigModule.Settings.InfinityAutoSkipWave then
@@ -468,10 +534,7 @@ task.spawn(function()
             local skipBtn = dungeonFrame and dungeonFrame:FindFirstChild("SkipWave")
 
             if skipBtn and skipBtn:IsA("GuiObject") and skipBtn.Visible then
-                CharacterModule.TriggerButton(skipBtn)
-                if dungeonRemote then
-                    pcall(function() dungeonRemote:FireServer("InfinitySkipWave") end)
-                end
+                InfinityModule.ForceSkip()
                 task.wait(1.5)
             end
         end
@@ -1086,10 +1149,10 @@ function FlowModule.RunInfinity()
     local _, enemyPart = TargetingModule.GetClosestEnemy("Infinity")
     if enemyPart and enemyPart.Parent and enemyPart.Position.Y > -2000 then
         SharedState.HasTarget = true
-        CharacterModule.FlyToEnemy(enemyPart, ConfigModule.Settings.PositionMode)
+        InfinityMovement.Step(enemyPart)
     else
         SharedState.HasTarget = false
-        CharacterModule.StopMovement()
+        InfinityMovement.HoldCenter()
     end
 end
 
@@ -1470,7 +1533,7 @@ PhaseSection:AddDropdown("PhaseSelector", {
 })
 
 PhaseSection:AddDropdown("PositionModeSelector", {
-    Title = "Modo de Posicionamento",
+    Title = "Modo de Posicionamento (Outras Fases)",
     Values = { "Nas Costas", "Em Cima da Cabeça", "Padrão (Anterior)" },
     Default = ConfigModule.Settings.PositionMode,
     Callback = function(Value) ConfigModule.Settings.PositionMode = Value ConfigModule.Save() end
@@ -1494,7 +1557,7 @@ CombatSection:AddToggle("AutoFarmToggle", {
     Callback = function(Value) ConfigModule.Settings.AutoFarm = Value if not Value then CharacterModule.StopMovement() end end
 })
 CombatSection:AddSlider("HeightAboveEnemy", {
-    Title = "Altura Vertical (Y)",
+    Title = "Altura Vertical Padrão (Y)",
     Default = ConfigModule.Settings.HeightAboveEnemy,
     Min = 1, Max = 18, Rounding = 1,
     Callback = function(Value) ConfigModule.Settings.HeightAboveEnemy = Value ConfigModule.Save() end
@@ -1569,16 +1632,33 @@ CombatSection:AddSlider("SkillCooldownSlider", {
 })
 
 -- ABA INFINITY (EXCLUSIVA)
-local InfinitySection = Tabs.Infinity:AddSection("Configurações do Modo Roguelike (Infinity)")
+local InfinitySection = Tabs.Infinity:AddSection("Ações de Wave (Infinity)")
+
+InfinitySection:AddButton({
+    Title = "⚡ Forçar Skip Agora",
+    Description = "Dispara o Remote e clica no SkipWave imediatamente",
+    Callback = function()
+        local ok = InfinityModule.ForceSkip()
+        if ok then
+            Fluent:Notify({
+                Title = "Skip Acionado",
+                Content = "Comando de Skip Wave executado!",
+                Duration = 2.5
+            })
+        end
+    end
+})
+
 InfinitySection:AddToggle("InfinitySkipWaveToggle", {
-    Title = "Auto Skip Wave (Reativo)",
-    Description = "Aciona o botão de Skip Wave assim que ele aparecer na tela",
+    Title = "Auto Skip Wave (Automático)",
+    Description = "Aciona o Skip automaticamente assim que ele aparecer na tela",
     Default = ConfigModule.Settings.InfinityAutoSkipWave,
     Callback = function(Value)
         ConfigModule.Settings.InfinityAutoSkipWave = Value
         ConfigModule.Save()
     end
 })
+
 InfinitySection:AddDropdown("CardSlotSelector", {
     Title = "Carta Padrão para Seleção",
     Description = "Qual das 3 opções de bônus o script escolhe automaticamente",
@@ -1589,6 +1669,41 @@ InfinitySection:AddDropdown("CardSlotSelector", {
         elseif Value == "Carta 2 (Centro)" then ConfigModule.Settings.InfinityCardSlot = 2
         elseif Value == "Carta 3 (Direita)" then ConfigModule.Settings.InfinityCardSlot = 3
         end
+        ConfigModule.Save()
+    end
+})
+
+local KitingSection = Tabs.Infinity:AddSection("Kiting Orbital 3D (Desvio de AoE)")
+
+KitingSection:AddSlider("InfinityRadiusSlider", {
+    Title = "Raio da Órbita (Studs)",
+    Description = "Distância horizontal ao redor do monstro",
+    Default = ConfigModule.Settings.InfinityOrbitRadius,
+    Min = 6.0, Max = 18.0, Rounding = 1,
+    Callback = function(Value)
+        ConfigModule.Settings.InfinityOrbitRadius = Value
+        ConfigModule.Save()
+    end
+})
+
+KitingSection:AddSlider("InfinityHeightSlider", {
+    Title = "Altura da Órbita (Studs)",
+    Description = "Elevação vertical segura acima do monstro",
+    Default = ConfigModule.Settings.InfinityOrbitHeight,
+    Min = 8.0, Max = 20.0, Rounding = 1,
+    Callback = function(Value)
+        ConfigModule.Settings.InfinityOrbitHeight = Value
+        ConfigModule.Save()
+    end
+})
+
+KitingSection:AddSlider("InfinitySpeedSlider", {
+    Title = "Velocidade da Rotação Orbital",
+    Description = "Quão rápido o boneco circula para desviar dos cones de ataque",
+    Default = ConfigModule.Settings.InfinityOrbitSpeed,
+    Min = 1.0, Max = 7.0, Rounding = 1,
+    Callback = function(Value)
+        ConfigModule.Settings.InfinityOrbitSpeed = Value
         ConfigModule.Save()
     end
 })
