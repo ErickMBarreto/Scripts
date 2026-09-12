@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (MOVIMENTAÇÃO 100% FLUIDA / ANTI-TP)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (SAO: PORTAL 1 APENAS NA WAVE 12)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON & CACHE LOCAL ]]
@@ -84,7 +84,9 @@ local SharedState = {
     HasClickedStart = false,
     MatchStartTick = 0,
     HasTarget = false,
-    IsSelectingBonus = false
+    IsSelectingBonus = false,
+    HasPassedSAOPortal1 = false,
+    HasPassedSAOPortal2 = false
 }
 
 -- [[ 2. CONFIGURAÇÕES ]]
@@ -100,7 +102,7 @@ ConfigModule.Settings = {
     AutoPlayAgain = true,
     AutoEngage = true,
     HardcoreMode = false,
-    StartWaitTime = 1.0,
+    StartWaitTime = 1.5,
     SkillCooldown = 0.8,
     SkillMaxDistance = 22,
     HeightAboveEnemy = 8.5,
@@ -354,10 +356,8 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
     local targetPos = targetCFrame.Position
     local distance = (root.Position - targetPos).Magnitude
 
-    -- Se já estiver muito perto do alvo, não faz nada para não engasgar o movimento
     if distance <= 1.2 then return end
 
-    -- Se o destino mudou menos de 2 studs e já existe um Tween rodando suave, deixa ele concluir
     if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 2.0 and SharedState.CurrentTween then
         return
     end
@@ -381,7 +381,7 @@ function CharacterModule.FlyToPortal(targetCFrame)
 
     local targetPos = targetCFrame.Position
     local distance = (root.Position - targetPos).Magnitude
-    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 10), 0.2, 5.0)
+    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 10), 0.2, 4.0)
 
     if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 2.0 and SharedState.CurrentTween then
         return
@@ -435,14 +435,12 @@ function InfinityMovement.Step(targetPart)
     local targetCFrame = CFrame.lookAt(desiredPosition, enemyPos)
     local distance = (root.Position - desiredPosition).Magnitude
 
-    -- Se estiver longe, vai com Tween suave
     if distance > 14 then
         if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
         local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 20), 0.2, 1.2)
         SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = targetCFrame})
         SharedState.CurrentTween:Play()
     else
-        -- Em combate próximo: interpolação sem teletransporte brusco
         if SharedState.CurrentTween then
             SharedState.CurrentTween:Cancel()
             SharedState.CurrentTween = nil
@@ -633,7 +631,8 @@ function TargetingModule.GetLivingEnemies(phase)
         gameFolder and gameFolder:FindFirstChild("SecretBoss"),
         gameFolder and gameFolder:FindFirstChild("BossRush"),
         gameFolder and gameFolder:FindFirstChild("Raids"),
-        gameFolder and gameFolder:FindFirstChild("Infinity")
+        gameFolder and gameFolder:FindFirstChild("Infinity"),
+        workspace:FindFirstChild("SAO")
     }
 
     for _, container in ipairs(searchContainers) do
@@ -998,18 +997,16 @@ function FlowModule.PassPortal(targetCFrame)
 
         local oldPos = root.Position
         local startWait = tick()
-        local tpSuccess = false
 
-        while (tick() - startWait) < 3.0 do
-            task.wait(0.1)
+        while (tick() - startWait) < 2.0 do
+            task.wait(0.08)
             local _, curRoot = CharacterModule.Get()
-            if curRoot and (curRoot.Position - oldPos).Magnitude > 60 then
-                tpSuccess = true
+            if curRoot and (curRoot.Position - oldPos).Magnitude > 15 then
                 break
             end
         end
 
-        if tpSuccess then task.wait(0.6) end
+        task.wait(0.4)
 
         local _, finalRoot = CharacterModule.Get()
         if finalRoot then
@@ -1021,7 +1018,7 @@ function FlowModule.PassPortal(targetCFrame)
     end
 end
 
--- Rota SAO (Isolada e Fluida)
+-- Rota SAO Estabilizada (Portal 1 estrito na Wave 12)
 function FlowModule.RunSAO()
     local _, root = CharacterModule.Get()
     if not root then return end
@@ -1033,7 +1030,7 @@ function FlowModule.RunSAO()
         return
     end
 
-    -- 2. Detecção de Boss Secreto / Virus
+    -- 2. Boss Secreto / Virus
     if SharedState.IsVirusActive then
         local _, enemyPart = TargetingModule.GetClosestEnemy("SAO")
         if enemyPart then
@@ -1046,26 +1043,35 @@ function FlowModule.RunSAO()
         return
     end
 
-    -- 3. Transição segura pelos Portais (somente após matar mobs da wave)
-    if SharedState.EnteringPortal then return end
     local wave = FlowModule.GetWave()
+    local enemies = TargetingModule.GetLivingEnemies("SAO")
 
-    local closestMob, enemyPart = TargetingModule.GetClosestEnemy("SAO")
-
-    -- Se não há mais inimigos vivos na sala e atingiu as waves de corte:
-    if not closestMob then
-        if wave >= 16 then
+    -- 3. Transição Inteligente por Portais:
+    -- Só avança se a sala estiver 100% limpa (#enemies == 0)
+    if #enemies == 0 and not SharedState.EnteringPortal then
+        -- Portal 2: Exclusivo na Wave 16 (Boss Room)
+        if not SharedState.HasPassedSAOPortal2 and wave == 16 then
             SharedState.HasTarget = true
             FlowModule.PassPortal(SAO_PORTAL_2_WAVE15)
+            local distP2 = (root.Position - SAO_PORTAL_2_WAVE15.Position).Magnitude
+            if distP2 > 12 then
+                SharedState.HasPassedSAOPortal2 = true
+            end
             return
-        elseif wave >= 12 then
+        -- Portal 1: Estritamente na Wave 12 (Wave 13 já possui novo checkpoint de respawn)
+        elseif not SharedState.HasPassedSAOPortal1 and wave == 12 then
             SharedState.HasTarget = true
             FlowModule.PassPortal(SAO_PORTAL_1_WAVE11)
+            local distP1 = (root.Position - SAO_PORTAL_1_WAVE11.Position).Magnitude
+            if distP1 > 12 then
+                SharedState.HasPassedSAOPortal1 = true
+            end
             return
         end
     end
 
-    -- 4. Movimentação suave contínua em direção ao mob
+    -- 4. Combate Regular contra Inimigos
+    local _, enemyPart = TargetingModule.GetClosestEnemy("SAO")
     if enemyPart then
         SharedState.HasTarget = true
         CharacterModule.FlyToEnemy(enemyPart)
@@ -1319,7 +1325,14 @@ local function onPlayerDiedHandler()
     SharedState.HasTarget = false
     SharedState.IsSelectingBonus = false
 
-    if (ConfigModule.Settings.SelectedPhase == "Boss Rush" or ConfigModule.Settings.SelectedPhase == "Infinity") and ConfigModule.Settings.AutoPlayAgain then
+    -- Se morrer antes da wave 13 no SAO, libera para entrar no portal 1 novamente
+    local curWave = FlowModule.GetWave()
+    if curWave < 13 then
+        SharedState.HasPassedSAOPortal1 = false
+    end
+    SharedState.HasPassedSAOPortal2 = false
+
+    if (ConfigModule.Settings.SelectedPhase == "Boss Rush" or ConfigModule.Settings.SelectedPhase == "Infinity" or ConfigModule.Settings.SelectedPhase == "SAO") and ConfigModule.Settings.AutoPlayAgain then
         task.spawn(function()
             task.wait(3.0)
             for _ = 1, 15 do
@@ -1376,6 +1389,13 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
     SharedState.LastRoomState = "Room1"
     SharedState.HasTarget = false
     SharedState.IsSelectingBonus = false
+
+    local curWave = FlowModule.GetWave()
+    if curWave < 13 then
+        SharedState.HasPassedSAOPortal1 = false
+    end
+    SharedState.HasPassedSAOPortal2 = false
+
     CharacterModule.StopMovement()
     bindCharacterEvents(newChar)
     task.delay(0.8, function() SharedState.IsRespawning = false end)
@@ -1453,6 +1473,8 @@ task.spawn(function()
                     SharedState.IsDungeonEnded = true
                     SharedState.IsVirusActive = false
                     SharedState.HasTarget = false
+                    SharedState.HasPassedSAOPortal1 = false
+                    SharedState.HasPassedSAOPortal2 = false
                     CharacterModule.StopMovement()
 
                     pcall(WebhookModule.ProcessDungeonDrops)
