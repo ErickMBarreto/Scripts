@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (INFINITY COM KITING ORBITAL 3D)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (SAO: TEMPO > DAMAGE > FALLBACK)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON & CACHE LOCAL ]]
@@ -90,7 +90,7 @@ local SharedState = {
 -- [[ 2. CONFIGURAÇÕES ]]
 local ConfigModule = {}
 ConfigModule.Settings = {
-    SelectedPhase = "Infinity",
+    SelectedPhase = "SAO",
     PositionMode = "Nas Costas",
     CustomWeaponName = "Yoru",
     AutoFarm = true,
@@ -435,7 +435,7 @@ function CharacterModule.TriggerButton(btn)
     end)
 end
 
--- [[ 5. MÓDULO EXCLUSIVO DO INFINITY (COM KITING ORBITAL 3D) ]]
+-- [[ 5. MÓDULOS ESPECÍFICOS: INFINITY E SAO ]]
 local InfinityMovement = {}
 local orbitAngle = 0
 
@@ -525,7 +525,7 @@ function InfinityModule.ForceSkip()
     return executed
 end
 
--- Listener reativo do botão de Skip da GUI
+-- Listener reativo do SkipWave
 task.spawn(function()
     while SharedState.IsRunning do
         if ConfigModule.Settings.SelectedPhase == "Infinity" and ConfigModule.Settings.InfinityAutoSkipWave then
@@ -541,6 +541,56 @@ task.spawn(function()
         task.wait(0.25)
     end
 end)
+
+-- MÓDULO INTELIGENTE DE CARTAS DO SAO (PRIORIDADE: TEMPO > DAMAGE > QUALQUER UMA)
+local SAOModule = {}
+
+function SAOModule.CheckBonus()
+    local main = pgui:FindFirstChild("Main")
+    local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
+    local bonuses = dungeonFrame and dungeonFrame:FindFirstChild("Bonuses")
+
+    if bonuses and bonuses.Visible then
+        SharedState.IsSelectingBonus = true
+        CharacterModule.StopMovement()
+
+        local timeCard = nil
+        local damageCard = nil
+        local fallbackCard = nil
+
+        for _, card in ipairs(bonuses:GetChildren()) do
+            if card:IsA("GuiObject") and card.Visible and card.Name:find("Bonus") then
+                if not fallbackCard then fallbackCard = card end
+
+                local bName = card:FindFirstChild("BonusName")
+                local bDesc = card:FindFirstChild("BonusDescription")
+                local combinedText = ((bName and bName:IsA("TextLabel")) and bName.Text or "") .. " " ..
+                                     ((bDesc and bDesc:IsA("TextLabel")) and bDesc.Text or "")
+                combinedText = combinedText:lower()
+
+                -- 1. Verifica se é carta de Tempo
+                if combinedText:find("second") or combinedText:find("tempo") or combinedText:find("timer") then
+                    timeCard = card
+                -- 2. Verifica se é carta de Dano
+                elseif combinedText:find("damage") or combinedText:find("dano") or combinedText:find("atk") or combinedText:find("attack") then
+                    damageCard = card
+                end
+            end
+        end
+
+        -- Aplicação estrita da hierarquia: Tempo -> Dano -> Fallback
+        local targetToClick = timeCard or damageCard or fallbackCard
+        if targetToClick then
+            CharacterModule.TriggerButton(targetToClick)
+            task.wait(0.4)
+        end
+
+        return true
+    end
+
+    SharedState.IsSelectingBonus = false
+    return false
+end
 
 -- [[ 6. DETECÇÃO DE INIMIGOS ]]
 local TargetingModule = {}
@@ -923,11 +973,15 @@ end
 -- [[ 10. FLUXO DE FASES & ROTAS ]]
 local FlowModule = {}
 
+-- CFrames dos Portais
 local BLEACH_PORTAL_1 = CFrame.new(4557.2, -305.5, 1925.0)
 local BLEACH_PORTAL_2 = CFrame.new(5411.5, -561.0, 2550.0)
 
 local OP_PORTAL_1_WAVE7  = CFrame.new(1196.6, -240.9, 1855.1)
 local OP_PORTAL_2_WAVE12 = CFrame.new(2909.3, -105.7, 2151.7)
+
+local SAO_PORTAL_1_WAVE11 = CFrame.new(3460.3, 1006.1, 197.2)
+local SAO_PORTAL_2_WAVE15 = CFrame.new(1430.5, 1006.1, 905.6)
 
 function FlowModule.GetWave()
     local stageLabel = pgui and pgui:FindFirstChild("Main")
@@ -990,6 +1044,64 @@ function FlowModule.PassPortal(targetCFrame)
         end
 
         SharedState.EnteringPortal = false
+    end
+end
+
+-- Rota SAO (Isolada)
+function FlowModule.RunSAO()
+    local _, root = CharacterModule.Get()
+    if not root then return end
+
+    -- 1. Escolha inteligente de cartas (Tempo > Dano > Fallback)
+    if SAOModule.CheckBonus() then
+        SharedState.HasTarget = false
+        CharacterModule.StopMovement()
+        return
+    end
+
+    -- 2. Detecção de Boss Secreto / Virus
+    if SharedState.IsVirusActive then
+        local _, enemyPart = TargetingModule.GetClosestEnemy("SAO")
+        if enemyPart then
+            SharedState.HasTarget = true
+            CharacterModule.FlyToEnemy(enemyPart)
+        else
+            SharedState.HasTarget = false
+            CharacterModule.StopMovement()
+        end
+        return
+    end
+
+    -- 3. Transição pelos Portais
+    if SharedState.EnteringPortal then return end
+    local wave = FlowModule.GetWave()
+
+    -- Portal 2: Fim da Wave 15 -> 16 (Boss Room)
+    if wave >= 16 then
+        local distToPortal2 = (root.Position - SAO_PORTAL_2_WAVE15.Position).Magnitude
+        if distToPortal2 < 350 then
+            SharedState.HasTarget = true
+            FlowModule.PassPortal(SAO_PORTAL_2_WAVE15)
+            return
+        end
+    -- Portal 1: Fim da Wave 11 -> 12
+    elseif wave >= 12 then
+        local distToPortal1 = (root.Position - SAO_PORTAL_1_WAVE11.Position).Magnitude
+        if distToPortal1 < 350 then
+            SharedState.HasTarget = true
+            FlowModule.PassPortal(SAO_PORTAL_1_WAVE11)
+            return
+        end
+    end
+
+    -- 4. Movimentação e Combate Padrão (Nas costas)
+    local _, enemyPart = TargetingModule.GetClosestEnemy("SAO")
+    if enemyPart then
+        SharedState.HasTarget = true
+        CharacterModule.FlyToEnemy(enemyPart)
+    else
+        SharedState.HasTarget = false
+        CharacterModule.StopMovement()
     end
 end
 
@@ -1138,7 +1250,7 @@ function FlowModule.RunIncursion()
     end
 end
 
--- [[ ROTA EXCLUSIVA DO INFINITY ]]
+-- Rota Infinity
 function FlowModule.RunInfinity()
     if InfinityModule.CheckBonus() then
         SharedState.HasTarget = false
@@ -1400,7 +1512,9 @@ task.spawn(function()
                         SharedState.IsVirusActive = true
                         task.wait(1.0)
                     else
-                        if ConfigModule.Settings.SelectedPhase == "Infinity" then
+                        if ConfigModule.Settings.SelectedPhase == "SAO" then
+                            FlowModule.RunSAO()
+                        elseif ConfigModule.Settings.SelectedPhase == "Infinity" then
                             FlowModule.RunInfinity()
                         elseif ConfigModule.Settings.SelectedPhase == "One Piece" then
                             FlowModule.RunOnePiece()
@@ -1527,13 +1641,13 @@ end)
 local PhaseSection = Tabs.Farm:AddSection("Configurações de Fase & Posição")
 PhaseSection:AddDropdown("PhaseSelector", {
     Title = "Selecionar Fase",
-    Values = { "Infinity", "One Piece", "Bleach (Fase 4)", "Boss Rush", "Incursão" },
+    Values = { "SAO", "Infinity", "One Piece", "Bleach (Fase 4)", "Boss Rush", "Incursão" },
     Default = ConfigModule.Settings.SelectedPhase,
     Callback = function(Value) ConfigModule.Settings.SelectedPhase = Value ConfigModule.Save() end
 })
 
 PhaseSection:AddDropdown("PositionModeSelector", {
-    Title = "Modo de Posicionamento (Outras Fases)",
+    Title = "Modo de Posicionamento",
     Values = { "Nas Costas", "Em Cima da Cabeça", "Padrão (Anterior)" },
     Default = ConfigModule.Settings.PositionMode,
     Callback = function(Value) ConfigModule.Settings.PositionMode = Value ConfigModule.Save() end
@@ -1846,4 +1960,4 @@ SettingsSection:AddButton({
     Callback = UIModule.Shutdown
 })
 
-Window:SelectTab(Tabs.Infinity)
+Window:SelectTab(Tabs.Farm)
