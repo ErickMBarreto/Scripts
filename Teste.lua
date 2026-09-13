@@ -1,12 +1,12 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (TWEEN ESTÁVEL + FILTRO ANTI-BAÚ)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (ANTI-MOVIMENTO SUSPEITO BLINDADO)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON & CACHE LOCAL ]]
-if getgenv and getgenv().HubDosRapazes_Loaded then
-    return
-end
 if getgenv then
+    if getgenv().HubDosRapazes_Shutdown then
+        pcall(getgenv().HubDosRapazes_Shutdown)
+    end
     getgenv().HubDosRapazes_Loaded = true
 end
 
@@ -36,11 +36,21 @@ local function queueNextExecution()
             queueFunc(string.format([[
                 if getgenv then getgenv().HubDosRapazes_Loaded = nil end
                 repeat task.wait(0.5) until game:IsLoaded() and game.Players.LocalPlayer
-                task.wait(2.5)
+                task.wait(2.0)
                 
+                local success = false
                 if readfile and isfile and isfile("%s") then
-                    loadstring(readfile("%s"))()
-                else
+                    local content = readfile("%s")
+                    if content and #content > 500 then
+                        local fn = loadstring(content)
+                        if fn then
+                            success = true
+                            pcall(fn)
+                        end
+                    end
+                end
+                
+                if not success then
                     loadstring(game:HttpGet("%s"))()
                 end
             ]], SCRIPT_NAME, SCRIPT_NAME, scriptURL))
@@ -62,7 +72,15 @@ for _, gui in ipairs({CoreGui, pgui}) do
     end
 end
 
-local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+local successFluent, Fluent = pcall(function()
+    return loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+end)
+
+if not successFluent or not Fluent then
+    if getgenv then getgenv().HubDosRapazes_Loaded = nil end
+    warn("[Hub dos Rapazes] Falha ao carregar a interface. Tente executar novamente.")
+    return
+end
 
 local FIXED_START_WAIT_TIME = 5.0
 
@@ -109,7 +127,7 @@ ConfigModule.Settings = {
     SkillMaxDistance = 22,
     HeightAboveEnemy = 8.5,
     BackDistance = 4.5,
-    TweenSpeed = 55,
+    TweenSpeed = 48, -- Ajustado para velocidade segura anti-detecção
     AttackSpeed = 0.15,
     AutoClaimQuests = false,
     AutoSell = true,
@@ -242,7 +260,7 @@ function WebhookModule.ProcessDungeonDrops()
     end
 end
 
--- [[ 4. PERSONAGEM & FÍSICA ESTÁVEL (TWEEN ESTÁVEL ANTI-BAN) ]]
+-- [[ 4. PERSONAGEM & FÍSICA ESTÁVEL ]]
 local CharacterModule = {}
 local diedConnection = nil
 local charConnection = nil
@@ -277,10 +295,7 @@ function CharacterModule.ApplyPhysicsStabilizers(char)
         hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
         hum:SetStateEnabled(Enum.HumanoidStateType.PlatformStanding, false)
     end
-    local root = char:FindFirstChild("HumanoidRootPart")
-    if root then
-        root.CanCollide = false
-    end
+    -- Não forçamos root.CanCollide = false para não acionar flags de NoClip
 end
 
 function CharacterModule.IsActionBlocked()
@@ -293,6 +308,7 @@ function CharacterModule.IsActionBlocked()
     return false
 end
 
+-- Estabilização de voo sem discrepância de aceleração
 flightStabilizer = RunService.Stepped:Connect(function()
     if SharedState.IsRunning and ConfigModule.Settings.AutoFarm and not CharacterModule.IsActionBlocked() then
         if SharedState.HasTarget and not SharedState.IsSelectingBonus then
@@ -300,7 +316,7 @@ flightStabilizer = RunService.Stepped:Connect(function()
             if root and hum and hum.Health > 0 then
                 root.AssemblyAngularVelocity = Vector3.zero
                 if not SharedState.CurrentTween then
-                    root.AssemblyLinearVelocity = Vector3.new(0, 0.05, 0)
+                    root.AssemblyLinearVelocity = Vector3.new(0, 0.01, 0)
                 end
             end
         else
@@ -374,13 +390,12 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
 
     if distance <= 1.2 then return end
 
-    -- Histerese de 2.0 studs mantida para evitar cancelamentos sucessivos de Tween
     if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 2.0 and SharedState.CurrentTween then
         return
     end
 
     SharedState.CurrentTargetPos = targetPos
-    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 15), 0.15, 2.0)
+    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 15), 0.15, 2.2)
 
     if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
     SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = targetCFrame})
@@ -594,7 +609,7 @@ end
 
 function TargetingModule.IsAlive(obj)
     if not obj or not obj.Parent then return false end
-    if isChest(obj.Name) then return false end -- Descarte cirúrgico do baú
+    if isChest(obj.Name) then return false end
     
     local hum = obj:FindFirstChildOfClass("Humanoid")
     if hum then 
@@ -689,7 +704,7 @@ function TargetingModule.GetClosestEnemy(phase)
 
     local enemies = TargetingModule.GetLivingEnemies(phase)
     local closestEnemy, closestPart = nil, nil
-    local minDistance = math.huge -- Sem restrição de distância
+    local minDistance = math.huge
 
     for _, enemy in ipairs(enemies) do
         local targetPart = TargetingModule.GetTargetPart(enemy)
@@ -1000,6 +1015,7 @@ function FlowModule.GetWave()
     return 1
 end
 
+-- PassPortal blindado contra anticheat (sem teleporte bruto instantâneo)
 function FlowModule.PassPortal(targetCFrame, onCompleteCallback)
     local _, root = CharacterModule.Get()
     if not root then return end
@@ -1012,33 +1028,33 @@ function FlowModule.PassPortal(targetCFrame, onCompleteCallback)
 
     local dist = (root.Position - targetCFrame.Position).Magnitude
 
-    if dist > 4.5 then
+    -- Se estiver longe, faz tween normal até a boca do portal
+    if dist > 3.0 then
         CharacterModule.FlyToPortal(targetCFrame)
     else
+        -- Quando encosta, desacelera suavemente para o trigger do jogo agir naturalmente
         SharedState.EnteringPortal = true
         SharedState.LastPortalAttempt = tick()
         CharacterModule.StopMovement()
 
-        root.CanCollide = true
-        root.CFrame = targetCFrame * CFrame.new(0, -0.5, 0)
-
         local oldPos = root.Position
         local startWait = tick()
 
+        -- Aguarda o trigger nativo do jogo teleportar o jogador
         while (tick() - startWait) < 2.5 do
             task.wait(0.08)
             local _, curRoot = CharacterModule.Get()
-            if curRoot and (curRoot.Position - oldPos).Magnitude > 6 then
+            if curRoot and (curRoot.Position - oldPos).Magnitude > 8 then
                 break
             end
         end
 
-        task.wait(0.6)
+        task.wait(0.5)
 
         local _, finalRoot = CharacterModule.Get()
         if finalRoot then
-            finalRoot.CanCollide = false
             finalRoot.AssemblyLinearVelocity = Vector3.zero
+            finalRoot.AssemblyAngularVelocity = Vector3.zero
         end
 
         SharedState.EnteringPortal = false
@@ -1048,7 +1064,7 @@ function FlowModule.PassPortal(targetCFrame, onCompleteCallback)
     end
 end
 
--- ROTA DO SAO LIMPA E DIRETA
+-- ROTA DO SAO BLINDADA CONTRA ANTICHEAT
 function FlowModule.RunSAO()
     local _, root = CharacterModule.Get()
     if not root then return end
@@ -1092,10 +1108,10 @@ function FlowModule.RunSAO()
         return
     end
 
-    -- 4. TRANSIÇÃO DE PORTAIS (SOMENTE SE NÃO RESTAR NENHUM MONSTRO)
+    -- 4. TRANSIÇÃO DE PORTAIS (SOMENTE SE NÃO RESTAR NENHUM MONSTRO VIVO)
     if wave >= 16 and not SharedState.HasEnteredBossRoom then
         local distToP2 = (root.Position - SAO_PORTAL_2.Position).Magnitude
-        if distToP2 < 300 and distToP2 > 3.0 then
+        if distToP2 < 300 and distToP2 > 2.0 then
             SharedState.HasTarget = true
             FlowModule.PassPortal(SAO_PORTAL_2, function()
                 SharedState.HasEnteredBossRoom = true
@@ -1105,7 +1121,7 @@ function FlowModule.RunSAO()
         end
     elseif wave >= 12 and wave < 16 and not SharedState.HasPassedPortal1 then
         local distToP1 = (root.Position - SAO_PORTAL_1.Position).Magnitude
-        if distToP1 < 350 and distToP1 > 3.0 then
+        if distToP1 < 350 and distToP1 > 2.0 then
             SharedState.HasTarget = true
             FlowModule.PassPortal(SAO_PORTAL_1, function()
                 SharedState.HasPassedPortal1 = true
