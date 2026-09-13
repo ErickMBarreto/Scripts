@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (ARQUITETURA CENTRALIZADA GITHUB)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (CONFIG PERSISTENTE & DEFAULTS OFF)
 -- ====================================================================
 
 -- [[ 1. TRAVA SINGLETON & LIMPEZA DE AMBIENTE ]]
@@ -36,7 +36,6 @@ pcall(function()
     end
 end)
 
--- ÚNICA rotina de teleporte permitida na sessão inteira
 local hasQueuedTeleport = false
 local function queueNextExecution()
     if hasQueuedTeleport then return end
@@ -147,8 +146,8 @@ ConfigModule.Settings = {
     BackDistance = 4.5,
     TweenSpeed = 48,
     AttackSpeed = 0.15,
-    AutoClaimQuests = false,
-    AutoSell = true,
+    AutoClaimQuests = false, -- Padrão desligado
+    AutoSell = false,        -- Padrão desligado
     SellDelaySeconds = 10,
     AutoFavoriteSecrets = true,
     AutoFavoriteMythics = false,
@@ -162,7 +161,7 @@ ConfigModule.Settings = {
     InfinityOrbitRadius = 10.0,
     InfinityOrbitHeight = 12.5,
     InfinityOrbitSpeed = 3.0,
-    WebhookEnabled = true,
+    WebhookEnabled = false,  -- Padrão desligado
     WebhookURL = "https://discord.com/api/webhooks/1542138848195248258/Xqpgk33GsjM5UrMxT0IqIvkKvKulvSJQVc6CSuPmrf6lmrjNXwjxCwGCOK0aJun-Y83o",
     NotifySecrets = true,
     NotifyMythics = true,
@@ -626,7 +625,7 @@ function SAOModule.CheckBonus()
     return false
 end
 
--- [[ 6. DETECÇÃO DE INIMIGOS (SEM CONFLITO DE ALTURA OU DISTÂNCIA) ]]
+-- [[ 6. DETECÇÃO DE INIMIGOS (COM FILTRO ANTI-BAÚ) ]]
 local TargetingModule = {}
 
 local function isChest(objName)
@@ -1941,7 +1940,10 @@ SellMainSection:AddToggle("AutoSellToggle", {
     Title = "Ativar Auto-Sell",
     Description = "Vende automaticamente 1 vez logo após iniciar a dungeon",
     Default = ConfigModule.Settings.AutoSell,
-    Callback = function(Value) ConfigModule.Settings.AutoSell = Value ConfigModule.Save() end
+    Callback = function(Value) 
+        ConfigModule.Settings.AutoSell = Value 
+        ConfigModule.Save() -- Grava sua escolha no disco
+    end
 })
 SellMainSection:AddSlider("SellDelaySlider", {
     Title = "Tempo pós-início para Vender (s)",
@@ -1988,7 +1990,10 @@ local WebhookSection = Tabs.Webhook:AddSection("Configuração do Webhook")
 WebhookSection:AddToggle("WebhookEnableToggle", {
     Title = "Ativar Notificações no Discord",
     Default = ConfigModule.Settings.WebhookEnabled,
-    Callback = function(Value) ConfigModule.Settings.WebhookEnabled = Value ConfigModule.Save() end
+    Callback = function(Value) 
+        ConfigModule.Settings.WebhookEnabled = Value 
+        ConfigModule.Save() -- Grava sua escolha no disco
+    end
 })
 local WebhookInput = WebhookSection:AddInput("WebhookURLBox", {
     Title = "URL do Webhook Discord",
@@ -2041,7 +2046,10 @@ local QuestsSection = Tabs.Settings:AddSection("Automação de Missões (Quests)
 QuestsSection:AddToggle("AutoClaimQuestsToggle", {
     Title = "Auto-Claim de Missões (13s pós-início)",
     Default = ConfigModule.Settings.AutoClaimQuests,
-    Callback = function(Value) ConfigModule.Settings.AutoClaimQuests = Value ConfigModule.Save() end
+    Callback = function(Value) 
+        ConfigModule.Settings.AutoClaimQuests = Value 
+        ConfigModule.Save() -- Grava sua escolha no disco
+    end
 })
 QuestsSection:AddButton({
     Title = "⚡ Resgatar Missões Agora",
