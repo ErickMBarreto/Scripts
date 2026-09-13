@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (SAO: DETECÇÃO TOTAL SEM LIMITE DE DISTÂNCIA)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (TWEEN ESTÁVEL + FILTRO ANTI-BAÚ)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON & CACHE LOCAL ]]
@@ -242,7 +242,7 @@ function WebhookModule.ProcessDungeonDrops()
     end
 end
 
--- [[ 4. PERSONAGEM & FÍSICA ESTÁVEL ]]
+-- [[ 4. PERSONAGEM & FÍSICA ESTÁVEL (TWEEN ESTÁVEL ANTI-BAN) ]]
 local CharacterModule = {}
 local diedConnection = nil
 local charConnection = nil
@@ -374,12 +374,13 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
 
     if distance <= 1.2 then return end
 
+    -- Histerese de 2.0 studs mantida para evitar cancelamentos sucessivos de Tween
     if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 2.0 and SharedState.CurrentTween then
         return
     end
 
     SharedState.CurrentTargetPos = targetPos
-    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 15), 0.15, 3.5)
+    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 15), 0.15, 2.0)
 
     if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
     SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = targetCFrame})
@@ -583,25 +584,17 @@ function SAOModule.CheckBonus()
     return false
 end
 
--- [[ 6. DETECÇÃO TOTAL DE INIMIGOS (SEM LIMITE DE DISTÂNCIA / ANTI-BAÚ) ]]
+-- [[ 6. DETECÇÃO DE INIMIGOS (DETECÇÃO ORIGINAL + FILTRO DE BAÚ) ]]
 local TargetingModule = {}
 
-local IGNORED_NAMES = {
-    "chest", "reward", "crate", "box", "drop", "loot", "portal", "gate",
-    "break", "item", "orb", "coin", "destructible", "stand", "spawn"
-}
-
-function TargetingModule.IsChestOrProp(name)
-    local n = name:lower()
-    for _, pattern in ipairs(IGNORED_NAMES) do
-        if n:find(pattern) then return true end
-    end
-    return false
+local function isChest(objName)
+    local n = objName:lower()
+    return n:find("chest") or n:find("crate") or n:find("reward")
 end
 
 function TargetingModule.IsAlive(obj)
     if not obj or not obj.Parent then return false end
-    if TargetingModule.IsChestOrProp(obj.Name) then return false end
+    if isChest(obj.Name) then return false end -- Descarte cirúrgico do baú
     
     local hum = obj:FindFirstChildOfClass("Humanoid")
     if hum then 
@@ -623,7 +616,7 @@ function TargetingModule.IsAlive(obj)
     return true
 end
 
-function TargetingModule.GetTargetPart(obj, phase)
+function TargetingModule.GetTargetPart(obj)
     if not obj or not obj.Parent then return nil end
     local part = obj:FindFirstChild("HumanoidRootPart")
         or obj:FindFirstChild("RootPart")
@@ -634,14 +627,10 @@ function TargetingModule.GetTargetPart(obj, phase)
         or (obj:IsA("Model") and obj.PrimaryPart)
         or obj:FindFirstChildWhichIsA("BasePart")
     
-    if not part then return nil end
-
-    -- Descarta apenas se estiver no abismo/fora do mapa
-    if part.Position.Y < 300 then
-        return nil
+    if part and part.Position.Y > -2000 then
+        return part
     end
-
-    return part
+    return nil
 end
 
 function TargetingModule.GetLivingEnemies(phase)
@@ -651,7 +640,7 @@ function TargetingModule.GetLivingEnemies(phase)
 
     local function addEntity(mob)
         if mob and mob:IsA("Model") and mob ~= char and not registered[mob] and not Players:GetPlayerFromCharacter(mob) then
-            if not TargetingModule.IsChestOrProp(mob.Name) and TargetingModule.IsAlive(mob) and TargetingModule.GetTargetPart(mob, phase) then
+            if TargetingModule.IsAlive(mob) and TargetingModule.GetTargetPart(mob) then
                 registered[mob] = true
                 table.insert(list, mob)
             end
@@ -681,7 +670,6 @@ function TargetingModule.GetLivingEnemies(phase)
         end
     end
 
-    -- Varredura geral de contingência caso os inimigos estejam soltos no Game
     if #list == 0 and gameFolder then
         for _, desc in ipairs(gameFolder:GetDescendants()) do
             if desc:IsA("Model") and desc ~= char and not Players:GetPlayerFromCharacter(desc) then
@@ -701,10 +689,10 @@ function TargetingModule.GetClosestEnemy(phase)
 
     local enemies = TargetingModule.GetLivingEnemies(phase)
     local closestEnemy, closestPart = nil, nil
-    local minDistance = math.huge -- Busca o mais próximo independente da distância
+    local minDistance = math.huge -- Sem restrição de distância
 
     for _, enemy in ipairs(enemies) do
-        local targetPart = TargetingModule.GetTargetPart(enemy, phase)
+        local targetPart = TargetingModule.GetTargetPart(enemy)
         if targetPart and targetPart:IsA("BasePart") then
             local dist = (root.Position - targetPart.Position).Magnitude
             if dist < minDistance then
@@ -1060,7 +1048,7 @@ function FlowModule.PassPortal(targetCFrame, onCompleteCallback)
     end
 end
 
--- ROTA DO SAO: SEM LIMITAÇÃO DE DISTÂNCIA PARA ATACAR
+-- ROTA DO SAO LIMPA E DIRETA
 function FlowModule.RunSAO()
     local _, root = CharacterModule.Get()
     if not root then return end
@@ -1093,7 +1081,7 @@ function FlowModule.RunSAO()
 
     local wave = FlowModule.GetWave()
 
-    -- 3. VERIFICAÇÃO DE INIMIGOS VIVOS (SEM LIMITE DE DISTÂNCIA):
+    -- 3. PRIORIDADE: SE EXISTIR INIMIGO NO MAPA, ATACA IMEDIATAMENTE
     local currentMob, mobPart = TargetingModule.GetClosestEnemy("SAO")
     if currentMob and mobPart then
         if wave >= 16 then
@@ -1104,7 +1092,7 @@ function FlowModule.RunSAO()
         return
     end
 
-    -- 4. TRANSIÇÃO DE PORTAIS (SOMENTE SE NÃO HOUVER NENHUM MOB NO MAPA):
+    -- 4. TRANSIÇÃO DE PORTAIS (SOMENTE SE NÃO RESTAR NENHUM MONSTRO)
     if wave >= 16 and not SharedState.HasEnteredBossRoom then
         local distToP2 = (root.Position - SAO_PORTAL_2.Position).Magnitude
         if distToP2 < 300 and distToP2 > 3.0 then
@@ -1127,7 +1115,7 @@ function FlowModule.RunSAO()
         end
     end
 
-    -- 5. STANDBY SE NÃO HOUVER INIMIGOS
+    -- 5. STANDBY SE NÃO HOUVER MONSTROS
     SharedState.HasTarget = false
     CharacterModule.StopMovement()
 end
