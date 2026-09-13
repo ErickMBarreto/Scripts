@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (SAO: TRAVA IRREVERSÍVEL PORTAL 2)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (SAO: LIMPEZA TOTAL DA WAVE 16 + ANTI-BAÚ)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON & CACHE LOCAL ]]
@@ -88,7 +88,6 @@ local SharedState = {
     RespawnLockUntil = 0,
     HasTarget = false,
     IsSelectingBonus = false,
-    -- Travas Unidirecionais para evitar Rubberbanding
     HasPassedPortal1 = false,
     HasEnteredBossRoom = false
 }
@@ -584,11 +583,25 @@ function SAOModule.CheckBonus()
     return false
 end
 
--- [[ 6. DETECÇÃO DE INIMIGOS ]]
+-- [[ 6. DETECÇÃO DE INIMIGOS (COM FILTRO ANTI-BAÚ E ANTI-FORA DO MAPA) ]]
 local TargetingModule = {}
+
+local IGNORED_NAMES = {
+    "chest", "reward", "crate", "box", "drop", "loot", "portal", "gate",
+    "break", "item", "orb", "coin", "destructible", "stand", "spawn"
+}
+
+function TargetingModule.IsChestOrProp(name)
+    local n = name:lower()
+    for _, pattern in ipairs(IGNORED_NAMES) do
+        if n:find(pattern) then return true end
+    end
+    return false
+end
 
 function TargetingModule.IsAlive(obj)
     if not obj or not obj.Parent then return false end
+    if TargetingModule.IsChestOrProp(obj.Name) then return false end
     
     local hum = obj:FindFirstChildOfClass("Humanoid")
     if hum then 
@@ -610,7 +623,7 @@ function TargetingModule.IsAlive(obj)
     return true
 end
 
-function TargetingModule.GetTargetPart(obj)
+function TargetingModule.GetTargetPart(obj, phase)
     if not obj or not obj.Parent then return nil end
     local part = obj:FindFirstChild("HumanoidRootPart")
         or obj:FindFirstChild("RootPart")
@@ -621,10 +634,20 @@ function TargetingModule.GetTargetPart(obj)
         or (obj:IsA("Model") and obj.PrimaryPart)
         or obj:FindFirstChildWhichIsA("BasePart")
     
-    if part and part.Position.Y > -2000 then
-        return part
+    if not part then return nil end
+
+    -- Blindagem para a fase SAO: garante que o alvo esteja na altura real da arena
+    if phase == "SAO" then
+        if part.Position.Y < 950 or part.Position.Y > 1060 then
+            return nil
+        end
+    else
+        if part.Position.Y < -2000 then
+            return nil
+        end
     end
-    return nil
+
+    return part
 end
 
 function TargetingModule.GetLivingEnemies(phase)
@@ -634,7 +657,7 @@ function TargetingModule.GetLivingEnemies(phase)
 
     local function addEntity(mob)
         if mob and mob:IsA("Model") and mob ~= char and not registered[mob] and not Players:GetPlayerFromCharacter(mob) then
-            if TargetingModule.IsAlive(mob) and TargetingModule.GetTargetPart(mob) then
+            if not TargetingModule.IsChestOrProp(mob.Name) and TargetingModule.IsAlive(mob) and TargetingModule.GetTargetPart(mob, phase) then
                 registered[mob] = true
                 table.insert(list, mob)
             end
@@ -664,16 +687,6 @@ function TargetingModule.GetLivingEnemies(phase)
         end
     end
 
-    if #list == 0 and gameFolder then
-        for _, desc in ipairs(gameFolder:GetDescendants()) do
-            if desc:IsA("Model") and desc ~= char and not Players:GetPlayerFromCharacter(desc) then
-                if desc.Name ~= "Clothing" and not desc:FindFirstAncestor("Players") then
-                    addEntity(desc)
-                end
-            end
-        end
-    end
-
     return list
 end
 
@@ -683,10 +696,10 @@ function TargetingModule.GetClosestEnemy(phase)
 
     local enemies = TargetingModule.GetLivingEnemies(phase)
     local closestEnemy, closestPart = nil, nil
-    local minDistance = math.huge
+    local minDistance = (phase == "SAO") and 260 or 350 -- No SAO não busca além de 260 studs
 
     for _, enemy in ipairs(enemies) do
-        local targetPart = TargetingModule.GetTargetPart(enemy)
+        local targetPart = TargetingModule.GetTargetPart(enemy, phase)
         if targetPart and targetPart:IsA("BasePart") then
             local dist = (root.Position - targetPart.Position).Magnitude
             if dist < minDistance then
@@ -1019,7 +1032,6 @@ function FlowModule.PassPortal(targetCFrame, onCompleteCallback)
         local oldPos = root.Position
         local startWait = tick()
 
-        -- Aguarda o teleporte do jogo acontecer
         while (tick() - startWait) < 2.5 do
             task.wait(0.08)
             local _, curRoot = CharacterModule.Get()
@@ -1043,7 +1055,7 @@ function FlowModule.PassPortal(targetCFrame, onCompleteCallback)
     end
 end
 
--- ROTA DO SAO COM TRAVA UNIDIRECIONAL IRREVERSÍVEL (ANTI-RUBBERBAND)
+-- ROTA DO SAO CORRIGIDA: ATACA INIMIGOS RESTANTES ATÉ O FIM
 function FlowModule.RunSAO()
     local _, root = CharacterModule.Get()
     if not root then return end
@@ -1076,19 +1088,22 @@ function FlowModule.RunSAO()
 
     local wave = FlowModule.GetWave()
 
-    -- 3. TRANSIÇÃO DO PORTAL 2 (WAVE 16):
-    -- Se ainda não foi confirmada a entrada na Sala do Boss e a wave for 16:
-    if wave >= 16 and not SharedState.HasEnteredBossRoom then
-        -- Se já existir monstro vivo na wave 16, significa que já spawnamos na Sala 3!
-        local bossMob, bossPart = TargetingModule.GetClosestEnemy("SAO")
-        if bossMob and bossPart then
+    -- 3. VERIFICAÇÃO DE INIMIGOS VIVOS NA SALA ATUAL:
+    -- Sempre dá prioridade máxima para eliminar QUALQUER monstro legítimo vivo
+    local currentMob, mobPart = TargetingModule.GetClosestEnemy("SAO")
+    if currentMob and mobPart then
+        -- Se estiver na Wave 16 e encontrou mob, confirma presença na sala do Boss
+        if wave >= 16 then
             SharedState.HasEnteredBossRoom = true
-            SharedState.HasTarget = true
-            CharacterModule.FlyToEnemy(bossPart)
-            return
         end
+        SharedState.HasTarget = true
+        CharacterModule.FlyToEnemy(mobPart)
+        return
+    end
 
-        -- Se não há mobs e estamos perto da entrada do Portal 2, atravessa
+    -- 4. TRANSIÇÃO DE PORTAIS (SÓ OCORRE SE NÃO HOUVER MONSTROS VIVOS):
+    -- Portal 2: Wave 16 e ainda não entrou na Sala do Boss
+    if wave >= 16 and not SharedState.HasEnteredBossRoom then
         local distToP2 = (root.Position - SAO_PORTAL_2.Position).Magnitude
         if distToP2 < 200 and distToP2 > 3.0 then
             SharedState.HasTarget = true
@@ -1098,10 +1113,9 @@ function FlowModule.RunSAO()
             end)
             return
         end
-    -- 4. TRANSIÇÃO DO PORTAL 1 (WAVE 12 A 15):
+    -- Portal 1: Wave 12 a 15 e ainda não passou para a sala intermediária
     elseif wave >= 12 and wave < 16 and not SharedState.HasPassedPortal1 then
         local distToP1 = (root.Position - SAO_PORTAL_1.Position).Magnitude
-        -- Se estiver perto da entrada do Portal 1, atravessa
         if distToP1 < 250 and distToP1 > 3.0 then
             SharedState.HasTarget = true
             FlowModule.PassPortal(SAO_PORTAL_1, function()
@@ -1112,15 +1126,10 @@ function FlowModule.RunSAO()
         end
     end
 
-    -- 5. COMBATE REGULAR (Ataca os inimigos da sala atual)
-    local _, enemyPart = TargetingModule.GetClosestEnemy("SAO")
-    if enemyPart then
-        SharedState.HasTarget = true
-        CharacterModule.FlyToEnemy(enemyPart)
-    else
-        SharedState.HasTarget = false
-        CharacterModule.StopMovement()
-    end
+    -- 5. SEM INIMIGOS E SEM PORTAL:
+    -- Fica parado com segurança no chão (evita ir atrás de baús ou props fora do mapa)
+    SharedState.HasTarget = false
+    CharacterModule.StopMovement()
 end
 
 -- Rota Bleach
@@ -1373,7 +1382,6 @@ local function onPlayerDiedHandler()
     SharedState.HasTarget = false
     SharedState.IsSelectingBonus = false
 
-    -- Reseta as travas caso o jogador tenha morrido e precise atravessar novamente
     local curWave = FlowModule.GetWave()
     if curWave < 16 then
         SharedState.HasEnteredBossRoom = false
@@ -1451,7 +1459,6 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
     CharacterModule.StopMovement()
     bindCharacterEvents(newChar)
 
-    -- Trava estrita de 1 segundo pós-nascimento
     SharedState.RespawnLockUntil = tick() + 1.0
     task.delay(1.0, function() 
         SharedState.IsRespawning = false 
