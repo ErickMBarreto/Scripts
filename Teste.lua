@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (SAO: LIMPEZA TOTAL DA WAVE 16 + ANTI-BAÚ)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (SAO: ALCANCE EXPANDIDO & PERSISTÊNCIA ENGAGE)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON & CACHE LOCAL ]]
@@ -103,7 +103,7 @@ ConfigModule.Settings = {
     AutoSkills = true,
     AutoStart = true,
     AutoPlayAgain = true,
-    AutoEngage = true,
+    AutoEngage = false, -- Padrão desligado para respeitar sua vontade
     HardcoreMode = false,
     SkillCooldown = 0.8,
     SkillMaxDistance = 22,
@@ -583,7 +583,7 @@ function SAOModule.CheckBonus()
     return false
 end
 
--- [[ 6. DETECÇÃO DE INIMIGOS (COM FILTRO ANTI-BAÚ E ANTI-FORA DO MAPA) ]]
+-- [[ 6. DETECÇÃO DE INIMIGOS (ALCANCE AMPLIADO & ANTI-BAÚ) ]]
 local TargetingModule = {}
 
 local IGNORED_NAMES = {
@@ -636,9 +636,9 @@ function TargetingModule.GetTargetPart(obj, phase)
     
     if not part then return nil end
 
-    -- Blindagem para a fase SAO: garante que o alvo esteja na altura real da arena
+    -- Blindagem para a fase SAO: garante que o alvo esteja dentro dos limites da fase
     if phase == "SAO" then
-        if part.Position.Y < 950 or part.Position.Y > 1060 then
+        if part.Position.Y < 940 or part.Position.Y > 1080 then
             return nil
         end
     else
@@ -696,7 +696,8 @@ function TargetingModule.GetClosestEnemy(phase)
 
     local enemies = TargetingModule.GetLivingEnemies(phase)
     local closestEnemy, closestPart = nil, nil
-    local minDistance = (phase == "SAO") and 260 or 350 -- No SAO não busca além de 260 studs
+    -- Alcance ajustado para 450 studs para não deixar mobs distantes de fora
+    local minDistance = (phase == "SAO") and 450 or 350
 
     for _, enemy in ipairs(enemies) do
         local targetPart = TargetingModule.GetTargetPart(enemy, phase)
@@ -1055,7 +1056,7 @@ function FlowModule.PassPortal(targetCFrame, onCompleteCallback)
     end
 end
 
--- ROTA DO SAO CORRIGIDA: ATACA INIMIGOS RESTANTES ATÉ O FIM
+-- ROTA DO SAO: VARREDURA AMPLIADA E ZERO RISCO DE BAÚ
 function FlowModule.RunSAO()
     local _, root = CharacterModule.Get()
     if not root then return end
@@ -1088,11 +1089,9 @@ function FlowModule.RunSAO()
 
     local wave = FlowModule.GetWave()
 
-    -- 3. VERIFICAÇÃO DE INIMIGOS VIVOS NA SALA ATUAL:
-    -- Sempre dá prioridade máxima para eliminar QUALQUER monstro legítimo vivo
+    -- 3. VERIFICAÇÃO DE INIMIGOS VIVOS (ALCANCE ATÉ 450 STUDS):
     local currentMob, mobPart = TargetingModule.GetClosestEnemy("SAO")
     if currentMob and mobPart then
-        -- Se estiver na Wave 16 e encontrou mob, confirma presença na sala do Boss
         if wave >= 16 then
             SharedState.HasEnteredBossRoom = true
         end
@@ -1101,11 +1100,10 @@ function FlowModule.RunSAO()
         return
     end
 
-    -- 4. TRANSIÇÃO DE PORTAIS (SÓ OCORRE SE NÃO HOUVER MONSTROS VIVOS):
-    -- Portal 2: Wave 16 e ainda não entrou na Sala do Boss
+    -- 4. TRANSIÇÃO DE PORTAIS (APENAS QUANDO A SALA ESTIVER LIMPA):
     if wave >= 16 and not SharedState.HasEnteredBossRoom then
         local distToP2 = (root.Position - SAO_PORTAL_2.Position).Magnitude
-        if distToP2 < 200 and distToP2 > 3.0 then
+        if distToP2 < 300 and distToP2 > 3.0 then
             SharedState.HasTarget = true
             FlowModule.PassPortal(SAO_PORTAL_2, function()
                 SharedState.HasEnteredBossRoom = true
@@ -1113,10 +1111,9 @@ function FlowModule.RunSAO()
             end)
             return
         end
-    -- Portal 1: Wave 12 a 15 e ainda não passou para a sala intermediária
     elseif wave >= 12 and wave < 16 and not SharedState.HasPassedPortal1 then
         local distToP1 = (root.Position - SAO_PORTAL_1.Position).Magnitude
-        if distToP1 < 250 and distToP1 > 3.0 then
+        if distToP1 < 350 and distToP1 > 3.0 then
             SharedState.HasTarget = true
             FlowModule.PassPortal(SAO_PORTAL_1, function()
                 SharedState.HasPassedPortal1 = true
@@ -1126,8 +1123,7 @@ function FlowModule.RunSAO()
         end
     end
 
-    -- 5. SEM INIMIGOS E SEM PORTAL:
-    -- Fica parado com segurança no chão (evita ir atrás de baús ou props fora do mapa)
+    -- 5. STANDBY ESTÁTICO SE A SALA ESTIVER VAZIA:
     SharedState.HasTarget = false
     CharacterModule.StopMovement()
 end
@@ -1336,6 +1332,7 @@ function DungeonStateModule.CheckStart()
 end
 
 function DungeonStateModule.CheckEngage()
+    if not ConfigModule.Settings.AutoEngage then return false end
     local main = pgui and pgui:FindFirstChild("Main")
     local virusFrame = main and main:FindFirstChild("VirusFrame")
     if virusFrame and virusFrame.Visible then
@@ -1752,8 +1749,11 @@ CombatSection:AddToggle("HardcoreToggle", {
 })
 CombatSection:AddToggle("AutoEngageToggle", {
     Title = "Auto Engage (Boss Secreto)",
-    Default = true,
-    Callback = function(Value) ConfigModule.Settings.AutoEngage = Value end
+    Default = ConfigModule.Settings.AutoEngage,
+    Callback = function(Value) 
+        ConfigModule.Settings.AutoEngage = Value 
+        ConfigModule.Save() -- Salva no disco permanentemente
+    end
 })
 CombatSection:AddToggle("AutoPlayAgainToggle", {
     Title = "Auto Play Again",
