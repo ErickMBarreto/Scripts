@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (SAO REFATORADO DO ZERO)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (START COM 5S FIXO / SEM SLIDER)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON & CACHE LOCAL ]]
@@ -64,6 +64,8 @@ end
 
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
 
+local FIXED_START_WAIT_TIME = 5.0 -- 5 segundos obrigatórios após iniciar
+
 local SharedState = {
     IsRunning = true,
     IsRespawning = false,
@@ -81,8 +83,9 @@ local SharedState = {
     CurrentTargetPos = nil,
     LastPortalAttempt = 0,
     LastStartAttempt = 0,
-    StartLockUntil = 0, -- Bloqueio estrito baseado no StartWaitTime
-    RespawnLockUntil = 0, -- Bloqueio de 1 segundo pós-morte
+    HasClickedStart = false,
+    StartLockUntil = tick() + FIXED_START_WAIT_TIME,
+    RespawnLockUntil = 0,
     HasTarget = false,
     IsSelectingBonus = false
 }
@@ -100,7 +103,6 @@ ConfigModule.Settings = {
     AutoPlayAgain = true,
     AutoEngage = true,
     HardcoreMode = false,
-    StartWaitTime = 5.0, -- Tempo padrão configurado em 5s
     SkillCooldown = 0.8,
     SkillMaxDistance = 22,
     HeightAboveEnemy = 8.5,
@@ -517,7 +519,6 @@ function InfinityModule.ForceSkip()
     return executed
 end
 
--- Listener do SkipWave
 task.spawn(function()
     while SharedState.IsRunning do
         if ConfigModule.Settings.SelectedPhase == "Infinity" and ConfigModule.Settings.InfinityAutoSkipWave then
@@ -534,7 +535,6 @@ task.spawn(function()
     end
 end)
 
--- MÓDULO INTELIGENTE DE CARTAS DO SAO (TEMPO > DAMAGE > FALLBACK)
 local SAOModule = {}
 
 function SAOModule.CheckBonus()
@@ -1016,7 +1016,6 @@ function FlowModule.PassPortal(targetCFrame)
         local oldPos = root.Position
         local startWait = tick()
 
-        -- Aguarda o teleporte do jogo acontecer
         while (tick() - startWait) < 2.5 do
             task.wait(0.08)
             local _, curRoot = CharacterModule.Get()
@@ -1037,26 +1036,26 @@ function FlowModule.PassPortal(targetCFrame)
     end
 end
 
--- ROTA DO SAO REFEITA DO ZERO (BASEADA EM SALA FÍSICA E CHECKPOINTS)
+-- ROTA DO SAO: BLOQUEIO TOTAL NOS PRIMEIROS 5S E CONTROLE POR SALA REAL
 function FlowModule.RunSAO()
     local _, root = CharacterModule.Get()
     if not root then return end
 
-    -- 1. Se estiver no tempo de espera do início ou de renascimento, fica travado no chão
+    -- Se estiver no bloqueio inicial de 5s ou respawn de 1s, fica estático no chão
     if CharacterModule.IsActionBlocked() then
         SharedState.HasTarget = false
         CharacterModule.StopMovement()
         return
     end
 
-    -- 2. Seleção de Cartas Automática
+    -- 1. Seleção Automática de Cartas
     if SAOModule.CheckBonus() then
         SharedState.HasTarget = false
         CharacterModule.StopMovement()
         return
     end
 
-    -- 3. Boss Secreto / Virus
+    -- 2. Boss Secreto / Virus
     if SharedState.IsVirusActive then
         local _, enemyPart = TargetingModule.GetClosestEnemy("SAO")
         if enemyPart then
@@ -1071,8 +1070,7 @@ function FlowModule.RunSAO()
 
     local wave = FlowModule.GetWave()
 
-    -- 4. CONTROLE DE PORTAL BASEADO NA POSIÇÃO REAL DO BONECO
-    -- Se wave >= 16: O objetivo é o Boss. Se você ainda estiver perto da entrada do Portal 2, passa por ele.
+    -- 3. CONTROLE DE PORTAL BASEADO NA POSIÇÃO REAL DO BONECO
     if wave >= 16 then
         local distToPortal2 = (root.Position - SAO_PORTAL_2.Position).Magnitude
         -- Se estiver na sala do meio (a menos de 300 studs do portal 2), atravessa
@@ -1081,7 +1079,6 @@ function FlowModule.RunSAO()
             FlowModule.PassPortal(SAO_PORTAL_2)
             return
         end
-    -- Se wave >= 12 e ainda não chegou na wave 16:
     elseif wave >= 12 then
         local distToPortal1 = (root.Position - SAO_PORTAL_1.Position).Magnitude
         -- Se estiver na sala inicial (a menos de 350 studs do portal 1), atravessa
@@ -1092,7 +1089,7 @@ function FlowModule.RunSAO()
         end
     end
 
-    -- 5. COMBATE REGULAR (Procura inimigos da sala onde o boneco está)
+    -- 4. COMBATE REGULAR (Busca monstros na sala atual)
     local _, enemyPart = TargetingModule.GetClosestEnemy("SAO")
     if enemyPart then
         SharedState.HasTarget = true
@@ -1296,9 +1293,8 @@ function DungeonStateModule.CheckStart()
                 CharacterModule.TriggerButton(startBtn)
                 SharedState.IsVirusActive = false
                 
-                -- Aplica a espera obrigatória configurada no Slider (padrão 5s)
-                local waitTime = ConfigModule.Settings.StartWaitTime or 5.0
-                SharedState.StartLockUntil = tick() + waitTime
+                -- Trava obrigatória de 5 segundos
+                SharedState.StartLockUntil = tick() + FIXED_START_WAIT_TIME
                 CharacterModule.StopMovement()
                 return
             end
@@ -1647,7 +1643,7 @@ task.spawn(function()
     end
 end)
 
--- ABA FARM
+-- ABA FARM (SEM O SLIDER DE START)
 local PhaseSection = Tabs.Farm:AddSection("Configurações de Fase & Posição")
 PhaseSection:AddDropdown("PhaseSelector", {
     Title = "Selecionar Fase",
@@ -1679,16 +1675,6 @@ CombatSection:AddToggle("AutoFarmToggle", {
     Title = "Iniciar Auto Farm",
     Default = true,
     Callback = function(Value) ConfigModule.Settings.AutoFarm = Value if not Value then CharacterModule.StopMovement() end end
-})
-CombatSection:AddSlider("StartWaitTimeSlider", {
-    Title = "Espera Inicial Pós-Start (s)",
-    Description = "Tempo que o boneco aguarda estático no chão após o Start (Padrão: 5s)",
-    Default = ConfigModule.Settings.StartWaitTime,
-    Min = 2.0, Max = 10.0, Rounding = 1,
-    Callback = function(Value) 
-        ConfigModule.Settings.StartWaitTime = Value 
-        ConfigModule.Save() 
-    end
 })
 CombatSection:AddSlider("HeightAboveEnemy", {
     Title = "Altura Vertical Padrão (Y)",
