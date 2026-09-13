@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (SAO: TRAVA DE COMBATE ANTES DE PORTAL)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (SAO COM TRAVA RÍGIDA DE 5S NO START)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON & CACHE LOCAL ]]
@@ -82,10 +82,10 @@ local SharedState = {
     LastPortalAttempt = 0,
     LastStartAttempt = 0,
     HasClickedStart = false,
+    IsMatchStarting = true, -- Trava rígida de 5 segundos no início
     MatchStartTick = tick(),
     HasTarget = false,
     IsSelectingBonus = false,
-    -- Controle Seguro de Ondas e Portais
     CurrentObservedWave = 1,
     HasEngagedWave11 = false,
     HasEngagedWave15 = false,
@@ -106,7 +106,7 @@ ConfigModule.Settings = {
     AutoPlayAgain = true,
     AutoEngage = true,
     HardcoreMode = false,
-    StartWaitTime = 2.0,
+    StartWaitTime = 5.0, -- Espera obrigatória de 5 segundos
     SkillCooldown = 0.8,
     SkillMaxDistance = 22,
     HeightAboveEnemy = 8.5,
@@ -160,6 +160,18 @@ function ConfigModule.Load()
     end)
 end
 ConfigModule.Load()
+
+-- Rotina para acionar a espera inicial de forma garantida
+local function triggerMatchStartCooldown(customTime)
+    SharedState.IsMatchStarting = true
+    SharedState.MatchStartTick = tick()
+    local waitSecs = customTime or ConfigModule.Settings.StartWaitTime or 5.0
+    task.spawn(function()
+        task.wait(waitSecs)
+        SharedState.IsMatchStarting = false
+    end)
+end
+triggerMatchStartCooldown(5.0)
 
 -- [[ 3. DISCORD WEBHOOK ]]
 local WebhookModule = {}
@@ -287,9 +299,8 @@ end
 
 flightStabilizer = RunService.Stepped:Connect(function()
     if SharedState.IsRunning and ConfigModule.Settings.AutoFarm and not SharedState.IsRespawning and not SharedState.EnteringPortal and not SharedState.IsTransitioning then
-        local isWaitingInitial = (tick() - SharedState.MatchStartTick) < ConfigModule.Settings.StartWaitTime
-
-        if not isWaitingInitial and SharedState.HasTarget and not SharedState.IsSelectingBonus then
+        -- Se estiver na janela dos 5 segundos de início, não deixa o boneco subir nem flutuar
+        if not SharedState.IsMatchStarting and SharedState.HasTarget and not SharedState.IsSelectingBonus then
             local _, root, hum = CharacterModule.Get()
             if root and hum and hum.Health > 0 then
                 root.AssemblyAngularVelocity = Vector3.zero
@@ -329,7 +340,7 @@ function CharacterModule.GetSafeCFrame(targetPosition, lookAtPosition)
 end
 
 function CharacterModule.FlyToEnemy(targetPart, overrideMode)
-    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning or SharedState.IsSelectingBonus then 
+    if SharedState.IsMatchStarting or SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning or SharedState.IsSelectingBonus then 
         CharacterModule.StopMovement()
         return 
     end
@@ -379,7 +390,7 @@ function CharacterModule.FollowBehindLive(targetPart)
 end
 
 function CharacterModule.FlyToPortal(targetCFrame)
-    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or not SharedState.IsRunning then return end
+    if SharedState.IsMatchStarting or SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or not SharedState.IsRunning then return end
     local _, root = CharacterModule.Get()
     if not root or not root.Parent then return end
 
@@ -419,6 +430,11 @@ local InfinityMovement = {}
 local orbitAngle = 0
 
 function InfinityMovement.Step(targetPart)
+    if SharedState.IsMatchStarting then 
+        InfinityMovement.HoldCenter()
+        return 
+    end
+
     local _, root = CharacterModule.Get()
     if not root or not targetPart or not targetPart.Parent then 
         InfinityMovement.HoldCenter()
@@ -709,7 +725,7 @@ function CombatModule.GetHotbar()
 end
 
 function CombatModule.ExecuteM1()
-    if SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning or SharedState.IsSelectingBonus then return end
+    if SharedState.IsMatchStarting or SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning or SharedState.IsSelectingBonus then return end
     comboIndex = (comboIndex % 4) + 1
     local weapon = CombatModule.GetEffectiveWeapon()
     
@@ -725,7 +741,7 @@ function CombatModule.ExecuteM1()
 end
 
 function CombatModule.ExecuteSkills()
-    if SharedState.IsSelectingBonus then return end
+    if SharedState.IsMatchStarting or SharedState.IsSelectingBonus then return end
     if (tick() - lastSkillUse) < ConfigModule.Settings.SkillCooldown then return end
     local _, root = CharacterModule.Get()
     if not root then return end
@@ -980,6 +996,7 @@ function FlowModule.GetWave()
 end
 
 function FlowModule.PassPortal(targetCFrame)
+    if SharedState.IsMatchStarting then return end
     local _, root, hum = CharacterModule.Get()
     if not root or not hum then return end
 
@@ -1024,10 +1041,17 @@ function FlowModule.PassPortal(targetCFrame)
     end
 end
 
--- Rota SAO Estabilizada: Sem voos fantasmas
+-- Rota SAO Estabilizada com Trava de Inicialização
 function FlowModule.RunSAO()
     local _, root = CharacterModule.Get()
     if not root then return end
+
+    -- Se ainda estiver nos 5s iniciais de preparação, segura no chão
+    if SharedState.IsMatchStarting then
+        SharedState.HasTarget = false
+        CharacterModule.StopMovement()
+        return
+    end
 
     -- 1. Seleção de Cartas (Tempo > Dano > Fallback)
     if SAOModule.CheckBonus() then
@@ -1052,7 +1076,7 @@ function FlowModule.RunSAO()
     local wave = FlowModule.GetWave()
     local enemies = TargetingModule.GetLivingEnemies("SAO")
 
-    -- Marca que houve combate ativo na wave antes de autorizar o portal
+    -- Marca combate ativo para autorizar o portal somente após a limpeza dos mobs
     if #enemies > 0 then
         if wave == 11 or wave == 12 then
             SharedState.HasEngagedWave11 = true
@@ -1069,12 +1093,9 @@ function FlowModule.RunSAO()
     end
 
     -- 3. Transição Condicional Segura de Portais:
-    -- Só avança para portal se:
-    -- A) Não há mais mobs vivos
-    -- B) A wave atual é EXATAMENTE 12 (para P1) ou EXATAMENTE 16 (para P2)
-    -- C) O script de fato lutou contra a wave correspondente (evita falso-positivo de sala vazia ao iniciar)
+    -- Só avança após ter lutado na wave e com a sala totalmente limpa
     if #enemies == 0 and not SharedState.EnteringPortal then
-        -- Portal 2: Wave 16 (Boss Room)
+        -- Portal 2: Wave 16 (Boss Final)
         if not SharedState.HasPassedSAOPortal2 and wave == 16 and SharedState.HasEngagedWave15 then
             SharedState.HasTarget = true
             FlowModule.PassPortal(SAO_PORTAL_2_WAVE15)
@@ -1095,7 +1116,7 @@ function FlowModule.RunSAO()
         end
     end
 
-    -- Se não há mobs e não é momento de portal, fica parado sem voar
+    -- Se não há mobs e não é momento de portal, permanece parado
     SharedState.HasTarget = false
     CharacterModule.StopMovement()
 end
@@ -1104,6 +1125,12 @@ end
 function FlowModule.RunBleach()
     local _, root = CharacterModule.Get()
     if not root then return end
+
+    if SharedState.IsMatchStarting then
+        SharedState.HasTarget = false
+        CharacterModule.StopMovement()
+        return
+    end
 
     if SharedState.IsVirusActive then
         local _, enemyPart = TargetingModule.GetClosestEnemy("Bleach (Fase 4)")
@@ -1162,6 +1189,12 @@ end
 function FlowModule.RunOnePiece()
     local _, root = CharacterModule.Get()
     if not root then return end
+
+    if SharedState.IsMatchStarting then
+        SharedState.HasTarget = false
+        CharacterModule.StopMovement()
+        return
+    end
 
     if SharedState.IsVirusActive then
         local _, enemyPart = TargetingModule.GetClosestEnemy("One Piece")
@@ -1223,6 +1256,7 @@ end
 
 -- Rota Boss Rush
 function FlowModule.RunBossRush()
+    if SharedState.IsMatchStarting then return end
     local _, enemyPart = TargetingModule.GetClosestEnemy("Boss Rush")
     if enemyPart and enemyPart.Parent then
         SharedState.HasTarget = true
@@ -1235,6 +1269,7 @@ end
 
 -- Rota Incursão
 function FlowModule.RunIncursion()
+    if SharedState.IsMatchStarting then return end
     local _, enemyPart = TargetingModule.GetClosestEnemy("Incursão")
     if enemyPart and enemyPart.Parent then
         SharedState.HasTarget = true
@@ -1247,6 +1282,7 @@ end
 
 -- Rota Infinity
 function FlowModule.RunInfinity()
+    if SharedState.IsMatchStarting then return end
     if InfinityModule.CheckBonus() then
         SharedState.HasTarget = false
         CharacterModule.StopMovement()
@@ -1290,12 +1326,12 @@ function DungeonStateModule.CheckStart()
                 CharacterModule.TriggerButton(startBtn)
                 SharedState.IsVirusActive = false
                 SharedState.HasClickedStart = true
-                SharedState.MatchStartTick = tick()
                 SharedState.CurrentObservedWave = 1
                 SharedState.HasEngagedWave11 = false
                 SharedState.HasEngagedWave15 = false
                 SharedState.HasPassedSAOPortal1 = false
                 SharedState.HasPassedSAOPortal2 = false
+                triggerMatchStartCooldown(ConfigModule.Settings.StartWaitTime or 5.0)
                 return
             end
         end
@@ -1412,7 +1448,6 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
     SharedState.LastRoomState = "Room1"
     SharedState.HasTarget = false
     SharedState.IsSelectingBonus = false
-    SharedState.MatchStartTick = tick()
 
     local curWave = FlowModule.GetWave()
     if curWave < 13 then
@@ -1422,6 +1457,7 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
 
     CharacterModule.StopMovement()
     bindCharacterEvents(newChar)
+    triggerMatchStartCooldown(ConfigModule.Settings.StartWaitTime or 5.0)
     task.delay(0.8, function() SharedState.IsRespawning = false end)
 end)
 
@@ -1432,7 +1468,7 @@ local isHandlingPlayAgain = false
 -- Loop 1: Ataque M1
 task.spawn(function()
     while SharedState.IsRunning do
-        if SharedState.HasTarget and not SharedState.IsSelectingBonus then
+        if not SharedState.IsMatchStarting and SharedState.HasTarget and not SharedState.IsSelectingBonus then
             if ConfigModule.Settings.AutoAttack and not SharedState.IsDungeonEnded and not SharedState.IsRespawning and not SharedState.IsTransitioning and not SharedState.EnteringPortal then
                 local _, _, hum = CharacterModule.Get()
                 if hum and hum.Health > 0 then 
@@ -1447,7 +1483,7 @@ end)
 -- Loop 2: Skills
 task.spawn(function()
     while SharedState.IsRunning do
-        if SharedState.HasTarget and not SharedState.IsSelectingBonus then
+        if not SharedState.IsMatchStarting and SharedState.HasTarget and not SharedState.IsSelectingBonus then
             if ConfigModule.Settings.AutoSkills and not SharedState.IsDungeonEnded and not SharedState.IsRespawning and not SharedState.IsTransitioning and not SharedState.EnteringPortal then
                 local _, _, hum = CharacterModule.Get()
                 if hum and hum.Health > 0 then 
@@ -1689,6 +1725,16 @@ CombatSection:AddToggle("AutoFarmToggle", {
     Default = true,
     Callback = function(Value) ConfigModule.Settings.AutoFarm = Value if not Value then CharacterModule.StopMovement() end end
 })
+CombatSection:AddSlider("StartWaitTimeSlider", {
+    Title = "Espera Inicial Pós-Start (s)",
+    Description = "Tempo que o boneco fica estático no chão esperando os mobs darem spawn",
+    Default = ConfigModule.Settings.StartWaitTime,
+    Min = 2.0, Max = 10.0, Rounding = 1,
+    Callback = function(Value) 
+        ConfigModule.Settings.StartWaitTime = Value 
+        ConfigModule.Save() 
+    end
+})
 CombatSection:AddSlider("HeightAboveEnemy", {
     Title = "Altura Vertical Padrão (Y)",
     Default = ConfigModule.Settings.HeightAboveEnemy,
@@ -1727,13 +1773,6 @@ CombatSection:AddToggle("AutoStartToggle", {
     Title = "Auto Start Dungeon",
     Default = true,
     Callback = function(Value) ConfigModule.Settings.AutoStart = Value end
-})
-CombatSection:AddSlider("StartWaitTimeSlider", {
-    Title = "Espera Inicial Pós-Start (s)",
-    Description = "Tempo de espera após clicar no Start antes de começar a se mover e atacar",
-    Default = ConfigModule.Settings.StartWaitTime,
-    Min = 0.5, Max = 8.0, Rounding = 1,
-    Callback = function(Value) ConfigModule.Settings.StartWaitTime = Value ConfigModule.Save() end
 })
 CombatSection:AddToggle("AutoAttackToggle", {
     Title = "Auto Attack (M1)",
