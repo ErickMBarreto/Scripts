@@ -1,13 +1,20 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (SAO: ANTI-AFUNDAMENTO & ANTI-SUSPEITO)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (ARQUITETURA CENTRALIZADA GITHUB)
 -- ====================================================================
 
--- [[ 1. LIMPEZA SEGURA DE AMBIENTE & TRAVA ANTI-CONFLITO ]]
+-- [[ 1. TRAVA SINGLETON & LIMPEZA DE AMBIENTE ]]
+local CurrentSessionId = tostring(os.time()) .. "_" .. tostring(math.random(1000, 9999))
+
 if getgenv then
+    if getgenv().HubDosRapazes_ActiveSession and getgenv().HubDosRapazes_Running then
+        return
+    end
+    getgenv().HubDosRapazes_ActiveSession = CurrentSessionId
+    getgenv().HubDosRapazes_Running = true
+    
     if getgenv().HubDosRapazes_Shutdown then
         pcall(getgenv().HubDosRapazes_Shutdown)
     end
-    getgenv().HubDosRapazes_Loaded = true
 end
 
 local CoreGui = game:GetService("CoreGui")
@@ -29,12 +36,20 @@ pcall(function()
     end
 end)
 
+-- ÚNICA rotina de teleporte permitida na sessão inteira
+local hasQueuedTeleport = false
 local function queueNextExecution()
+    if hasQueuedTeleport then return end
+    hasQueuedTeleport = true
+
     local queueFunc = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or queueonteleport
     if queueFunc then
         pcall(function()
             queueFunc(string.format([[
-                if getgenv then getgenv().HubDosRapazes_Loaded = nil end
+                if getgenv then 
+                    getgenv().HubDosRapazes_Running = nil 
+                    getgenv().HubDosRapazes_ActiveSession = nil
+                end
                 repeat task.wait(0.5) until game:IsLoaded() and game.Players.LocalPlayer
                 task.wait(2.0)
                 
@@ -77,7 +92,10 @@ local successFluent, Fluent = pcall(function()
 end)
 
 if not successFluent or not Fluent then
-    if getgenv then getgenv().HubDosRapazes_Loaded = nil end
+    if getgenv then 
+        getgenv().HubDosRapazes_Running = nil 
+        getgenv().HubDosRapazes_ActiveSession = nil
+    end
     warn("[Hub dos Rapazes] Falha ao carregar a interface. Tente executar novamente.")
     return
 end
@@ -333,7 +351,6 @@ flightStabilizer = RunService.Stepped:Connect(function()
     end
 end)
 
--- Trava de chão com Raycast: impede afundar no piso ou atravessar paredes
 function CharacterModule.GetSafeCFrame(targetPosition, lookAtPosition)
     local char = player.Character
     local rayOrigin = targetPosition + Vector3.new(0, 15, 0)
@@ -353,7 +370,6 @@ function CharacterModule.GetSafeCFrame(targetPosition, lookAtPosition)
         end
     end
 
-    -- Trava estrita de piso para a fase SAO (piso mínimo da arena é 1000)
     if ConfigModule.Settings.SelectedPhase == "SAO" and safeY < 1005 then
         safeY = 1005.5
     end
@@ -373,7 +389,6 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
         return 
     end
 
-    -- Se a parte do alvo estiver caindo no abismo, cancela o movimento imediatamente
     if ConfigModule.Settings.SelectedPhase == "SAO" and targetPart.Position.Y < 985 then
         CharacterModule.StopMovement()
         return
@@ -611,7 +626,7 @@ function SAOModule.CheckBonus()
     return false
 end
 
--- [[ 6. DETECÇÃO DE INIMIGOS (COM REJEIÇÃO DE ANIMAÇÃO DE MORTE) ]]
+-- [[ 6. DETECÇÃO DE INIMIGOS (SEM CONFLITO DE ALTURA OU DISTÂNCIA) ]]
 local TargetingModule = {}
 
 local function isChest(objName)
@@ -656,7 +671,6 @@ function TargetingModule.GetTargetPart(obj)
     
     if not part then return nil end
 
-    -- Se o monstro estiver abaixo do piso no SAO, ele está morto ou em queda
     if ConfigModule.Settings.SelectedPhase == "SAO" and part.Position.Y < 985 then
         return nil
     end
@@ -1079,7 +1093,6 @@ function FlowModule.PassPortal(targetCFrame, onCompleteCallback)
     end
 end
 
--- ROTA DO SAO: PROTEÇÃO COMPLETA CONTRA ANIMAÇÃO DE MORTE DO BOSS
 function FlowModule.RunSAO()
     local _, root = CharacterModule.Get()
     if not root then return end
@@ -1123,10 +1136,9 @@ function FlowModule.RunSAO()
         return
     end
 
-    -- Se não há mais mobs vivos, cancela qualquer movimento pendente imediatamente
     CharacterModule.StopMovement()
 
-    -- 4. TRANSIÇÃO DE PORTAIS (SOMENTE SE NÃO HOUVER MONSTROS VIVOS)
+    -- 4. TRANSIÇÃO DE PORTAIS
     if wave >= 16 and not SharedState.HasEnteredBossRoom then
         local distToP2 = (root.Position - SAO_PORTAL_2.Position).Magnitude
         if distToP2 < 300 and distToP2 > 2.0 then
@@ -1149,8 +1161,7 @@ function FlowModule.RunSAO()
         end
     end
 
-    -- 5. STANDBY SEGURO:
-    -- Quando o último inimigo morre e a sala está limpa, o boneco trava 100% no lugar
+    -- 5. STANDBY SEGURO
     SharedState.HasTarget = false
     CharacterModule.StopMovement()
 end
@@ -1680,7 +1691,10 @@ floatBtn.MouseButton1Click:Connect(function() toggleUI(true) end)
 
 function UIModule.Shutdown()
     SharedState.IsRunning = false
-    if getgenv then getgenv().HubDosRapazes_Loaded = nil end
+    if getgenv then 
+        getgenv().HubDosRapazes_Running = nil 
+        getgenv().HubDosRapazes_ActiveSession = nil
+    end
     CharacterModule.StopMovement()
     if charConnection then charConnection:Disconnect() end
     if diedConnection then diedConnection:Disconnect() end
@@ -1700,6 +1714,10 @@ function UIModule.Shutdown()
             end
         end
     end
+end
+
+if getgenv then
+    getgenv().HubDosRapazes_Shutdown = UIModule.Shutdown
 end
 
 task.spawn(function()
