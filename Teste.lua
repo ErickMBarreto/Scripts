@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (SAO: ALCANCE EXPANDIDO & PERSISTÊNCIA ENGAGE)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (SAO: DETECÇÃO TOTAL SEM LIMITE DE DISTÂNCIA)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON & CACHE LOCAL ]]
@@ -103,7 +103,7 @@ ConfigModule.Settings = {
     AutoSkills = true,
     AutoStart = true,
     AutoPlayAgain = true,
-    AutoEngage = false, -- Padrão desligado para respeitar sua vontade
+    AutoEngage = false,
     HardcoreMode = false,
     SkillCooldown = 0.8,
     SkillMaxDistance = 22,
@@ -379,7 +379,7 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
     end
 
     SharedState.CurrentTargetPos = targetPos
-    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 15), 0.15, 2.0)
+    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 15), 0.15, 3.5)
 
     if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
     SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = targetCFrame})
@@ -583,7 +583,7 @@ function SAOModule.CheckBonus()
     return false
 end
 
--- [[ 6. DETECÇÃO DE INIMIGOS (ALCANCE AMPLIADO & ANTI-BAÚ) ]]
+-- [[ 6. DETECÇÃO TOTAL DE INIMIGOS (SEM LIMITE DE DISTÂNCIA / ANTI-BAÚ) ]]
 local TargetingModule = {}
 
 local IGNORED_NAMES = {
@@ -636,15 +636,9 @@ function TargetingModule.GetTargetPart(obj, phase)
     
     if not part then return nil end
 
-    -- Blindagem para a fase SAO: garante que o alvo esteja dentro dos limites da fase
-    if phase == "SAO" then
-        if part.Position.Y < 940 or part.Position.Y > 1080 then
-            return nil
-        end
-    else
-        if part.Position.Y < -2000 then
-            return nil
-        end
+    -- Descarta apenas se estiver no abismo/fora do mapa
+    if part.Position.Y < 300 then
+        return nil
     end
 
     return part
@@ -687,6 +681,17 @@ function TargetingModule.GetLivingEnemies(phase)
         end
     end
 
+    -- Varredura geral de contingência caso os inimigos estejam soltos no Game
+    if #list == 0 and gameFolder then
+        for _, desc in ipairs(gameFolder:GetDescendants()) do
+            if desc:IsA("Model") and desc ~= char and not Players:GetPlayerFromCharacter(desc) then
+                if desc.Name ~= "Clothing" and not desc:FindFirstAncestor("Players") then
+                    addEntity(desc)
+                end
+            end
+        end
+    end
+
     return list
 end
 
@@ -696,8 +701,7 @@ function TargetingModule.GetClosestEnemy(phase)
 
     local enemies = TargetingModule.GetLivingEnemies(phase)
     local closestEnemy, closestPart = nil, nil
-    -- Alcance ajustado para 450 studs para não deixar mobs distantes de fora
-    local minDistance = (phase == "SAO") and 450 or 350
+    local minDistance = math.huge -- Busca o mais próximo independente da distância
 
     for _, enemy in ipairs(enemies) do
         local targetPart = TargetingModule.GetTargetPart(enemy, phase)
@@ -1056,7 +1060,7 @@ function FlowModule.PassPortal(targetCFrame, onCompleteCallback)
     end
 end
 
--- ROTA DO SAO: VARREDURA AMPLIADA E ZERO RISCO DE BAÚ
+-- ROTA DO SAO: SEM LIMITAÇÃO DE DISTÂNCIA PARA ATACAR
 function FlowModule.RunSAO()
     local _, root = CharacterModule.Get()
     if not root then return end
@@ -1089,7 +1093,7 @@ function FlowModule.RunSAO()
 
     local wave = FlowModule.GetWave()
 
-    -- 3. VERIFICAÇÃO DE INIMIGOS VIVOS (ALCANCE ATÉ 450 STUDS):
+    -- 3. VERIFICAÇÃO DE INIMIGOS VIVOS (SEM LIMITE DE DISTÂNCIA):
     local currentMob, mobPart = TargetingModule.GetClosestEnemy("SAO")
     if currentMob and mobPart then
         if wave >= 16 then
@@ -1100,7 +1104,7 @@ function FlowModule.RunSAO()
         return
     end
 
-    -- 4. TRANSIÇÃO DE PORTAIS (APENAS QUANDO A SALA ESTIVER LIMPA):
+    -- 4. TRANSIÇÃO DE PORTAIS (SOMENTE SE NÃO HOUVER NENHUM MOB NO MAPA):
     if wave >= 16 and not SharedState.HasEnteredBossRoom then
         local distToP2 = (root.Position - SAO_PORTAL_2.Position).Magnitude
         if distToP2 < 300 and distToP2 > 3.0 then
@@ -1123,7 +1127,7 @@ function FlowModule.RunSAO()
         end
     end
 
-    -- 5. STANDBY ESTÁTICO SE A SALA ESTIVER VAZIA:
+    -- 5. STANDBY SE NÃO HOUVER INIMIGOS
     SharedState.HasTarget = false
     CharacterModule.StopMovement()
 end
@@ -1752,7 +1756,7 @@ CombatSection:AddToggle("AutoEngageToggle", {
     Default = ConfigModule.Settings.AutoEngage,
     Callback = function(Value) 
         ConfigModule.Settings.AutoEngage = Value 
-        ConfigModule.Save() -- Salva no disco permanentemente
+        ConfigModule.Save()
     end
 })
 CombatSection:AddToggle("AutoPlayAgainToggle", {
