@@ -1,8 +1,8 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (ANTI-MOVIMENTO SUSPEITO BLINDADO)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (SAO: ANTI-AFUNDAMENTO & ANTI-SUSPEITO)
 -- ====================================================================
 
--- [[ 1. TRAVA GLOBAL SINGLETON & CACHE LOCAL ]]
+-- [[ 1. LIMPEZA SEGURA DE AMBIENTE & TRAVA ANTI-CONFLITO ]]
 if getgenv then
     if getgenv().HubDosRapazes_Shutdown then
         pcall(getgenv().HubDosRapazes_Shutdown)
@@ -127,7 +127,7 @@ ConfigModule.Settings = {
     SkillMaxDistance = 22,
     HeightAboveEnemy = 8.5,
     BackDistance = 4.5,
-    TweenSpeed = 48, -- Ajustado para velocidade segura anti-detecção
+    TweenSpeed = 48,
     AttackSpeed = 0.15,
     AutoClaimQuests = false,
     AutoSell = true,
@@ -295,7 +295,6 @@ function CharacterModule.ApplyPhysicsStabilizers(char)
         hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
         hum:SetStateEnabled(Enum.HumanoidStateType.PlatformStanding, false)
     end
-    -- Não forçamos root.CanCollide = false para não acionar flags de NoClip
 end
 
 function CharacterModule.IsActionBlocked()
@@ -308,7 +307,6 @@ function CharacterModule.IsActionBlocked()
     return false
 end
 
--- Estabilização de voo sem discrepância de aceleração
 flightStabilizer = RunService.Stepped:Connect(function()
     if SharedState.IsRunning and ConfigModule.Settings.AutoFarm and not CharacterModule.IsActionBlocked() then
         if SharedState.HasTarget and not SharedState.IsSelectingBonus then
@@ -335,10 +333,11 @@ flightStabilizer = RunService.Stepped:Connect(function()
     end
 end)
 
+-- Trava de chão com Raycast: impede afundar no piso ou atravessar paredes
 function CharacterModule.GetSafeCFrame(targetPosition, lookAtPosition)
     local char = player.Character
-    local rayOrigin = targetPosition + Vector3.new(0, 20, 0)
-    local rayDirection = Vector3.new(0, -50, 0)
+    local rayOrigin = targetPosition + Vector3.new(0, 15, 0)
+    local rayDirection = Vector3.new(0, -35, 0)
     
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
@@ -349,7 +348,14 @@ function CharacterModule.GetSafeCFrame(targetPosition, lookAtPosition)
 
     if hit then
         local floorY = hit.Position.Y
-        if safeY < (floorY + 2.0) then safeY = floorY + 2.0 end
+        if safeY < (floorY + 2.5) then 
+            safeY = floorY + 2.5 
+        end
+    end
+
+    -- Trava estrita de piso para a fase SAO (piso mínimo da arena é 1000)
+    if ConfigModule.Settings.SelectedPhase == "SAO" and safeY < 1005 then
+        safeY = 1005.5
     end
 
     local safePos = Vector3.new(targetPosition.X, safeY, targetPosition.Z)
@@ -367,6 +373,12 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
         return 
     end
 
+    -- Se a parte do alvo estiver caindo no abismo, cancela o movimento imediatamente
+    if ConfigModule.Settings.SelectedPhase == "SAO" and targetPart.Position.Y < 985 then
+        CharacterModule.StopMovement()
+        return
+    end
+
     local enemyPos = targetPart.Position
     local mode = overrideMode or ConfigModule.Settings.PositionMode
     local targetCFrame
@@ -378,9 +390,9 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
             lookVec = horizontalLook.Unit
         end
         local backOffset = -lookVec * ConfigModule.Settings.BackDistance + Vector3.new(0, 1.2, 0)
-        targetCFrame = CFrame.lookAt(enemyPos + backOffset, enemyPos)
+        targetCFrame = CharacterModule.GetSafeCFrame(enemyPos + backOffset, enemyPos)
     elseif mode == "Em Cima da Cabeça" then
-        targetCFrame = CFrame.lookAt(enemyPos + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0.1), enemyPos)
+        targetCFrame = CharacterModule.GetSafeCFrame(enemyPos + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0.1), enemyPos)
     else
         targetCFrame = CharacterModule.GetSafeCFrame(enemyPos + Vector3.new(0, ConfigModule.Settings.HeightAboveEnemy, 0), enemyPos)
     end
@@ -395,7 +407,7 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
     end
 
     SharedState.CurrentTargetPos = targetPos
-    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 15), 0.15, 2.2)
+    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 15), 0.15, 2.0)
 
     if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
     SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = targetCFrame})
@@ -599,12 +611,12 @@ function SAOModule.CheckBonus()
     return false
 end
 
--- [[ 6. DETECÇÃO DE INIMIGOS (DETECÇÃO ORIGINAL + FILTRO DE BAÚ) ]]
+-- [[ 6. DETECÇÃO DE INIMIGOS (COM REJEIÇÃO DE ANIMAÇÃO DE MORTE) ]]
 local TargetingModule = {}
 
 local function isChest(objName)
     local n = objName:lower()
-    return n:find("chest") or n:find("crate") or n:find("reward")
+    return n:find("chest") or n:find("crate") or n:find("reward") or n:find("loot") or n:find("box")
 end
 
 function TargetingModule.IsAlive(obj)
@@ -613,18 +625,18 @@ function TargetingModule.IsAlive(obj)
     
     local hum = obj:FindFirstChildOfClass("Humanoid")
     if hum then 
-        if hum.Health <= 0 or hum:GetState() == Enum.HumanoidStateType.Dead then
+        if hum.Health <= 0.1 or hum:GetState() == Enum.HumanoidStateType.Dead then
             return false
         end
     end
     
     local hpAttr = obj:GetAttribute("Health") or obj:GetAttribute("HP") or obj:GetAttribute("CurrentHealth")
-    if hpAttr and tonumber(hpAttr) <= 0 then 
+    if hpAttr and tonumber(hpAttr) <= 0.1 then 
         return false 
     end
     
     local hpVal = obj:FindFirstChild("Health") or obj:FindFirstChild("HP")
-    if hpVal and hpVal:IsA("ValueBase") and tonumber(hpVal.Value) <= 0 then 
+    if hpVal and hpVal:IsA("ValueBase") and tonumber(hpVal.Value) <= 0.1 then 
         return false 
     end
     
@@ -642,7 +654,14 @@ function TargetingModule.GetTargetPart(obj)
         or (obj:IsA("Model") and obj.PrimaryPart)
         or obj:FindFirstChildWhichIsA("BasePart")
     
-    if part and part.Position.Y > -2000 then
+    if not part then return nil end
+
+    -- Se o monstro estiver abaixo do piso no SAO, ele está morto ou em queda
+    if ConfigModule.Settings.SelectedPhase == "SAO" and part.Position.Y < 985 then
+        return nil
+    end
+
+    if part.Position.Y > -2000 then
         return part
     end
     return nil
@@ -1015,7 +1034,6 @@ function FlowModule.GetWave()
     return 1
 end
 
--- PassPortal blindado contra anticheat (sem teleporte bruto instantâneo)
 function FlowModule.PassPortal(targetCFrame, onCompleteCallback)
     local _, root = CharacterModule.Get()
     if not root then return end
@@ -1028,11 +1046,9 @@ function FlowModule.PassPortal(targetCFrame, onCompleteCallback)
 
     local dist = (root.Position - targetCFrame.Position).Magnitude
 
-    -- Se estiver longe, faz tween normal até a boca do portal
     if dist > 3.0 then
         CharacterModule.FlyToPortal(targetCFrame)
     else
-        -- Quando encosta, desacelera suavemente para o trigger do jogo agir naturalmente
         SharedState.EnteringPortal = true
         SharedState.LastPortalAttempt = tick()
         CharacterModule.StopMovement()
@@ -1040,7 +1056,6 @@ function FlowModule.PassPortal(targetCFrame, onCompleteCallback)
         local oldPos = root.Position
         local startWait = tick()
 
-        -- Aguarda o trigger nativo do jogo teleportar o jogador
         while (tick() - startWait) < 2.5 do
             task.wait(0.08)
             local _, curRoot = CharacterModule.Get()
@@ -1064,7 +1079,7 @@ function FlowModule.PassPortal(targetCFrame, onCompleteCallback)
     end
 end
 
--- ROTA DO SAO BLINDADA CONTRA ANTICHEAT
+-- ROTA DO SAO: PROTEÇÃO COMPLETA CONTRA ANIMAÇÃO DE MORTE DO BOSS
 function FlowModule.RunSAO()
     local _, root = CharacterModule.Get()
     if not root then return end
@@ -1097,7 +1112,7 @@ function FlowModule.RunSAO()
 
     local wave = FlowModule.GetWave()
 
-    -- 3. PRIORIDADE: SE EXISTIR INIMIGO NO MAPA, ATACA IMEDIATAMENTE
+    -- 3. COMBATE REGULAR (Varre apenas monstros com vida ativa confirmada)
     local currentMob, mobPart = TargetingModule.GetClosestEnemy("SAO")
     if currentMob and mobPart then
         if wave >= 16 then
@@ -1108,7 +1123,10 @@ function FlowModule.RunSAO()
         return
     end
 
-    -- 4. TRANSIÇÃO DE PORTAIS (SOMENTE SE NÃO RESTAR NENHUM MONSTRO VIVO)
+    -- Se não há mais mobs vivos, cancela qualquer movimento pendente imediatamente
+    CharacterModule.StopMovement()
+
+    -- 4. TRANSIÇÃO DE PORTAIS (SOMENTE SE NÃO HOUVER MONSTROS VIVOS)
     if wave >= 16 and not SharedState.HasEnteredBossRoom then
         local distToP2 = (root.Position - SAO_PORTAL_2.Position).Magnitude
         if distToP2 < 300 and distToP2 > 2.0 then
@@ -1131,7 +1149,8 @@ function FlowModule.RunSAO()
         end
     end
 
-    -- 5. STANDBY SE NÃO HOUVER MONSTROS
+    -- 5. STANDBY SEGURO:
+    -- Quando o último inimigo morre e a sala está limpa, o boneco trava 100% no lugar
     SharedState.HasTarget = false
     CharacterModule.StopMovement()
 end
