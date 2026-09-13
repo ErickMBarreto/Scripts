@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (SAO COM TRAVA RÍGIDA DE 5S NO START)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (SAO REFATORADO DO ZERO)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON & CACHE LOCAL ]]
@@ -81,16 +81,10 @@ local SharedState = {
     CurrentTargetPos = nil,
     LastPortalAttempt = 0,
     LastStartAttempt = 0,
-    HasClickedStart = false,
-    IsMatchStarting = true, -- Trava rígida de 5 segundos no início
-    MatchStartTick = tick(),
+    StartLockUntil = 0, -- Bloqueio estrito baseado no StartWaitTime
+    RespawnLockUntil = 0, -- Bloqueio de 1 segundo pós-morte
     HasTarget = false,
-    IsSelectingBonus = false,
-    CurrentObservedWave = 1,
-    HasEngagedWave11 = false,
-    HasEngagedWave15 = false,
-    HasPassedSAOPortal1 = false,
-    HasPassedSAOPortal2 = false
+    IsSelectingBonus = false
 }
 
 -- [[ 2. CONFIGURAÇÕES ]]
@@ -106,7 +100,7 @@ ConfigModule.Settings = {
     AutoPlayAgain = true,
     AutoEngage = true,
     HardcoreMode = false,
-    StartWaitTime = 5.0, -- Espera obrigatória de 5 segundos
+    StartWaitTime = 5.0, -- Tempo padrão configurado em 5s
     SkillCooldown = 0.8,
     SkillMaxDistance = 22,
     HeightAboveEnemy = 8.5,
@@ -160,18 +154,6 @@ function ConfigModule.Load()
     end)
 end
 ConfigModule.Load()
-
--- Rotina para acionar a espera inicial de forma garantida
-local function triggerMatchStartCooldown(customTime)
-    SharedState.IsMatchStarting = true
-    SharedState.MatchStartTick = tick()
-    local waitSecs = customTime or ConfigModule.Settings.StartWaitTime or 5.0
-    task.spawn(function()
-        task.wait(waitSecs)
-        SharedState.IsMatchStarting = false
-    end)
-end
-triggerMatchStartCooldown(5.0)
 
 -- [[ 3. DISCORD WEBHOOK ]]
 local WebhookModule = {}
@@ -297,10 +279,19 @@ function CharacterModule.ApplyPhysicsStabilizers(char)
     end
 end
 
+function CharacterModule.IsActionBlocked()
+    local now = tick()
+    if now < SharedState.StartLockUntil then return true end
+    if now < SharedState.RespawnLockUntil then return true end
+    if SharedState.IsRespawning or SharedState.EnteringPortal or SharedState.IsTransitioning or SharedState.IsDungeonEnded or not SharedState.IsRunning then
+        return true
+    end
+    return false
+end
+
 flightStabilizer = RunService.Stepped:Connect(function()
-    if SharedState.IsRunning and ConfigModule.Settings.AutoFarm and not SharedState.IsRespawning and not SharedState.EnteringPortal and not SharedState.IsTransitioning then
-        -- Se estiver na janela dos 5 segundos de início, não deixa o boneco subir nem flutuar
-        if not SharedState.IsMatchStarting and SharedState.HasTarget and not SharedState.IsSelectingBonus then
+    if SharedState.IsRunning and ConfigModule.Settings.AutoFarm and not CharacterModule.IsActionBlocked() then
+        if SharedState.HasTarget and not SharedState.IsSelectingBonus then
             local _, root, hum = CharacterModule.Get()
             if root and hum and hum.Health > 0 then
                 root.AssemblyAngularVelocity = Vector3.zero
@@ -314,6 +305,12 @@ flightStabilizer = RunService.Stepped:Connect(function()
                 root.AssemblyLinearVelocity = Vector3.zero
                 root.AssemblyAngularVelocity = Vector3.zero
             end
+        end
+    else
+        local _, root = CharacterModule.Get()
+        if root then
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
         end
     end
 end)
@@ -340,7 +337,7 @@ function CharacterModule.GetSafeCFrame(targetPosition, lookAtPosition)
 end
 
 function CharacterModule.FlyToEnemy(targetPart, overrideMode)
-    if SharedState.IsMatchStarting or SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning or SharedState.IsSelectingBonus then 
+    if CharacterModule.IsActionBlocked() or SharedState.IsSelectingBonus then 
         CharacterModule.StopMovement()
         return 
     end
@@ -390,7 +387,7 @@ function CharacterModule.FollowBehindLive(targetPart)
 end
 
 function CharacterModule.FlyToPortal(targetCFrame)
-    if SharedState.IsMatchStarting or SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or not SharedState.IsRunning then return end
+    if CharacterModule.IsActionBlocked() then return end
     local _, root = CharacterModule.Get()
     if not root or not root.Parent then return end
 
@@ -430,7 +427,7 @@ local InfinityMovement = {}
 local orbitAngle = 0
 
 function InfinityMovement.Step(targetPart)
-    if SharedState.IsMatchStarting then 
+    if CharacterModule.IsActionBlocked() then 
         InfinityMovement.HoldCenter()
         return 
     end
@@ -725,7 +722,7 @@ function CombatModule.GetHotbar()
 end
 
 function CombatModule.ExecuteM1()
-    if SharedState.IsMatchStarting or SharedState.IsDungeonEnded or SharedState.IsRespawning or SharedState.IsTransitioning or SharedState.EnteringPortal or not SharedState.IsRunning or SharedState.IsSelectingBonus then return end
+    if CharacterModule.IsActionBlocked() or SharedState.IsSelectingBonus then return end
     comboIndex = (comboIndex % 4) + 1
     local weapon = CombatModule.GetEffectiveWeapon()
     
@@ -741,7 +738,7 @@ function CombatModule.ExecuteM1()
 end
 
 function CombatModule.ExecuteSkills()
-    if SharedState.IsMatchStarting or SharedState.IsSelectingBonus then return end
+    if CharacterModule.IsActionBlocked() or SharedState.IsSelectingBonus then return end
     if (tick() - lastSkillUse) < ConfigModule.Settings.SkillCooldown then return end
     local _, root = CharacterModule.Get()
     if not root then return end
@@ -972,8 +969,8 @@ local BLEACH_PORTAL_2 = CFrame.new(5411.5, -561.0, 2550.0)
 local OP_PORTAL_1_WAVE7  = CFrame.new(1196.6, -240.9, 1855.1)
 local OP_PORTAL_2_WAVE12 = CFrame.new(2909.3, -105.7, 2151.7)
 
-local SAO_PORTAL_1_WAVE11 = CFrame.new(3460.3, 1006.1, 197.2)
-local SAO_PORTAL_2_WAVE15 = CFrame.new(1430.5, 1006.1, 905.6)
+local SAO_PORTAL_1 = CFrame.new(3460.3, 1006.1, 197.2)
+local SAO_PORTAL_2 = CFrame.new(1430.5, 1006.1, 905.6)
 
 function FlowModule.GetWave()
     local stageLabel = pgui and pgui:FindFirstChild("Main")
@@ -987,18 +984,16 @@ function FlowModule.GetWave()
         if cur then
             local n = tonumber(cur)
             if n and n >= 1 and n <= 100 then 
-                SharedState.CurrentObservedWave = n
                 return n 
             end
         end
     end
-    return SharedState.CurrentObservedWave or 1
+    return 1
 end
 
 function FlowModule.PassPortal(targetCFrame)
-    if SharedState.IsMatchStarting then return end
-    local _, root, hum = CharacterModule.Get()
-    if not root or not hum then return end
+    local _, root = CharacterModule.Get()
+    if not root then return end
 
     if SharedState.EnteringPortal and (tick() - SharedState.LastPortalAttempt) > 4.0 then
         SharedState.EnteringPortal = false
@@ -1008,7 +1003,7 @@ function FlowModule.PassPortal(targetCFrame)
 
     local dist = (root.Position - targetCFrame.Position).Magnitude
 
-    if dist > 5.0 then
+    if dist > 4.5 then
         CharacterModule.FlyToPortal(targetCFrame)
     else
         SharedState.EnteringPortal = true
@@ -1021,7 +1016,8 @@ function FlowModule.PassPortal(targetCFrame)
         local oldPos = root.Position
         local startWait = tick()
 
-        while (tick() - startWait) < 2.0 do
+        -- Aguarda o teleporte do jogo acontecer
+        while (tick() - startWait) < 2.5 do
             task.wait(0.08)
             local _, curRoot = CharacterModule.Get()
             if curRoot and (curRoot.Position - oldPos).Magnitude > 8 then
@@ -1041,26 +1037,26 @@ function FlowModule.PassPortal(targetCFrame)
     end
 end
 
--- Rota SAO Estabilizada com Trava de Inicialização
+-- ROTA DO SAO REFEITA DO ZERO (BASEADA EM SALA FÍSICA E CHECKPOINTS)
 function FlowModule.RunSAO()
     local _, root = CharacterModule.Get()
     if not root then return end
 
-    -- Se ainda estiver nos 5s iniciais de preparação, segura no chão
-    if SharedState.IsMatchStarting then
+    -- 1. Se estiver no tempo de espera do início ou de renascimento, fica travado no chão
+    if CharacterModule.IsActionBlocked() then
         SharedState.HasTarget = false
         CharacterModule.StopMovement()
         return
     end
 
-    -- 1. Seleção de Cartas (Tempo > Dano > Fallback)
+    -- 2. Seleção de Cartas Automática
     if SAOModule.CheckBonus() then
         SharedState.HasTarget = false
         CharacterModule.StopMovement()
         return
     end
 
-    -- 2. Boss Secreto / Virus
+    -- 3. Boss Secreto / Virus
     if SharedState.IsVirusActive then
         local _, enemyPart = TargetingModule.GetClosestEnemy("SAO")
         if enemyPart then
@@ -1074,63 +1070,43 @@ function FlowModule.RunSAO()
     end
 
     local wave = FlowModule.GetWave()
-    local enemies = TargetingModule.GetLivingEnemies("SAO")
 
-    -- Marca combate ativo para autorizar o portal somente após a limpeza dos mobs
-    if #enemies > 0 then
-        if wave == 11 or wave == 12 then
-            SharedState.HasEngagedWave11 = true
-        elseif wave == 15 or wave == 16 then
-            SharedState.HasEngagedWave15 = true
-        end
-
-        local _, enemyPart = TargetingModule.GetClosestEnemy("SAO")
-        if enemyPart then
+    -- 4. CONTROLE DE PORTAL BASEADO NA POSIÇÃO REAL DO BONECO
+    -- Se wave >= 16: O objetivo é o Boss. Se você ainda estiver perto da entrada do Portal 2, passa por ele.
+    if wave >= 16 then
+        local distToPortal2 = (root.Position - SAO_PORTAL_2.Position).Magnitude
+        -- Se estiver na sala do meio (a menos de 300 studs do portal 2), atravessa
+        if distToPortal2 < 300 and distToPortal2 > 3.0 then
             SharedState.HasTarget = true
-            CharacterModule.FlyToEnemy(enemyPart)
+            FlowModule.PassPortal(SAO_PORTAL_2)
+            return
+        end
+    -- Se wave >= 12 e ainda não chegou na wave 16:
+    elseif wave >= 12 then
+        local distToPortal1 = (root.Position - SAO_PORTAL_1.Position).Magnitude
+        -- Se estiver na sala inicial (a menos de 350 studs do portal 1), atravessa
+        if distToPortal1 < 350 and distToPortal1 > 3.0 then
+            SharedState.HasTarget = true
+            FlowModule.PassPortal(SAO_PORTAL_1)
             return
         end
     end
 
-    -- 3. Transição Condicional Segura de Portais:
-    -- Só avança após ter lutado na wave e com a sala totalmente limpa
-    if #enemies == 0 and not SharedState.EnteringPortal then
-        -- Portal 2: Wave 16 (Boss Final)
-        if not SharedState.HasPassedSAOPortal2 and wave == 16 and SharedState.HasEngagedWave15 then
-            SharedState.HasTarget = true
-            FlowModule.PassPortal(SAO_PORTAL_2_WAVE15)
-            local distP2 = (root.Position - SAO_PORTAL_2_WAVE15.Position).Magnitude
-            if distP2 > 8 then
-                SharedState.HasPassedSAOPortal2 = true
-            end
-            return
-        -- Portal 1: Estritamente na Wave 12
-        elseif not SharedState.HasPassedSAOPortal1 and wave == 12 and SharedState.HasEngagedWave11 then
-            SharedState.HasTarget = true
-            FlowModule.PassPortal(SAO_PORTAL_1_WAVE11)
-            local distP1 = (root.Position - SAO_PORTAL_1_WAVE11.Position).Magnitude
-            if distP1 > 8 then
-                SharedState.HasPassedSAOPortal1 = true
-            end
-            return
-        end
+    -- 5. COMBATE REGULAR (Procura inimigos da sala onde o boneco está)
+    local _, enemyPart = TargetingModule.GetClosestEnemy("SAO")
+    if enemyPart then
+        SharedState.HasTarget = true
+        CharacterModule.FlyToEnemy(enemyPart)
+    else
+        SharedState.HasTarget = false
+        CharacterModule.StopMovement()
     end
-
-    -- Se não há mobs e não é momento de portal, permanece parado
-    SharedState.HasTarget = false
-    CharacterModule.StopMovement()
 end
 
 -- Rota Bleach
 function FlowModule.RunBleach()
     local _, root = CharacterModule.Get()
-    if not root then return end
-
-    if SharedState.IsMatchStarting then
-        SharedState.HasTarget = false
-        CharacterModule.StopMovement()
-        return
-    end
+    if not root or CharacterModule.IsActionBlocked() then return end
 
     if SharedState.IsVirusActive then
         local _, enemyPart = TargetingModule.GetClosestEnemy("Bleach (Fase 4)")
@@ -1188,13 +1164,7 @@ end
 -- Rota One Piece
 function FlowModule.RunOnePiece()
     local _, root = CharacterModule.Get()
-    if not root then return end
-
-    if SharedState.IsMatchStarting then
-        SharedState.HasTarget = false
-        CharacterModule.StopMovement()
-        return
-    end
+    if not root or CharacterModule.IsActionBlocked() then return end
 
     if SharedState.IsVirusActive then
         local _, enemyPart = TargetingModule.GetClosestEnemy("One Piece")
@@ -1256,7 +1226,7 @@ end
 
 -- Rota Boss Rush
 function FlowModule.RunBossRush()
-    if SharedState.IsMatchStarting then return end
+    if CharacterModule.IsActionBlocked() then return end
     local _, enemyPart = TargetingModule.GetClosestEnemy("Boss Rush")
     if enemyPart and enemyPart.Parent then
         SharedState.HasTarget = true
@@ -1269,7 +1239,7 @@ end
 
 -- Rota Incursão
 function FlowModule.RunIncursion()
-    if SharedState.IsMatchStarting then return end
+    if CharacterModule.IsActionBlocked() then return end
     local _, enemyPart = TargetingModule.GetClosestEnemy("Incursão")
     if enemyPart and enemyPart.Parent then
         SharedState.HasTarget = true
@@ -1282,7 +1252,7 @@ end
 
 -- Rota Infinity
 function FlowModule.RunInfinity()
-    if SharedState.IsMatchStarting then return end
+    if CharacterModule.IsActionBlocked() then return end
     if InfinityModule.CheckBonus() then
         SharedState.HasTarget = false
         CharacterModule.StopMovement()
@@ -1325,13 +1295,11 @@ function DungeonStateModule.CheckStart()
             if startBtn and startBtn:IsA("GuiObject") and startBtn.Visible then
                 CharacterModule.TriggerButton(startBtn)
                 SharedState.IsVirusActive = false
-                SharedState.HasClickedStart = true
-                SharedState.CurrentObservedWave = 1
-                SharedState.HasEngagedWave11 = false
-                SharedState.HasEngagedWave15 = false
-                SharedState.HasPassedSAOPortal1 = false
-                SharedState.HasPassedSAOPortal2 = false
-                triggerMatchStartCooldown(ConfigModule.Settings.StartWaitTime or 5.0)
+                
+                -- Aplica a espera obrigatória configurada no Slider (padrão 5s)
+                local waitTime = ConfigModule.Settings.StartWaitTime or 5.0
+                SharedState.StartLockUntil = tick() + waitTime
+                CharacterModule.StopMovement()
                 return
             end
         end
@@ -1384,12 +1352,6 @@ local function onPlayerDiedHandler()
     SharedState.LastRoomState = "Room1"
     SharedState.HasTarget = false
     SharedState.IsSelectingBonus = false
-
-    local curWave = FlowModule.GetWave()
-    if curWave < 13 then
-        SharedState.HasPassedSAOPortal1 = false
-    end
-    SharedState.HasPassedSAOPortal2 = false
 
     if (ConfigModule.Settings.SelectedPhase == "Boss Rush" or ConfigModule.Settings.SelectedPhase == "Infinity" or ConfigModule.Settings.SelectedPhase == "SAO") and ConfigModule.Settings.AutoPlayAgain then
         task.spawn(function()
@@ -1449,16 +1411,14 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
     SharedState.HasTarget = false
     SharedState.IsSelectingBonus = false
 
-    local curWave = FlowModule.GetWave()
-    if curWave < 13 then
-        SharedState.HasPassedSAOPortal1 = false
-    end
-    SharedState.HasPassedSAOPortal2 = false
-
     CharacterModule.StopMovement()
     bindCharacterEvents(newChar)
-    triggerMatchStartCooldown(ConfigModule.Settings.StartWaitTime or 5.0)
-    task.delay(0.8, function() SharedState.IsRespawning = false end)
+
+    -- Trava obrigatória de 1 segundo pós-nascimento
+    SharedState.RespawnLockUntil = tick() + 1.0
+    task.delay(1.0, function() 
+        SharedState.IsRespawning = false 
+    end)
 end)
 
 -- [[ 12. LOOPS PRINCIPAIS INDEPENDENTES ]]
@@ -1468,8 +1428,8 @@ local isHandlingPlayAgain = false
 -- Loop 1: Ataque M1
 task.spawn(function()
     while SharedState.IsRunning do
-        if not SharedState.IsMatchStarting and SharedState.HasTarget and not SharedState.IsSelectingBonus then
-            if ConfigModule.Settings.AutoAttack and not SharedState.IsDungeonEnded and not SharedState.IsRespawning and not SharedState.IsTransitioning and not SharedState.EnteringPortal then
+        if not CharacterModule.IsActionBlocked() and SharedState.HasTarget and not SharedState.IsSelectingBonus then
+            if ConfigModule.Settings.AutoAttack and not SharedState.IsDungeonEnded then
                 local _, _, hum = CharacterModule.Get()
                 if hum and hum.Health > 0 then 
                     CombatModule.ExecuteM1() 
@@ -1483,8 +1443,8 @@ end)
 -- Loop 2: Skills
 task.spawn(function()
     while SharedState.IsRunning do
-        if not SharedState.IsMatchStarting and SharedState.HasTarget and not SharedState.IsSelectingBonus then
-            if ConfigModule.Settings.AutoSkills and not SharedState.IsDungeonEnded and not SharedState.IsRespawning and not SharedState.IsTransitioning and not SharedState.EnteringPortal then
+        if not CharacterModule.IsActionBlocked() and SharedState.HasTarget and not SharedState.IsSelectingBonus then
+            if ConfigModule.Settings.AutoSkills and not SharedState.IsDungeonEnded then
                 local _, _, hum = CharacterModule.Get()
                 if hum and hum.Health > 0 then 
                     CombatModule.ExecuteSkills() 
@@ -1533,11 +1493,6 @@ task.spawn(function()
                     SharedState.IsDungeonEnded = true
                     SharedState.IsVirusActive = false
                     SharedState.HasTarget = false
-                    SharedState.CurrentObservedWave = 1
-                    SharedState.HasEngagedWave11 = false
-                    SharedState.HasEngagedWave15 = false
-                    SharedState.HasPassedSAOPortal1 = false
-                    SharedState.HasPassedSAOPortal2 = false
                     CharacterModule.StopMovement()
 
                     pcall(WebhookModule.ProcessDungeonDrops)
@@ -1727,7 +1682,7 @@ CombatSection:AddToggle("AutoFarmToggle", {
 })
 CombatSection:AddSlider("StartWaitTimeSlider", {
     Title = "Espera Inicial Pós-Start (s)",
-    Description = "Tempo que o boneco fica estático no chão esperando os mobs darem spawn",
+    Description = "Tempo que o boneco aguarda estático no chão após o Start (Padrão: 5s)",
     Default = ConfigModule.Settings.StartWaitTime,
     Min = 2.0, Max = 10.0, Rounding = 1,
     Callback = function(Value) 
