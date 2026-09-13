@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (START COM 5S FIXO / SEM SLIDER)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (SAO: TRAVA IRREVERSÍVEL PORTAL 2)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL SINGLETON & CACHE LOCAL ]]
@@ -64,7 +64,7 @@ end
 
 local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
 
-local FIXED_START_WAIT_TIME = 5.0 -- 5 segundos obrigatórios após iniciar
+local FIXED_START_WAIT_TIME = 5.0
 
 local SharedState = {
     IsRunning = true,
@@ -87,7 +87,10 @@ local SharedState = {
     StartLockUntil = tick() + FIXED_START_WAIT_TIME,
     RespawnLockUntil = 0,
     HasTarget = false,
-    IsSelectingBonus = false
+    IsSelectingBonus = false,
+    -- Travas Unidirecionais para evitar Rubberbanding
+    HasPassedPortal1 = false,
+    HasEnteredBossRoom = false
 }
 
 -- [[ 2. CONFIGURAÇÕES ]]
@@ -991,7 +994,7 @@ function FlowModule.GetWave()
     return 1
 end
 
-function FlowModule.PassPortal(targetCFrame)
+function FlowModule.PassPortal(targetCFrame, onCompleteCallback)
     local _, root = CharacterModule.Get()
     if not root then return end
 
@@ -1016,15 +1019,16 @@ function FlowModule.PassPortal(targetCFrame)
         local oldPos = root.Position
         local startWait = tick()
 
+        -- Aguarda o teleporte do jogo acontecer
         while (tick() - startWait) < 2.5 do
             task.wait(0.08)
             local _, curRoot = CharacterModule.Get()
-            if curRoot and (curRoot.Position - oldPos).Magnitude > 8 then
+            if curRoot and (curRoot.Position - oldPos).Magnitude > 6 then
                 break
             end
         end
 
-        task.wait(0.5)
+        task.wait(0.6)
 
         local _, finalRoot = CharacterModule.Get()
         if finalRoot then
@@ -1033,22 +1037,24 @@ function FlowModule.PassPortal(targetCFrame)
         end
 
         SharedState.EnteringPortal = false
+        if onCompleteCallback then
+            onCompleteCallback()
+        end
     end
 end
 
--- ROTA DO SAO: BLOQUEIO TOTAL NOS PRIMEIROS 5S E CONTROLE POR SALA REAL
+-- ROTA DO SAO COM TRAVA UNIDIRECIONAL IRREVERSÍVEL (ANTI-RUBBERBAND)
 function FlowModule.RunSAO()
     local _, root = CharacterModule.Get()
     if not root then return end
 
-    -- Se estiver no bloqueio inicial de 5s ou respawn de 1s, fica estático no chão
     if CharacterModule.IsActionBlocked() then
         SharedState.HasTarget = false
         CharacterModule.StopMovement()
         return
     end
 
-    -- 1. Seleção Automática de Cartas
+    -- 1. Cartas Automáticas
     if SAOModule.CheckBonus() then
         SharedState.HasTarget = false
         CharacterModule.StopMovement()
@@ -1070,26 +1076,43 @@ function FlowModule.RunSAO()
 
     local wave = FlowModule.GetWave()
 
-    -- 3. CONTROLE DE PORTAL BASEADO NA POSIÇÃO REAL DO BONECO
-    if wave >= 16 then
-        local distToPortal2 = (root.Position - SAO_PORTAL_2.Position).Magnitude
-        -- Se estiver na sala do meio (a menos de 300 studs do portal 2), atravessa
-        if distToPortal2 < 300 and distToPortal2 > 3.0 then
+    -- 3. TRANSIÇÃO DO PORTAL 2 (WAVE 16):
+    -- Se ainda não foi confirmada a entrada na Sala do Boss e a wave for 16:
+    if wave >= 16 and not SharedState.HasEnteredBossRoom then
+        -- Se já existir monstro vivo na wave 16, significa que já spawnamos na Sala 3!
+        local bossMob, bossPart = TargetingModule.GetClosestEnemy("SAO")
+        if bossMob and bossPart then
+            SharedState.HasEnteredBossRoom = true
             SharedState.HasTarget = true
-            FlowModule.PassPortal(SAO_PORTAL_2)
+            CharacterModule.FlyToEnemy(bossPart)
             return
         end
-    elseif wave >= 12 then
-        local distToPortal1 = (root.Position - SAO_PORTAL_1.Position).Magnitude
-        -- Se estiver na sala inicial (a menos de 350 studs do portal 1), atravessa
-        if distToPortal1 < 350 and distToPortal1 > 3.0 then
+
+        -- Se não há mobs e estamos perto da entrada do Portal 2, atravessa
+        local distToP2 = (root.Position - SAO_PORTAL_2.Position).Magnitude
+        if distToP2 < 200 and distToP2 > 3.0 then
             SharedState.HasTarget = true
-            FlowModule.PassPortal(SAO_PORTAL_1)
+            FlowModule.PassPortal(SAO_PORTAL_2, function()
+                SharedState.HasEnteredBossRoom = true
+                task.wait(0.5)
+            end)
+            return
+        end
+    -- 4. TRANSIÇÃO DO PORTAL 1 (WAVE 12 A 15):
+    elseif wave >= 12 and wave < 16 and not SharedState.HasPassedPortal1 then
+        local distToP1 = (root.Position - SAO_PORTAL_1.Position).Magnitude
+        -- Se estiver perto da entrada do Portal 1, atravessa
+        if distToP1 < 250 and distToP1 > 3.0 then
+            SharedState.HasTarget = true
+            FlowModule.PassPortal(SAO_PORTAL_1, function()
+                SharedState.HasPassedPortal1 = true
+                task.wait(0.5)
+            end)
             return
         end
     end
 
-    -- 4. COMBATE REGULAR (Busca monstros na sala atual)
+    -- 5. COMBATE REGULAR (Ataca os inimigos da sala atual)
     local _, enemyPart = TargetingModule.GetClosestEnemy("SAO")
     if enemyPart then
         SharedState.HasTarget = true
@@ -1292,8 +1315,9 @@ function DungeonStateModule.CheckStart()
             if startBtn and startBtn:IsA("GuiObject") and startBtn.Visible then
                 CharacterModule.TriggerButton(startBtn)
                 SharedState.IsVirusActive = false
-                
-                -- Trava obrigatória de 5 segundos
+                SharedState.HasClickedStart = true
+                SharedState.HasPassedPortal1 = false
+                SharedState.HasEnteredBossRoom = false
                 SharedState.StartLockUntil = tick() + FIXED_START_WAIT_TIME
                 CharacterModule.StopMovement()
                 return
@@ -1348,6 +1372,15 @@ local function onPlayerDiedHandler()
     SharedState.LastRoomState = "Room1"
     SharedState.HasTarget = false
     SharedState.IsSelectingBonus = false
+
+    -- Reseta as travas caso o jogador tenha morrido e precise atravessar novamente
+    local curWave = FlowModule.GetWave()
+    if curWave < 16 then
+        SharedState.HasEnteredBossRoom = false
+    end
+    if curWave < 12 then
+        SharedState.HasPassedPortal1 = false
+    end
 
     if (ConfigModule.Settings.SelectedPhase == "Boss Rush" or ConfigModule.Settings.SelectedPhase == "Infinity" or ConfigModule.Settings.SelectedPhase == "SAO") and ConfigModule.Settings.AutoPlayAgain then
         task.spawn(function()
@@ -1407,10 +1440,18 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
     SharedState.HasTarget = false
     SharedState.IsSelectingBonus = false
 
+    local curWave = FlowModule.GetWave()
+    if curWave < 16 then
+        SharedState.HasEnteredBossRoom = false
+    end
+    if curWave < 12 then
+        SharedState.HasPassedPortal1 = false
+    end
+
     CharacterModule.StopMovement()
     bindCharacterEvents(newChar)
 
-    -- Trava obrigatória de 1 segundo pós-nascimento
+    -- Trava estrita de 1 segundo pós-nascimento
     SharedState.RespawnLockUntil = tick() + 1.0
     task.delay(1.0, function() 
         SharedState.IsRespawning = false 
@@ -1489,6 +1530,8 @@ task.spawn(function()
                     SharedState.IsDungeonEnded = true
                     SharedState.IsVirusActive = false
                     SharedState.HasTarget = false
+                    SharedState.HasPassedPortal1 = false
+                    SharedState.HasEnteredBossRoom = false
                     CharacterModule.StopMovement()
 
                     pcall(WebhookModule.ProcessDungeonDrops)
@@ -1643,7 +1686,7 @@ task.spawn(function()
     end
 end)
 
--- ABA FARM (SEM O SLIDER DE START)
+-- ABA FARM
 local PhaseSection = Tabs.Farm:AddSection("Configurações de Fase & Posição")
 PhaseSection:AddDropdown("PhaseSelector", {
     Title = "Selecionar Fase",
