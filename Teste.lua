@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (CONFIG PERSISTENTE & DEFAULTS OFF)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (COM OTIMIZADOR DE FPS & ANTI-CRASH)
 -- ====================================================================
 
 -- [[ 1. TRAVA SINGLETON & LIMPEZA DE AMBIENTE ]]
@@ -23,6 +23,7 @@ local HttpService = game:GetService("HttpService")
 local TweenService = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
 
 local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Teste.lua"
 local SCRIPT_NAME = "HubRapazes_Local.lua"
@@ -146,8 +147,8 @@ ConfigModule.Settings = {
     BackDistance = 4.5,
     TweenSpeed = 48,
     AttackSpeed = 0.15,
-    AutoClaimQuests = false, -- Padrão desligado
-    AutoSell = false,        -- Padrão desligado
+    AutoClaimQuests = false,
+    AutoSell = false,
     SellDelaySeconds = 10,
     AutoFavoriteSecrets = true,
     AutoFavoriteMythics = false,
@@ -161,11 +162,16 @@ ConfigModule.Settings = {
     InfinityOrbitRadius = 10.0,
     InfinityOrbitHeight = 12.5,
     InfinityOrbitSpeed = 3.0,
-    WebhookEnabled = false,  -- Padrão desligado
+    WebhookEnabled = false,
     WebhookURL = "https://discord.com/api/webhooks/1542138848195248258/Xqpgk33GsjM5UrMxT0IqIvkKvKulvSJQVc6CSuPmrf6lmrjNXwjxCwGCOK0aJun-Y83o",
     NotifySecrets = true,
     NotifyMythics = true,
-    NotifyEveryRun = false
+    NotifyEveryRun = false,
+    -- Configurações Anti-Crash (Mobile)
+    FPSBoost = true,
+    DisableParticles = true,
+    DisableShadows = true,
+    BlackScreenAFK = false
 }
 
 local CONFIG_FILE = "HubRapazes_Config.json"
@@ -194,7 +200,113 @@ function ConfigModule.Load()
 end
 ConfigModule.Load()
 
--- [[ 3. DISCORD WEBHOOK ]]
+-- [[ 3. MÓDULO OTIMIZADOR DE FPS & ANTI-CRASH (MOBILE) ]]
+local OptimizerModule = {}
+local blackScreenFrame = nil
+
+function OptimizerModule.CleanInstance(v)
+    if not ConfigModule.Settings.FPSBoost then return end
+    pcall(function()
+        if ConfigModule.Settings.DisableParticles then
+            if v:IsA("ParticleEmitter") or v:IsA("Sparkles") or v:IsA("Smoke") or v:IsA("Fire") then
+                v.Enabled = false
+            elseif v:IsA("Trail") or v:IsA("Beam") then
+                v.Enabled = false
+            end
+        end
+
+        if v:IsA("Light") then
+            v.Enabled = false
+        end
+
+        if v:IsA("MeshPart") or v:IsA("Part") then
+            v.Material = Enum.Material.SmoothPlastic
+            v.CastShadow = false
+        end
+
+        if v:IsA("Decal") or v:IsA("Texture") then
+            v.Transparency = 1
+        end
+    end)
+end
+
+function OptimizerModule.ApplyAll()
+    if not ConfigModule.Settings.FPSBoost then return end
+
+    pcall(function()
+        if ConfigModule.Settings.DisableShadows then
+            Lighting.GlobalShadows = false
+            Lighting.FogEnd = 9e9
+            Lighting.Brightness = 1
+        end
+
+        for _, effect in ipairs(Lighting:GetChildren()) do
+            if effect:IsA("PostEffect") or effect:IsA("BloomEffect") or effect:IsA("BlurEffect") or effect:IsA("DepthOfFieldEffect") or effect:IsA("SunRaysEffect") then
+                effect.Enabled = false
+            end
+        end
+
+        for _, desc in ipairs(workspace:GetDescendants()) do
+            OptimizerModule.CleanInstance(desc)
+        end
+    end)
+
+    -- Libera RAM retida no garbage collector do Lua
+    collectgarbage("collect")
+end
+
+-- Listener para novos efeitos instanciados (skills de mobs/armas)
+workspace.DescendantAdded:Connect(function(child)
+    if ConfigModule.Settings.FPSBoost then
+        task.delay(0.1, function()
+            OptimizerModule.CleanInstance(child)
+        end)
+    end
+end)
+
+-- Black Screen AFK (Economia extrema de bateria e GPU)
+function OptimizerModule.SetBlackScreen(enabled)
+    pcall(function()
+        local sg = CoreGui:FindFirstChild("HubRapazes_BlackScreen") or pgui:FindFirstChild("HubRapazes_BlackScreen")
+        if enabled then
+            if not sg then
+                sg = Instance.new("ScreenGui")
+                sg.Name = "HubRapazes_BlackScreen"
+                sg.DisplayOrder = 999998
+                sg.ResetOnSpawn = false
+                pcall(function() sg.Parent = CoreGui end)
+                if not sg.Parent then sg.Parent = pgui end
+
+                local bg = Instance.new("Frame", sg)
+                bg.Size = UDim2.new(1, 0, 1, 0)
+                bg.BackgroundColor3 = Color3.fromRGB(5, 5, 5)
+                bg.BorderSizePixel = 0
+
+                local txt = Instance.new("TextLabel", bg)
+                txt.Size = UDim2.new(1, 0, 0, 40)
+                txt.Position = UDim2.new(0, 0, 0.45, 0)
+                txt.Text = "MODO AFK ATIVO (ECONOMIZANDO BATERIA E RAM)"
+                txt.TextColor3 = Color3.fromRGB(0, 255, 170)
+                txt.Font = Enum.Font.GothamBold
+                txt.TextSize = 14
+                txt.BackgroundTransparency = 1
+            end
+            sg.Enabled = true
+            RunService:Set3dRenderingEnabled(false)
+        else
+            if sg then sg.Enabled = false end
+            RunService:Set3dRenderingEnabled(true)
+        end
+    end)
+end
+
+-- Executa uma otimização inicial suave após o carregamento
+task.spawn(function()
+    task.wait(3.0)
+    OptimizerModule.ApplyAll()
+end)
+
+-- [[ 4. DISCORD WEBHOOK ]]
 local WebhookModule = {}
 
 function WebhookModule.Send(payloadTable)
@@ -277,7 +389,7 @@ function WebhookModule.ProcessDungeonDrops()
     end
 end
 
--- [[ 4. PERSONAGEM & FÍSICA ESTÁVEL ]]
+-- [[ 5. PERSONAGEM & FÍSICA ESTÁVEL ]]
 local CharacterModule = {}
 local diedConnection = nil
 local charConnection = nil
@@ -468,7 +580,7 @@ function CharacterModule.TriggerButton(btn)
     end)
 end
 
--- [[ 5. MÓDULOS ESPECÍFICOS: INFINITY E SAO ]]
+-- [[ 6. MÓDULOS ESPECÍFICOS: INFINITY E SAO ]]
 local InfinityMovement = {}
 local orbitAngle = 0
 
@@ -625,7 +737,7 @@ function SAOModule.CheckBonus()
     return false
 end
 
--- [[ 6. DETECÇÃO DE INIMIGOS (COM FILTRO ANTI-BAÚ) ]]
+-- [[ 7. DETECÇÃO DE INIMIGOS (ORIGINAL + FILTRO DE BAÚ) ]]
 local TargetingModule = {}
 
 local function isChest(objName)
@@ -753,7 +865,7 @@ function TargetingModule.GetClosestEnemy(phase)
     return closestEnemy, closestPart
 end
 
--- [[ 7. MÓDULO DE COMBATE ]]
+-- [[ 8. MÓDULO DE COMBATE ]]
 local CombatModule = {}
 local attackRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Attack", 10)
 local skillRemote = ReplicatedStorage:WaitForChild("Remotes", 10):FindFirstChild("Skill") or ReplicatedStorage:WaitForChild("Remotes", 10):FindFirstChild("Spell")
@@ -825,7 +937,7 @@ function CombatModule.ExecuteSkills()
     end
 end
 
--- [[ 8. AUTO-SELL & AUTO-FAVORITE ]]
+-- [[ 9. AUTO-SELL & AUTO-FAVORITE ]]
 local AutoSellModule = {}
 local equipRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Equip", 10)
 local lastSellTick = 0
@@ -957,7 +1069,7 @@ function AutoSellModule.Execute()
     SharedState.IsSelling = false
 end
 
--- [[ 9. MÓDULO DE MISSÕES ]]
+-- [[ 10. MÓDULO DE MISSÕES ]]
 local QuestModule = {}
 local questRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Quest", 10)
 
@@ -1016,7 +1128,7 @@ function QuestModule.ClaimAll()
     SharedState.IsClaiming = false
 end
 
--- [[ 10. FLUXO DE FASES & ROTAS ]]
+-- [[ 11. FLUXO DE FASES & ROTAS ]]
 local FlowModule = {}
 
 local BLEACH_PORTAL_1 = CFrame.new(4557.2, -305.5, 1925.0)
@@ -1331,7 +1443,7 @@ function FlowModule.RunInfinity()
     end
 end
 
--- [[ 11. ESTADOS DA DUNGEON & AUTO-START ]]
+-- [[ 12. ESTADOS DA DUNGEON & AUTO-START ]]
 local DungeonStateModule = {}
 
 function DungeonStateModule.CheckStart()
@@ -1499,7 +1611,7 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
     end)
 end)
 
--- [[ 12. LOOPS PRINCIPAIS INDEPENDENTES ]]
+-- [[ 13. LOOPS PRINCIPAIS INDEPENDENTES ]]
 local initialRoutinesScheduled = false
 local isHandlingPlayAgain = false
 
@@ -1577,6 +1689,11 @@ task.spawn(function()
 
                     pcall(WebhookModule.ProcessDungeonDrops)
 
+                    -- Coleta de lixo e limpeza de memória após o término da partida
+                    task.spawn(function()
+                        collectgarbage("collect")
+                    end)
+
                     if ConfigModule.Settings.AutoPlayAgain and not isHandlingPlayAgain then
                         isHandlingPlayAgain = true
                         task.spawn(function()
@@ -1629,7 +1746,7 @@ task.spawn(function()
     end
 end)
 
--- [[ 13. INTERFACE VISUAL FLUENT ]]
+-- [[ 14. INTERFACE VISUAL FLUENT ]]
 local UIModule = {}
 
 local Window = Fluent:CreateWindow({
@@ -1646,6 +1763,7 @@ local Tabs = {
     Farm = Window:AddTab({ Title = "Farm" }),
     Infinity = Window:AddTab({ Title = "Infinity" }),
     Sell = Window:AddTab({ Title = "Auto-Sell" }),
+    Performance = Window:AddTab({ Title = "Otimização" }),
     Webhook = Window:AddTab({ Title = "Discord" }),
     Settings = Window:AddTab({ Title = "Settings" })
 }
@@ -1699,6 +1817,7 @@ function UIModule.Shutdown()
     if diedConnection then diedConnection:Disconnect() end
     if flightStabilizer then flightStabilizer:Disconnect() end
     if toggleGui and toggleGui.Parent then toggleGui:Destroy() end
+    OptimizerModule.SetBlackScreen(false)
     
     pcall(function()
         if Window and Window.Destroy then
@@ -1942,7 +2061,7 @@ SellMainSection:AddToggle("AutoSellToggle", {
     Default = ConfigModule.Settings.AutoSell,
     Callback = function(Value) 
         ConfigModule.Settings.AutoSell = Value 
-        ConfigModule.Save() -- Grava sua escolha no disco
+        ConfigModule.Save()
     end
 })
 SellMainSection:AddSlider("SellDelaySlider", {
@@ -1985,6 +2104,51 @@ SellRaritiesSection:AddToggle("SellMythicToggle", {
     Callback = function(Value) ConfigModule.Settings.SellMythic = Value ConfigModule.Save() end
 })
 
+-- ABA OTIMIZAÇÃO (NOVA - ANTI-CRASH MOBILE)
+local PerformanceSection = Tabs.Performance:AddSection("Otimizador de Desempenho & RAM")
+
+PerformanceSection:AddToggle("FPSBoostToggle", {
+    Title = "FPS Boost & Anti-Crash",
+    Description = "Desativa partículas, luzes dinâmicas e texturas pesadas",
+    Default = ConfigModule.Settings.FPSBoost,
+    Callback = function(Value)
+        ConfigModule.Settings.FPSBoost = Value
+        ConfigModule.Save()
+        if Value then OptimizerModule.ApplyAll() end
+    end
+})
+
+PerformanceSection:AddToggle("DisableShadowsToggle", {
+    Title = "Desativar Sombras & Pós-Processamento",
+    Description = "Remove sombras em tempo real e névoa da iluminação",
+    Default = ConfigModule.Settings.DisableShadows,
+    Callback = function(Value)
+        ConfigModule.Settings.DisableShadows = Value
+        ConfigModule.Save()
+        if Value then OptimizerModule.ApplyAll() end
+    end
+})
+
+PerformanceSection:AddToggle("BlackScreenToggle", {
+    Title = "Tela Preta AFK (Poupe Bateria/RAM)",
+    Description = "Desativa a renderização 3D do mapa. O bot continua farmando.",
+    Default = ConfigModule.Settings.BlackScreenAFK,
+    Callback = function(Value)
+        ConfigModule.Settings.BlackScreenAFK = Value
+        ConfigModule.Save()
+        OptimizerModule.SetBlackScreen(Value)
+    end
+})
+
+PerformanceSection:AddButton({
+    Title = "🧹 Limpar Memória RAM Agora",
+    Description = "Força a coleta de lixo do Lua para aliviar a memória",
+    Callback = function()
+        OptimizerModule.ApplyAll()
+        Fluent:Notify({ Title = "RAM", Content = "Memória do jogo limpa com sucesso!", Duration = 3 })
+    end
+})
+
 -- ABA WEBHOOK DISCORD
 local WebhookSection = Tabs.Webhook:AddSection("Configuração do Webhook")
 WebhookSection:AddToggle("WebhookEnableToggle", {
@@ -1992,7 +2156,7 @@ WebhookSection:AddToggle("WebhookEnableToggle", {
     Default = ConfigModule.Settings.WebhookEnabled,
     Callback = function(Value) 
         ConfigModule.Settings.WebhookEnabled = Value 
-        ConfigModule.Save() -- Grava sua escolha no disco
+        ConfigModule.Save()
     end
 })
 local WebhookInput = WebhookSection:AddInput("WebhookURLBox", {
@@ -2048,7 +2212,7 @@ QuestsSection:AddToggle("AutoClaimQuestsToggle", {
     Default = ConfigModule.Settings.AutoClaimQuests,
     Callback = function(Value) 
         ConfigModule.Settings.AutoClaimQuests = Value 
-        ConfigModule.Save() -- Grava sua escolha no disco
+        ConfigModule.Save()
     end
 })
 QuestsSection:AddButton({
