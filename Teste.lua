@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (ARRANQUE UNIVERSAL + PLAYAGAIN)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (CLIQUE DIRETO NO START & PLAYAGAIN)
 -- ====================================================================
 
 -- [[ 1. RESET E LIMPEZA DE SESSÃO ]]
@@ -1402,59 +1402,43 @@ end
 local DungeonStateModule = {}
 
 function DungeonStateModule.CheckStart()
-    if not pgui or (tick() - SharedState.LastStartAttempt) < 0.4 then return end
+    if not pgui or (tick() - SharedState.LastStartAttempt) < 0.35 then return end
     SharedState.LastStartAttempt = tick()
 
-    local main = pgui:FindFirstChild("Main")
-    local candidates = {}
-
-    if main then
-        table.insert(candidates, main)
+    -- 1. Varredura direta cirúrgica por [Start] em todo o PlayerGui
+    for _, desc in ipairs(pgui:GetDescendants()) do
+        if desc:IsA("GuiButton") and desc.Name == "Start" and desc.Visible then
+            CharacterModule.TriggerButton(desc)
+            SharedState.IsVirusActive = false
+            SharedState.HasClickedStart = true
+            SharedState.HasPassedPortal1 = false
+            SharedState.HasEnteredBossRoom = false
+            pcall(function()
+                if dungeonRemote then
+                    dungeonRemote:FireServer("Start")
+                    dungeonRemote:FireServer("Play")
+                end
+            end)
+            return
+        end
     end
-    table.insert(candidates, pgui)
 
-    local clicked = false
-
-    for _, rootContainer in ipairs(candidates) do
-        for _, obj in ipairs(rootContainer:GetDescendants()) do
+    -- 2. Fallback caso o nome possua variação de maiúsculas/minúsculas ou texto
+    local main = pgui:FindFirstChild("Main")
+    if main then
+        for _, obj in ipairs(main:GetDescendants()) do
             if obj:IsA("GuiButton") and obj.Visible then
                 local n = obj.Name:lower()
-                local isStart = (n == "start" or n == "play" or n == "dungeonstart" or n == "comecar" or n == "startbutton")
-
-                if not isStart then
-                    local lbl = obj:FindFirstChildOfClass("TextLabel")
-                    if lbl and lbl.Visible then
-                        local t = lbl.Text:lower()
-                        if t:find("start") or t:find("play") or t:find("começar") or t:find("jogar") or t:find("iniciar") then
-                            isStart = true
-                        end
-                    end
-                end
-
-                if isStart then
+                if n == "start" or n == "play" or n == "dungeonstart" then
                     CharacterModule.TriggerButton(obj)
-                    clicked = true
-                    break
+                    SharedState.IsVirusActive = false
+                    SharedState.HasClickedStart = true
+                    SharedState.HasPassedPortal1 = false
+                    SharedState.HasEnteredBossRoom = false
+                    return
                 end
             end
         end
-        if clicked then break end
-    end
-
-    pcall(function()
-        if dungeonRemote then
-            dungeonRemote:FireServer("Start")
-            dungeonRemote:FireServer("Play")
-            dungeonRemote:FireServer("DungeonStart")
-        end
-    end)
-
-    if clicked then
-        SharedState.IsVirusActive = false
-        SharedState.HasClickedStart = true
-        SharedState.HasPassedPortal1 = false
-        SharedState.HasEnteredBossRoom = false
-        SharedState.StartLockUntil = tick() + 0.8
     end
 end
 
@@ -1475,37 +1459,23 @@ function DungeonStateModule.CheckEngage()
 end
 
 function DungeonStateModule.CheckEnd()
-    local main = pgui and pgui:FindFirstChild("Main")
-    if not main then return false, nil end
+    if not pgui then return false, nil end
 
-    for _, btn in ipairs(main:GetDescendants()) do
+    -- 1. Varredura direta cirúrgica por [PlayAgain] em todo o PlayerGui
+    for _, btn in ipairs(pgui:GetDescendants()) do
         if btn:IsA("GuiButton") and btn.Name == "PlayAgain" and btn.Visible then
             return true, btn
         end
     end
 
-    local targetFrames = {
-        main:FindFirstChild("BossRushFrame"),
-        main:FindFirstChild("DungeonFrame"),
-        main:FindFirstChild("RaidFrame"),
-        main:FindFirstChild("DungeonStats", true)
-    }
-
-    for _, container in ipairs(targetFrames) do
-        if container and container.Visible then
-            for _, obj in ipairs(container:GetDescendants()) do
-                if obj:IsA("GuiButton") and obj.Visible then
-                    local name = obj.Name:lower()
-                    if name == "playagain" or name:find("retry") or name:find("again") or name:find("replay") then
-                        return true, obj
-                    end
-                    local label = obj:FindFirstChildOfClass("TextLabel")
-                    if label and label.Visible then
-                        local txt = label.Text:lower()
-                        if txt:find("play again") or txt:find("retry") or txt:find("jogar novamente") then
-                            return true, obj
-                        end
-                    end
+    -- 2. Fallback para outros containers
+    local main = pgui:FindFirstChild("Main")
+    if main then
+        for _, obj in ipairs(main:GetDescendants()) do
+            if obj:IsA("GuiButton") and obj.Visible then
+                local n = obj.Name:lower()
+                if n == "playagain" or n:find("retry") or n:find("replay") then
+                    return true, obj
                 end
             end
         end
@@ -1529,6 +1499,7 @@ local function onPlayerDiedHandler()
         SharedState.HasPassedPortal1 = false
     end
 
+    -- MONITORIZAÇÃO PÓS-MORTE: Até 25 segundos para apanhar os 8 a 10s da interface
     if ConfigModule.Settings.AutoPlayAgain then
         task.spawn(function()
             task.wait(1.5)
@@ -1678,6 +1649,7 @@ task.spawn(function()
                     end)
                 end
 
+                -- VITÓRIA DA FASE: Aguarda os 3 segundos
                 local ended, playAgainBtn = DungeonStateModule.CheckEnd()
                 if ended and playAgainBtn then
                     SharedState.IsDungeonEnded = true
