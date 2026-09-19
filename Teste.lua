@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (VERSÃO ESTÁVEL RESTAURADA)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (TIMINGS AJUSTADOS: MORTE 8-10S / VITÓRIA 3S)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL LIMPA E ORIGINAL ]]
@@ -30,7 +30,6 @@ pcall(function()
     end
 end)
 
--- Auto-execução padrão original que sempre funcionou
 local function queueNextExecution()
     local queueFunc = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or queueonteleport
     if queueFunc then
@@ -522,7 +521,7 @@ function CharacterModule.FlyToPortal(targetCFrame)
     SharedState.CurrentTween:Play()
 end
 
--- TRIGGERBUTTON ORIGINAL CONFIÁVEL
+-- TRIGGERBUTTON NATIVO ROBUSTO
 function CharacterModule.TriggerButton(btn)
     if not btn or not SharedState.IsRunning then return end
     pcall(function()
@@ -1447,10 +1446,19 @@ function DungeonStateModule.CheckEngage()
     return false
 end
 
+-- Detecção direta pelo botão PlayAgain confirmado no Boss Rush
 function DungeonStateModule.CheckEnd()
     local main = pgui and pgui:FindFirstChild("Main")
     if not main then return false, nil end
 
+    -- 1. Checagem direta do botão identificado
+    for _, btn in ipairs(main:GetDescendants()) do
+        if btn:IsA("GuiButton") and btn.Name == "PlayAgain" and btn.Visible then
+            return true, btn
+        end
+    end
+
+    -- 2. Varredura nos containers comuns (BossRushFrame e DungeonStats)
     local targetFrames = {
         main:FindFirstChild("BossRushFrame"),
         main:FindFirstChild("DungeonFrame"),
@@ -1463,13 +1471,13 @@ function DungeonStateModule.CheckEnd()
             for _, obj in ipairs(container:GetDescendants()) do
                 if obj:IsA("GuiButton") and obj.Visible then
                     local name = obj.Name:lower()
-                    if name:find("playagain") or name:find("retry") or name:find("again") or name:find("replay") or name:find("restart") then
+                    if name == "playagain" or name:find("retry") or name:find("again") or name:find("replay") then
                         return true, obj
                     end
                     local label = obj:FindFirstChildOfClass("TextLabel")
                     if label and label.Visible then
                         local txt = label.Text:lower()
-                        if txt:find("play again") or txt:find("retry") or txt:find("jogar novamente") or txt:find("novamente") or txt:find("restart") then
+                        if txt:find("play again") or txt:find("retry") or txt:find("jogar novamente") then
                             return true, obj
                         end
                     end
@@ -1496,11 +1504,13 @@ local function onPlayerDiedHandler()
         SharedState.HasPassedPortal1 = false
     end
 
-    -- BOSS RUSH: Espera 2 segundos após a morte
-    if ConfigModule.Settings.SelectedPhase == "Boss Rush" and ConfigModule.Settings.AutoPlayAgain then
+    -- ROTINA DE MORTE (BOSS RUSH / DUNGEONS): Monitora ativamente até 25s (para cobrir os 8 a 10s de espera)
+    if ConfigModule.Settings.AutoPlayAgain then
         task.spawn(function()
-            task.wait(2.0)
-            for _ = 1, 30 do
+            task.wait(1.5) -- Pequeno respiro inicial após o ragdoll
+            
+            -- Faz varredura ativa a cada 0.3s por até 25 segundos (cobre os 8s a 10s que o jogo leva)
+            for _ = 1, 80 do
                 if not SharedState.IsRunning then break end
                 local ended, retryBtn = DungeonStateModule.CheckEnd()
                 if ended and retryBtn then
@@ -1516,26 +1526,6 @@ local function onPlayerDiedHandler()
                     break
                 end
                 task.wait(0.3)
-            end
-        end)
-        return
-    end
-
-    -- SAO / INFINITY: Espera 3 segundos
-    if (ConfigModule.Settings.SelectedPhase == "Infinity" or ConfigModule.Settings.SelectedPhase == "SAO") and ConfigModule.Settings.AutoPlayAgain then
-        task.spawn(function()
-            task.wait(3.0)
-            for _ = 1, 25 do
-                if not SharedState.IsRunning then break end
-                local ended, retryBtn = DungeonStateModule.CheckEnd()
-                if ended and retryBtn then
-                    SharedState.IsDungeonEnded = true
-                    queueNextExecution()
-                    task.wait(0.2)
-                    CharacterModule.TriggerButton(retryBtn)
-                    break
-                end
-                task.wait(0.4)
             end
         end)
         return
@@ -1665,6 +1655,7 @@ task.spawn(function()
                     end)
                 end
 
+                -- VITÓRIA DA FASE: Aguarda os 3 segundos padrão
                 local ended, playAgainBtn = DungeonStateModule.CheckEnd()
                 if ended and playAgainBtn then
                     SharedState.IsDungeonEnded = true
@@ -1683,7 +1674,7 @@ task.spawn(function()
                     if ConfigModule.Settings.AutoPlayAgain and not isHandlingPlayAgain then
                         isHandlingPlayAgain = true
                         task.spawn(function()
-                            task.wait(2.5)
+                            task.wait(3.0) -- Conclusão de fase aguarda exatamente os 3s que você informou
                             if SharedState.IsRunning then
                                 queueNextExecution()
                                 task.wait(0.2)
