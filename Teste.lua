@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (MOVIMENTO DESTRAVADO & FLUIDO)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (TARGET REAL + COMBATE + PLAYAGAIN)
 -- ====================================================================
 
 -- [[ 1. TRAVA SINGLETON & LIMPEZA DE AMBIENTE ]]
@@ -96,7 +96,7 @@ if not successFluent or not Fluent then
         getgenv().HubDosRapazes_Running = nil 
         getgenv().HubDosRapazes_ActiveSession = nil
     end
-    warn("[Hub dos Rapazes] Falha ao carregar a interface. Tente executar novamente.")
+    warn("[Hub dos Rapazes] Falha ao carregar a interface.")
     return
 end
 
@@ -206,9 +206,7 @@ function OptimizerModule.CleanInstance(v)
     if not ConfigModule.Settings.FPSBoost then return end
     pcall(function()
         if ConfigModule.Settings.DisableParticles then
-            if v:IsA("ParticleEmitter") or v:IsA("Sparkles") or v:IsA("Smoke") or v:IsA("Fire") then
-                v.Enabled = false
-            elseif v:IsA("Trail") or v:IsA("Beam") then
+            if v:IsA("ParticleEmitter") or v:IsA("Sparkles") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Trail") or v:IsA("Beam") then
                 v.Enabled = false
             end
         end
@@ -481,7 +479,6 @@ function CharacterModule.GetSafeCFrame(targetPosition, lookAtPosition)
     return CFrame.new(safePos, lookAtPosition)
 end
 
--- SISTEMA DE MOVIMENTAÇÃO DESTRAVADO (SEM CONFLITO DE CANCELAMENTO)
 function CharacterModule.FlyToEnemy(targetPart, overrideMode)
     if CharacterModule.IsActionBlocked() or SharedState.IsSelectingBonus then 
         CharacterModule.StopMovement()
@@ -519,17 +516,9 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
     local targetPos = targetCFrame.Position
     local distance = (root.Position - targetPos).Magnitude
 
-    if distance <= 1.5 then 
-        if SharedState.CurrentTween then
-            SharedState.CurrentTween:Cancel()
-            SharedState.CurrentTween = nil
-        end
-        root.CFrame = targetCFrame
-        return 
-    end
+    if distance <= 1.2 then return end
 
-    -- Se já estiver se movendo para a proximidade do monstro, deixa o Tween terminar sem cortar no meio
-    if SharedState.CurrentTween and SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 4.0 then
+    if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 2.0 and SharedState.CurrentTween then
         return
     end
 
@@ -537,7 +526,7 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
     local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 15), 0.15, 2.0)
 
     if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
-    SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out), {CFrame = targetCFrame})
+    SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = targetCFrame})
     SharedState.CurrentTween:Play()
 end
 
@@ -738,7 +727,7 @@ function SAOModule.CheckBonus()
     return false
 end
 
--- [[ 7. DETECÇÃO DE INIMIGOS (COM SUPORTE A PIRATEEMPEROR / BOSS RUSH) ]]
+-- [[ 7. DETECÇÃO DE INIMIGOS (RIGOROSA & COMPATÍVEL) ]]
 local TargetingModule = {}
 
 local function isChest(objName)
@@ -750,6 +739,7 @@ function TargetingModule.IsAlive(obj)
     if not obj or not obj.Parent then return false end
     if isChest(obj.Name) then return false end
     
+    -- 1. Verifica se tem Humanoid no modelo ou nós filhos
     local hum = obj:FindFirstChildOfClass("Humanoid") or obj:FindFirstChildWhichIsA("Humanoid", true)
     if hum then 
         if hum.Health <= 0.1 or hum:GetState() == Enum.HumanoidStateType.Dead then
@@ -758,17 +748,19 @@ function TargetingModule.IsAlive(obj)
         return true
     end
     
+    -- 2. Verifica se tem Atributo de HP
     local hpAttr = obj:GetAttribute("Health") or obj:GetAttribute("HP") or obj:GetAttribute("CurrentHealth")
-    if hpAttr and tonumber(hpAttr) <= 0.1 then 
-        return false 
+    if hpAttr and tonumber(hpAttr) then 
+        return tonumber(hpAttr) > 0.1 
     end
     
+    -- 3. Verifica se tem Value de HP
     local hpVal = obj:FindFirstChild("Health") or obj:FindFirstChild("HP")
-    if hpVal and hpVal:IsA("ValueBase") and tonumber(hpVal.Value) <= 0.1 then 
-        return false 
+    if hpVal and hpVal:IsA("ValueBase") and tonumber(hpVal.Value) then 
+        return tonumber(hpVal.Value) > 0.1 
     end
 
-    -- Aceita qualquer modelo válido dentro das pastas de inimigos
+    -- 4. Validação direta por container de inimigos (ex: PirateEmperor)
     local cur = obj.Parent
     while cur and cur ~= workspace do
         local n = cur.Name:lower()
@@ -778,7 +770,7 @@ function TargetingModule.IsAlive(obj)
         cur = cur.Parent
     end
     
-    return true
+    return false
 end
 
 function TargetingModule.GetTargetPart(obj)
@@ -840,16 +832,6 @@ function TargetingModule.GetLivingEnemies(phase)
                 if desc:IsA("Model") then addEntity(desc) end
             end
             if container:IsA("Model") then addEntity(container) end
-        end
-    end
-
-    if #list == 0 and gameFolder then
-        for _, desc in ipairs(gameFolder:GetDescendants()) do
-            if desc:IsA("Model") and desc ~= char and not Players:GetPlayerFromCharacter(desc) then
-                if desc.Name ~= "Clothing" and not desc:FindFirstAncestor("Players") then
-                    addEntity(desc)
-                end
-            end
         end
     end
 
@@ -1410,7 +1392,7 @@ function FlowModule.RunBossRush()
     local _, enemyPart = TargetingModule.GetClosestEnemy("Boss Rush")
     if enemyPart and enemyPart.Parent then
         SharedState.HasTarget = true
-        CharacterModule.FollowBehindLive(enemyPart)
+        CharacterModule.FlyToEnemy(enemyPart, ConfigModule.Settings.PositionMode)
     else
         SharedState.HasTarget = false
         CharacterModule.StopMovement()
