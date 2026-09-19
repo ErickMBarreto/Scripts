@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (TIMINGS AJUSTADOS: MORTE 8-10S / VITÓRIA 3S)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (START CORRIGIDO + PLAYAGAIN FLUIDO)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL LIMPA E ORIGINAL ]]
@@ -1396,34 +1396,36 @@ end
 -- [[ 12. ESTADOS DA DUNGEON & AUTO-START ]]
 local DungeonStateModule = {}
 
+-- Auto-Start direto e responsivo
 function DungeonStateModule.CheckStart()
-    if not pgui or (tick() - SharedState.LastStartAttempt) < 1.0 then return end
+    if not pgui or (tick() - SharedState.LastStartAttempt) < 0.5 then return end
     SharedState.LastStartAttempt = tick()
     
     local main = pgui:FindFirstChild("Main")
     if not main then return end
 
-    local targetFrames = {
-        main:FindFirstChild("BossRushFrame"),
-        main:FindFirstChild("DungeonFrame"),
-        main:FindFirstChild("RaidFrame"),
-        main:FindFirstChild("InfinityCreator")
-    }
+    for _, btn in ipairs(main:GetDescendants()) do
+        if btn:IsA("GuiButton") and btn.Visible then
+            local name = btn.Name:lower()
+            local isStartButton = (name == "start" or name == "play" or name == "dungeonstart" or name == "comecar")
 
-    for _, frame in ipairs(targetFrames) do
-        if frame and frame.Visible then
-            local startBtn = frame:FindFirstChild("Start", true) 
-                or frame:FindFirstChild("Play", true) 
-                or (frame:FindFirstChild("DungeonStart") and frame.DungeonStart:FindFirstChild("Play"))
-                
-            if startBtn and startBtn:IsA("GuiObject") and startBtn.Visible then
-                CharacterModule.TriggerButton(startBtn)
+            if not isStartButton then
+                local lbl = btn:FindFirstChildOfClass("TextLabel")
+                if lbl and lbl.Visible then
+                    local txt = lbl.Text:lower()
+                    if txt:find("start") or txt:find("play") or txt:find("começar") or txt:find("jogar") then
+                        isStartButton = true
+                    end
+                end
+            end
+
+            if isStartButton then
+                CharacterModule.TriggerButton(btn)
                 SharedState.IsVirusActive = false
                 SharedState.HasClickedStart = true
                 SharedState.HasPassedPortal1 = false
                 SharedState.HasEnteredBossRoom = false
-                SharedState.StartLockUntil = tick() + 5.0
-                CharacterModule.StopMovement()
+                SharedState.StartLockUntil = tick() + 1.0
                 return
             end
         end
@@ -1446,19 +1448,17 @@ function DungeonStateModule.CheckEngage()
     return false
 end
 
--- Detecção direta pelo botão PlayAgain confirmado no Boss Rush
+-- Detecção direta do botão PlayAgain confirmado
 function DungeonStateModule.CheckEnd()
     local main = pgui and pgui:FindFirstChild("Main")
     if not main then return false, nil end
 
-    -- 1. Checagem direta do botão identificado
     for _, btn in ipairs(main:GetDescendants()) do
         if btn:IsA("GuiButton") and btn.Name == "PlayAgain" and btn.Visible then
             return true, btn
         end
     end
 
-    -- 2. Varredura nos containers comuns (BossRushFrame e DungeonStats)
     local targetFrames = {
         main:FindFirstChild("BossRushFrame"),
         main:FindFirstChild("DungeonFrame"),
@@ -1504,12 +1504,11 @@ local function onPlayerDiedHandler()
         SharedState.HasPassedPortal1 = false
     end
 
-    -- ROTINA DE MORTE (BOSS RUSH / DUNGEONS): Monitora ativamente até 25s (para cobrir os 8 a 10s de espera)
+    -- MONITORAMENTO PÓS-MORTE: Varredura de até 25 segundos (cobre os 8 a 10s de delay da tela de derrota)
     if ConfigModule.Settings.AutoPlayAgain then
         task.spawn(function()
-            task.wait(1.5) -- Pequeno respiro inicial após o ragdoll
+            task.wait(1.5)
             
-            -- Faz varredura ativa a cada 0.3s por até 25 segundos (cobre os 8s a 10s que o jogo leva)
             for _ = 1, 80 do
                 if not SharedState.IsRunning then break end
                 local ended, retryBtn = DungeonStateModule.CheckEnd()
@@ -1655,7 +1654,7 @@ task.spawn(function()
                     end)
                 end
 
-                -- VITÓRIA DA FASE: Aguarda os 3 segundos padrão
+                -- VITÓRIA DA FASE: Aguarda os 3 segundos
                 local ended, playAgainBtn = DungeonStateModule.CheckEnd()
                 if ended and playAgainBtn then
                     SharedState.IsDungeonEnded = true
@@ -1674,7 +1673,7 @@ task.spawn(function()
                     if ConfigModule.Settings.AutoPlayAgain and not isHandlingPlayAgain then
                         isHandlingPlayAgain = true
                         task.spawn(function()
-                            task.wait(3.0) -- Conclusão de fase aguarda exatamente os 3s que você informou
+                            task.wait(3.0)
                             if SharedState.IsRunning then
                                 queueNextExecution()
                                 task.wait(0.2)
