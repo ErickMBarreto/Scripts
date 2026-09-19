@@ -1,20 +1,13 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (BOSS RUSH AUTO-RETRY & RESPONSIVO)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (VERSÃO ESTÁVEL RESTAURADA)
 -- ====================================================================
 
--- [[ 1. TRAVA SINGLETON & LIMPEZA DE AMBIENTE ]]
-local CurrentSessionId = tostring(os.time()) .. "_" .. tostring(math.random(1000, 9999))
-
+-- [[ 1. TRAVA GLOBAL LIMPA E ORIGINAL ]]
+if getgenv and getgenv().HubDosRapazes_Loaded then
+    return
+end
 if getgenv then
-    if getgenv().HubDosRapazes_ActiveSession and getgenv().HubDosRapazes_Running then
-        return
-    end
-    getgenv().HubDosRapazes_ActiveSession = CurrentSessionId
-    getgenv().HubDosRapazes_Running = true
-    
-    if getgenv().HubDosRapazes_Shutdown then
-        pcall(getgenv().HubDosRapazes_Shutdown)
-    end
+    getgenv().HubDosRapazes_Loaded = true
 end
 
 local CoreGui = game:GetService("CoreGui")
@@ -24,7 +17,6 @@ local TweenService = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Lighting = game:GetService("Lighting")
-local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Teste.lua"
 local SCRIPT_NAME = "HubRapazes_Local.lua"
@@ -38,43 +30,19 @@ pcall(function()
     end
 end)
 
-local hasQueuedTeleport = false
+-- Auto-execução padrão original que sempre funcionou
 local function queueNextExecution()
-    if hasQueuedTeleport then return end
-    hasQueuedTeleport = true
-
     local queueFunc = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or queueonteleport
     if queueFunc then
         pcall(function()
             queueFunc(string.format([[
-                if getgenv then 
-                    getgenv().HubDosRapazes_Running = nil 
-                    getgenv().HubDosRapazes_ActiveSession = nil
-                    getgenv().HubDosRapazes_Loaded = nil
-                end
+                if getgenv then getgenv().HubDosRapazes_Loaded = nil end
+                repeat task.wait(0.5) until game:IsLoaded() and game.Players.LocalPlayer
+                task.wait(2.0)
                 
-                if not game:IsLoaded() then 
-                    pcall(function() game.Loaded:Wait() end) 
-                end
-                
-                local plrs = game:GetService("Players")
-                local lp = plrs.LocalPlayer or plrs.PlayerAdded:Wait()
-                lp:WaitForChild("PlayerGui", 40)
-                task.wait(2.5)
-                
-                local success = false
                 if readfile and isfile and isfile("%s") then
-                    local content = readfile("%s")
-                    if content and #content > 500 then
-                        local fn = loadstring(content)
-                        if fn then
-                            success = true
-                            pcall(fn)
-                        end
-                    end
-                end
-                
-                if not success then
+                    loadstring(readfile("%s"))()
+                else
                     loadstring(game:HttpGet("%s"))()
                 end
             ]], SCRIPT_NAME, SCRIPT_NAME, scriptURL))
@@ -99,20 +67,7 @@ for _, gui in ipairs({CoreGui, pgui}) do
     end
 end
 
-local successFluent, Fluent = pcall(function()
-    return loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
-end)
-
-if not successFluent or not Fluent then
-    if getgenv then 
-        getgenv().HubDosRapazes_Running = nil 
-        getgenv().HubDosRapazes_ActiveSession = nil
-    end
-    warn("[Hub dos Rapazes] Falha ao carregar a interface. Tente executar novamente.")
-    return
-end
-
-local FIXED_START_WAIT_TIME = 5.0
+local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
 
 local SharedState = {
     IsRunning = true,
@@ -132,7 +87,7 @@ local SharedState = {
     LastPortalAttempt = 0,
     LastStartAttempt = 0,
     HasClickedStart = false,
-    StartLockUntil = tick() + FIXED_START_WAIT_TIME,
+    StartLockUntil = 0,
     RespawnLockUntil = 0,
     HasTarget = false,
     IsSelectingBonus = false,
@@ -157,7 +112,7 @@ ConfigModule.Settings = {
     SkillMaxDistance = 22,
     HeightAboveEnemy = 8.5,
     BackDistance = 4.5,
-    TweenSpeed = 48,
+    TweenSpeed = 50,
     AttackSpeed = 0.15,
     AutoClaimQuests = false,
     AutoSell = false,
@@ -211,16 +166,14 @@ function ConfigModule.Load()
 end
 ConfigModule.Load()
 
--- [[ 3. MÓDULO OTIMIZADOR DE FPS & ANTI-CRASH ]]
+-- [[ 3. MÓDULO OTIMIZADOR DE FPS ]]
 local OptimizerModule = {}
 
 function OptimizerModule.CleanInstance(v)
     if not ConfigModule.Settings.FPSBoost then return end
     pcall(function()
         if ConfigModule.Settings.DisableParticles then
-            if v:IsA("ParticleEmitter") or v:IsA("Sparkles") or v:IsA("Smoke") or v:IsA("Fire") then
-                v.Enabled = false
-            elseif v:IsA("Trail") or v:IsA("Beam") then
+            if v:IsA("ParticleEmitter") or v:IsA("Sparkles") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Trail") or v:IsA("Beam") then
                 v.Enabled = false
             end
         end
@@ -292,7 +245,7 @@ function OptimizerModule.SetBlackScreen(enabled)
                 local txt = Instance.new("TextLabel", bg)
                 txt.Size = UDim2.new(1, 0, 0, 40)
                 txt.Position = UDim2.new(0, 0, 0.45, 0)
-                txt.Text = "MODO AFK ATIVO (ECONOMIZANDO BATERIA E RAM)"
+                txt.Text = "MODO AFK ATIVO (POUPANDO BATERIA E RAM)"
                 txt.TextColor3 = Color3.fromRGB(0, 255, 170)
                 txt.Font = Enum.Font.GothamBold
                 txt.TextSize = 14
@@ -308,7 +261,7 @@ function OptimizerModule.SetBlackScreen(enabled)
 end
 
 task.spawn(function()
-    task.wait(3.0)
+    task.wait(2.5)
     OptimizerModule.ApplyAll()
 end)
 
@@ -569,21 +522,14 @@ function CharacterModule.FlyToPortal(targetCFrame)
     SharedState.CurrentTween:Play()
 end
 
--- Acionador de Botão Triplo (Firesignal + VirtualInputManager + Connections)
+-- TRIGGERBUTTON ORIGINAL CONFIÁVEL
 function CharacterModule.TriggerButton(btn)
     if not btn or not SharedState.IsRunning then return end
     pcall(function()
-        if btn:IsA("GuiButton") and btn.AbsolutePosition and btn.AbsoluteSize then
-            local center = btn.AbsolutePosition + (btn.AbsoluteSize / 2)
-            VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, true, game, 1)
-            task.wait(0.04)
-            VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, false, game, 1)
-        end
         if firesignal then
             if btn.Activated then firesignal(btn.Activated) end
             if btn.MouseButton1Click then firesignal(btn.MouseButton1Click) end
             if btn.MouseButton1Down then firesignal(btn.MouseButton1Down) end
-            if btn.MouseButton1Up then firesignal(btn.MouseButton1Up) end
         end
         if getconnections then
             for _, evName in ipairs({"Activated", "MouseButton1Click", "MouseButton1Down"}) do
@@ -1477,7 +1423,7 @@ function DungeonStateModule.CheckStart()
                 SharedState.HasClickedStart = true
                 SharedState.HasPassedPortal1 = false
                 SharedState.HasEnteredBossRoom = false
-                SharedState.StartLockUntil = tick() + FIXED_START_WAIT_TIME
+                SharedState.StartLockUntil = tick() + 5.0
                 CharacterModule.StopMovement()
                 return
             end
@@ -1542,29 +1488,34 @@ local function onPlayerDiedHandler()
     SharedState.HasTarget = false
     SharedState.IsSelectingBonus = false
 
-    -- BOSS RUSH: Espera 2 segundos após a morte e clica para recomeçar
+    local curWave = FlowModule.GetWave()
+    if curWave < 16 then
+        SharedState.HasEnteredBossRoom = false
+    end
+    if curWave < 12 then
+        SharedState.HasPassedPortal1 = false
+    end
+
+    -- BOSS RUSH: Espera 2 segundos após a morte
     if ConfigModule.Settings.SelectedPhase == "Boss Rush" and ConfigModule.Settings.AutoPlayAgain then
         task.spawn(function()
             task.wait(2.0)
-            for _ = 1, 40 do
+            for _ = 1, 30 do
                 if not SharedState.IsRunning then break end
                 local ended, retryBtn = DungeonStateModule.CheckEnd()
-                
-                -- Se encontrou o botão na GUI ou tenta via Remote oficial
                 if ended and retryBtn then
                     SharedState.IsDungeonEnded = true
+                    queueNextExecution()
+                    task.wait(0.2)
                     CharacterModule.TriggerButton(retryBtn)
                     pcall(function()
                         if dungeonRemote then
                             dungeonRemote:FireServer("PlayAgain")
-                            dungeonRemote:FireServer("Retry")
                         end
                     end)
-                    task.wait(0.5)
-                    SharedState.IsDungeonEnded = false
                     break
                 end
-                task.wait(0.25)
+                task.wait(0.3)
             end
         end)
         return
@@ -1629,7 +1580,6 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
     SharedState.HasTarget = false
     SharedState.IsSelectingBonus = false
     SharedState.IsDungeonEnded = false
-    hasQueuedTeleport = false
 
     local curWave = FlowModule.GetWave()
     if curWave < 16 then
@@ -1735,20 +1685,16 @@ task.spawn(function()
                         task.spawn(function()
                             task.wait(2.5)
                             if SharedState.IsRunning then
-                                -- Disparo de Retry
-                                if ConfigModule.Settings.SelectedPhase ~= "Boss Rush" then
-                                    queueNextExecution()
-                                end
+                                queueNextExecution()
                                 task.wait(0.2)
                                 CharacterModule.TriggerButton(playAgainBtn)
                                 pcall(function()
                                     if dungeonRemote then
                                         dungeonRemote:FireServer("PlayAgain")
-                                        dungeonRemote:FireServer("Retry")
                                     end
                                 end)
                             end
-                            task.wait(2.5)
+                            task.wait(3.0)
                             SharedState.IsDungeonEnded = false
                             isHandlingPlayAgain = false
                         end)
@@ -1854,10 +1800,7 @@ floatBtn.MouseButton1Click:Connect(function() toggleUI(true) end)
 
 function UIModule.Shutdown()
     SharedState.IsRunning = false
-    if getgenv then 
-        getgenv().HubDosRapazes_Running = nil 
-        getgenv().HubDosRapazes_ActiveSession = nil
-    end
+    if getgenv then getgenv().HubDosRapazes_Loaded = nil end
     CharacterModule.StopMovement()
     if charConnection then charConnection:Disconnect() end
     if diedConnection then diedConnection:Disconnect() end
@@ -1878,10 +1821,6 @@ function UIModule.Shutdown()
             end
         end
     end
-end
-
-if getgenv then
-    getgenv().HubDosRapazes_Shutdown = UIModule.Shutdown
 end
 
 task.spawn(function()
