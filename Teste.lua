@@ -252,7 +252,6 @@ function OptimizerModule.ApplyAll()
     end)
 end
 
--- Listener para novos efeitos instanciados (skills de mobs/armas)
 workspace.DescendantAdded:Connect(function(child)
     if ConfigModule.Settings.FPSBoost then
         task.delay(0.1, function()
@@ -261,7 +260,6 @@ workspace.DescendantAdded:Connect(function(child)
     end
 end)
 
--- Black Screen AFK (Economia extrema de bateria e GPU)
 function OptimizerModule.SetBlackScreen(enabled)
     pcall(function()
         local sg = CoreGui:FindFirstChild("HubRapazes_BlackScreen") or pgui:FindFirstChild("HubRapazes_BlackScreen")
@@ -297,7 +295,6 @@ function OptimizerModule.SetBlackScreen(enabled)
     end)
 end
 
--- Executa uma otimização inicial suave após o carregamento
 task.spawn(function()
     task.wait(3.0)
     OptimizerModule.ApplyAll()
@@ -735,7 +732,7 @@ function SAOModule.CheckBonus()
     return false
 end
 
--- [[ 7. DETECÇÃO DE INIMIGOS ]]
+-- [[ 7. DETECÇÃO DE INIMIGOS (CORRIGIDA COM SUPORTE A BOSS RUSH / PIRATEEMPEROR) ]]
 local TargetingModule = {}
 
 local function isChest(objName)
@@ -752,6 +749,7 @@ function TargetingModule.IsAlive(obj)
         if hum.Health <= 0.1 or hum:GetState() == Enum.HumanoidStateType.Dead then
             return false
         end
+        return true
     end
     
     local hpAttr = obj:GetAttribute("Health") or obj:GetAttribute("HP") or obj:GetAttribute("CurrentHealth")
@@ -762,6 +760,16 @@ function TargetingModule.IsAlive(obj)
     local hpVal = obj:FindFirstChild("Health") or obj:FindFirstChild("HP")
     if hpVal and hpVal:IsA("ValueBase") and tonumber(hpVal.Value) <= 0.1 then 
         return false 
+    end
+
+    -- SUPORTE AO BOSS RUSH (modelos em Game.Enemies sem Humanoid direto)
+    local cur = obj.Parent
+    while cur and cur ~= workspace do
+        local n = cur.Name:lower()
+        if n == "enemies" or n == "boss" or n == "bossrush" or n == "stages" then
+            return true
+        end
+        cur = cur.Parent
     end
     
     return true
@@ -775,6 +783,7 @@ function TargetingModule.GetTargetPart(obj)
         or obj:FindFirstChild("HitBox")
         or obj:FindFirstChild("Head")
         or obj:FindFirstChild("Torso")
+        or obj:FindFirstChild("UpperTorso")
         or (obj:IsA("Model") and obj.PrimaryPart)
         or obj:FindFirstChildWhichIsA("BasePart")
     
@@ -815,7 +824,8 @@ function TargetingModule.GetLivingEnemies(phase)
         gameFolder and gameFolder:FindFirstChild("BossRush"),
         gameFolder and gameFolder:FindFirstChild("Raids"),
         gameFolder and gameFolder:FindFirstChild("Infinity"),
-        workspace:FindFirstChild("SAO")
+        workspace:FindFirstChild("SAO"),
+        workspace:FindFirstChild("BossRush")
     }
 
     for _, container in ipairs(searchContainers) do
@@ -2103,7 +2113,7 @@ SellRaritiesSection:AddToggle("SellMythicToggle", {
     Callback = function(Value) ConfigModule.Settings.SellMythic = Value ConfigModule.Save() end
 })
 
--- ABA OTIMIZAÇÃO (NOVA - ANTI-CRASH MOBILE)
+-- ABA OTIMIZAÇÃO
 local PerformanceSection = Tabs.Performance:AddSection("Otimizador de Desempenho & RAM")
 
 PerformanceSection:AddToggle("FPSBoostToggle", {
