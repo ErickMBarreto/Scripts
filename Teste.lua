@@ -1,8 +1,8 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (VERSÃO COMPLETA INTEGRADA)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (DETECÇÃO DE BOSS RUSH CORRIGIDA)
 -- ====================================================================
 
--- [[ 1. RESET E LIMPEZA DE AMBIENTE ]]
+-- [[ 1. TRAVA GLOBAL ]]
 if getgenv and getgenv().HubDosRapazes_Loaded then
     return
 end
@@ -101,7 +101,7 @@ local SharedState = {
 -- [[ 2. CONFIGURAÇÕES ]]
 local ConfigModule = {}
 ConfigModule.Settings = {
-    SelectedPhase = "SAO",
+    SelectedPhase = "Boss Rush",
     PositionMode = "Nas Costas",
     CustomWeaponName = "Yoru",
     AutoFarm = true,
@@ -635,7 +635,7 @@ function SAOModule.CheckBonus()
     return false
 end
 
--- [[ 7. DETECÇÃO DE INIMIGOS (SÓLIDA E ABRANGENTE) ]]
+-- [[ 7. DETECÇÃO DE INIMIGOS (CORRIGIDA: DETETA O BOSS SEM HUMANOID NA RAIZ) ]]
 local TargetingModule = {}
 
 local function isChest(objName)
@@ -646,26 +646,35 @@ end
 function TargetingModule.IsAlive(obj)
     if not obj or not obj.Parent then return false end
     if isChest(obj.Name) then return false end
-    
-    local hum = obj:FindFirstChildOfClass("Humanoid")
-    if hum then 
+
+    -- Se tiver Humanoid direto ou nos descendentes
+    local hum = obj:FindFirstChildOfClass("Humanoid") or obj:FindFirstChildWhichIsA("Humanoid", true)
+    if hum then
         if hum.Health <= 0.1 or hum:GetState() == Enum.HumanoidStateType.Dead then
             return false
         end
         return true
     end
-    
+
+    -- Se tiver atributo de vida
     local hpAttr = obj:GetAttribute("Health") or obj:GetAttribute("HP") or obj:GetAttribute("CurrentHealth")
-    if hpAttr and tonumber(hpAttr) and tonumber(hpAttr) <= 0.1 then 
-        return false 
+    if hpAttr and tonumber(hpAttr) then
+        return tonumber(hpAttr) > 0.1
     end
-    
+
+    -- Se tiver ValueBase de vida
     local hpVal = obj:FindFirstChild("Health") or obj:FindFirstChild("HP")
-    if hpVal and hpVal:IsA("ValueBase") and tonumber(hpVal.Value) and tonumber(hpVal.Value) <= 0.1 then 
-        return false 
+    if hpVal and hpVal:IsA("ValueBase") and tonumber(hpVal.Value) then
+        return tonumber(hpVal.Value) > 0.1
     end
-    
-    return true
+
+    -- REGRA DE OURO PARA O BOSS RUSH:
+    -- Se o modelo está dentro de Enemies/Boss, não é o jogador e tem peças físicas, ele está vivo!
+    if obj.Parent and (obj.Parent.Name == "Enemies" or obj.Parent.Name == "Boss" or obj.Parent.Name == "BossRush") then
+        return true
+    end
+
+    return false
 end
 
 function TargetingModule.GetTargetPart(obj)
@@ -678,7 +687,7 @@ function TargetingModule.GetTargetPart(obj)
         or obj:FindFirstChild("Torso")
         or (obj:IsA("Model") and obj.PrimaryPart)
         or obj:FindFirstChildWhichIsA("BasePart")
-    
+
     if not part then return nil end
 
     if ConfigModule.Settings.SelectedPhase == "SAO" and part.Position.Y < 985 then
@@ -729,6 +738,7 @@ function TargetingModule.GetLivingEnemies(phase)
         end
     end
 
+    -- Varredura ampla
     if #list == 0 then
         if gameFolder then
             for _, desc in ipairs(gameFolder:GetDescendants()) do
@@ -1281,7 +1291,7 @@ function FlowModule.RunOnePiece()
     end
 end
 
--- ROTA BOSS RUSH (DINÂMICA: RESPEITA O DROPDOWN E OS SLIDERS DA INTERFACE)
+-- ROTA BOSS RUSH (DINÂMICA: RESPEITA O DROPDOWN E SLIDERS DO SEU MENU)
 function FlowModule.RunBossRush()
     local closestBoss, bossPart = TargetingModule.GetClosestEnemy("Boss Rush")
     if closestBoss and bossPart and bossPart.Parent then
