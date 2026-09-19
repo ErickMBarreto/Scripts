@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (TRAVA SINGLETON RÍGIDA & ANTI-DUPLICAÇÃO)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (BOSS RUSH: MOVIMENTO & ALVO RESTAURADOS)
 -- ====================================================================
 
 -- [[ 1. TRAVA SINGLETON RÍGIDA ]]
@@ -30,7 +30,6 @@ pcall(function()
     end
 end)
 
--- Enfileiramento com trava estrita de uma única execução
 local hasQueued = false
 local function queueNextExecution()
     if hasQueued then return end
@@ -64,7 +63,6 @@ end
 local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
 local pgui = player:WaitForChild("PlayerGui", 30)
 
--- Limpa interfaces antigas residuais
 for _, gui in ipairs({CoreGui, pgui}) do
     if gui then
         for _, child in ipairs(gui:GetChildren()) do
@@ -426,28 +424,10 @@ flightStabilizer = RunService.Stepped:Connect(function()
 end)
 
 function CharacterModule.GetSafeCFrame(targetPosition, lookAtPosition)
-    local char = player.Character
-    local rayOrigin = targetPosition + Vector3.new(0, 15, 0)
-    local rayDirection = Vector3.new(0, -35, 0)
-    
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    if char then params.FilterDescendantsInstances = {char} end
-    
-    local hit = workspace:Raycast(rayOrigin, rayDirection, params)
     local safeY = targetPosition.Y
-
-    if hit then
-        local floorY = hit.Position.Y
-        if safeY < (floorY + 2.5) then 
-            safeY = floorY + 2.5 
-        end
-    end
-
     if ConfigModule.Settings.SelectedPhase == "SAO" and safeY < 1005 then
         safeY = 1005.5
     end
-
     return CFrame.new(Vector3.new(targetPosition.X, safeY, targetPosition.Z), lookAtPosition)
 end
 
@@ -460,11 +440,6 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
     if not root or not targetPart or not targetPart.Parent then 
         CharacterModule.StopMovement()
         return 
-    end
-
-    if ConfigModule.Settings.SelectedPhase == "SAO" and targetPart.Position.Y < 985 then
-        CharacterModule.StopMovement()
-        return
     end
 
     local enemyPos = targetPart.Position
@@ -691,7 +666,7 @@ function SAOModule.CheckBonus()
     return false
 end
 
--- [[ 7. DETECÇÃO DE INIMIGOS (COM SUPORTE BOSS RUSH) ]]
+-- [[ 7. DETECÇÃO DE INIMIGOS (ABRANGENTE PARA BOSS RUSH) ]]
 local TargetingModule = {}
 
 local function isChest(objName)
@@ -708,16 +683,17 @@ function TargetingModule.IsAlive(obj)
         if hum.Health <= 0.1 or hum:GetState() == Enum.HumanoidStateType.Dead then
             return false
         end
+        return true
     end
     
     local hpAttr = obj:GetAttribute("Health") or obj:GetAttribute("HP") or obj:GetAttribute("CurrentHealth")
-    if hpAttr and tonumber(hpAttr) <= 0.1 then 
-        return false 
+    if hpAttr then
+        return tonumber(hpAttr) > 0.1
     end
     
     local hpVal = obj:FindFirstChild("Health") or obj:FindFirstChild("HP")
-    if hpVal and hpVal:IsA("ValueBase") and tonumber(hpVal.Value) <= 0.1 then 
-        return false 
+    if hpVal and hpVal:IsA("ValueBase") then
+        return tonumber(hpVal.Value) > 0.1
     end
     
     return true
@@ -760,12 +736,23 @@ function TargetingModule.GetLivingEnemies(phase)
         end
     end
 
+    -- Se for Boss Rush, varre prioritariamente o workspace para apanhar os 4 bosses instantaneamente
+    if phase == "Boss Rush" then
+        for _, obj in ipairs(workspace:GetChildren()) do
+            if obj:IsA("Model") and obj ~= char and not Players:GetPlayerFromCharacter(obj) then
+                addEntity(obj)
+            end
+        end
+    end
+
     local gameFolder = workspace:FindFirstChild("Game")
     local searchContainers = {
         gameFolder and gameFolder:FindFirstChild("BossRush"),
         gameFolder and gameFolder:FindFirstChild("Boss"),
         gameFolder and gameFolder:FindFirstChild("Enemies"),
         workspace:FindFirstChild("Enemies"),
+        workspace:FindFirstChild("Boss"),
+        workspace:FindFirstChild("BossRush"),
         gameFolder and gameFolder:FindFirstChild("Stages"),
         gameFolder and gameFolder:FindFirstChild("Virus"),
         gameFolder and gameFolder:FindFirstChild("SecretBoss"),
@@ -780,16 +767,6 @@ function TargetingModule.GetLivingEnemies(phase)
                 if desc:IsA("Model") then addEntity(desc) end
             end
             if container:IsA("Model") then addEntity(container) end
-        end
-    end
-
-    if #list == 0 and gameFolder then
-        for _, desc in ipairs(gameFolder:GetDescendants()) do
-            if desc:IsA("Model") and desc ~= char and not Players:GetPlayerFromCharacter(desc) then
-                if desc.Name ~= "Clothing" and not desc:FindFirstAncestor("Players") then
-                    addEntity(desc)
-                end
-            end
         end
     end
 
@@ -1529,7 +1506,7 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
     SharedState.HasTarget = false
     SharedState.IsSelectingBonus = false
     SharedState.IsDungeonEnded = false
-    hasQueued = false -- Reseta a fila de teleporte para a nova partida
+    hasQueued = false
 
     CharacterModule.StopMovement()
     bindCharacterEvents(newChar)
@@ -1620,7 +1597,7 @@ task.spawn(function()
                     if ConfigModule.Settings.AutoPlayAgain and not isHandlingPlayAgain then
                         isHandlingPlayAgain = true
                         task.spawn(function()
-                            task.wait(3.0) -- Tempo exato da vitória
+                            task.wait(3.0)
                             if SharedState.IsRunning then
                                 queueNextExecution()
                                 task.wait(0.2)
