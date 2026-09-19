@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (TELEPORTE ADAPTATIVO MOBILE)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (BOSS RUSH 2S + AUTO-RELOAD PÓS-MORTE)
 -- ====================================================================
 
 -- [[ 1. TRAVA SINGLETON & LIMPEZA DE AMBIENTE ]]
@@ -37,7 +37,6 @@ pcall(function()
     end
 end)
 
--- Rotina de teleporte com sincronização reforçada para mobile
 local hasQueuedTeleport = false
 local function queueNextExecution()
     if hasQueuedTeleport then return end
@@ -53,7 +52,6 @@ local function queueNextExecution()
                     getgenv().HubDosRapazes_Loaded = nil
                 end
                 
-                -- Espera o carregamento real do jogo e dos elementos críticos
                 if not game:IsLoaded() then 
                     pcall(function() game.Loaded:Wait() end) 
                 end
@@ -61,9 +59,7 @@ local function queueNextExecution()
                 local plrs = game:GetService("Players")
                 local lp = plrs.LocalPlayer or plrs.PlayerAdded:Wait()
                 lp:WaitForChild("PlayerGui", 40)
-                
-                -- Tempo de respiro para estabilização de rede no celular novo
-                task.wait(3.5)
+                task.wait(3.0)
                 
                 local success = false
                 if readfile and isfile and isfile("%s") then
@@ -1505,23 +1501,33 @@ function DungeonStateModule.CheckEngage()
     return false
 end
 
+-- Busca reforçada para botões de conclusão/retry no Boss Rush e Dungeons normais
 function DungeonStateModule.CheckEnd()
     local main = pgui and pgui:FindFirstChild("Main")
     if not main then return false, nil end
 
-    local df = main:FindFirstChild("DungeonFrame") or main:FindFirstChild("RaidFrame") or main:FindFirstChild("BossRushFrame")
-    local dungeonStats = (df and df:FindFirstChild("DungeonStats")) or main:FindFirstChild("DungeonStats", true)
+    local targetFrames = {
+        main:FindFirstChild("BossRushFrame"),
+        main:FindFirstChild("DungeonFrame"),
+        main:FindFirstChild("RaidFrame"),
+        main:FindFirstChild("DungeonStats", true)
+    }
 
-    if dungeonStats and dungeonStats.Visible then
-        for _, obj in ipairs(dungeonStats:GetDescendants()) do
-            if obj:IsA("GuiButton") and obj.Visible then
-                local name = obj.Name:lower()
-                if name:find("playagain") or name:find("retry") or name:find("again") then
-                    return true, obj
-                end
-                local label = obj:FindFirstChildOfClass("TextLabel")
-                if label and (label.Text:lower():find("play again") or label.Text:lower():find("jogar novamente")) then
-                    return true, obj
+    for _, container in ipairs(targetFrames) do
+        if container and container.Visible then
+            for _, obj in ipairs(container:GetDescendants()) do
+                if obj:IsA("GuiButton") and obj.Visible then
+                    local name = obj.Name:lower()
+                    if name:find("playagain") or name:find("retry") or name:find("again") or name:find("replay") or name:find("restart") then
+                        return true, obj
+                    end
+                    local label = obj:FindFirstChildOfClass("TextLabel")
+                    if label and label.Visible then
+                        local txt = label.Text:lower()
+                        if txt:find("play again") or txt:find("retry") or txt:find("jogar novamente") or txt:find("novamente") or txt:find("restart") then
+                            return true, obj
+                        end
+                    end
                 end
             end
         end
@@ -1536,6 +1542,7 @@ local function onPlayerDiedHandler()
     SharedState.LastRoomState = "Room1"
     SharedState.HasTarget = false
     SharedState.IsSelectingBonus = false
+    hasQueuedTeleport = false -- Libera nova fila para a partida seguinte
 
     local curWave = FlowModule.GetWave()
     if curWave < 16 then
@@ -1545,10 +1552,11 @@ local function onPlayerDiedHandler()
         SharedState.HasPassedPortal1 = false
     end
 
-    if (ConfigModule.Settings.SelectedPhase == "Boss Rush" or ConfigModule.Settings.SelectedPhase == "Infinity" or ConfigModule.Settings.SelectedPhase == "SAO") and ConfigModule.Settings.AutoPlayAgain then
+    -- BOSS RUSH: Espera 2 segundos após a morte e clica para recomeçar
+    if ConfigModule.Settings.SelectedPhase == "Boss Rush" and ConfigModule.Settings.AutoPlayAgain then
         task.spawn(function()
-            task.wait(3.0)
-            for _ = 1, 15 do
+            task.wait(2.0)
+            for _ = 1, 40 do
                 if not SharedState.IsRunning then break end
                 local ended, retryBtn = DungeonStateModule.CheckEnd()
                 if ended and retryBtn then
@@ -1556,9 +1564,37 @@ local function onPlayerDiedHandler()
                     queueNextExecution()
                     task.wait(0.2)
                     CharacterModule.TriggerButton(retryBtn)
+                    if getgenv then
+                        getgenv().HubDosRapazes_Running = nil
+                        getgenv().HubDosRapazes_ActiveSession = nil
+                    end
                     break
                 end
-                task.wait(0.5)
+                task.wait(0.25)
+            end
+        end)
+        return
+    end
+
+    -- SAO / INFINITY: Espera 3 segundos
+    if (ConfigModule.Settings.SelectedPhase == "Infinity" or ConfigModule.Settings.SelectedPhase == "SAO") and ConfigModule.Settings.AutoPlayAgain then
+        task.spawn(function()
+            task.wait(3.0)
+            for _ = 1, 20 do
+                if not SharedState.IsRunning then break end
+                local ended, retryBtn = DungeonStateModule.CheckEnd()
+                if ended and retryBtn then
+                    SharedState.IsDungeonEnded = true
+                    queueNextExecution()
+                    task.wait(0.2)
+                    CharacterModule.TriggerButton(retryBtn)
+                    if getgenv then
+                        getgenv().HubDosRapazes_Running = nil
+                        getgenv().HubDosRapazes_ActiveSession = nil
+                    end
+                    break
+                end
+                task.wait(0.4)
             end
         end)
         return
@@ -1578,6 +1614,10 @@ local function onPlayerDiedHandler()
             queueNextExecution()
             task.wait(0.2)
             CharacterModule.TriggerButton(retryBtn)
+            if getgenv then
+                getgenv().HubDosRapazes_Running = nil
+                getgenv().HubDosRapazes_ActiveSession = nil
+            end
             task.wait(3.0)
         end
     end)
@@ -1602,6 +1642,7 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
     SharedState.LastRoomState = "Room1"
     SharedState.HasTarget = false
     SharedState.IsSelectingBonus = false
+    hasQueuedTeleport = false
 
     local curWave = FlowModule.GetWave()
     if curWave < 16 then
@@ -1710,6 +1751,10 @@ task.spawn(function()
                                 queueNextExecution()
                                 task.wait(0.2)
                                 CharacterModule.TriggerButton(playAgainBtn)
+                                if getgenv then
+                                    getgenv().HubDosRapazes_Running = nil
+                                    getgenv().HubDosRapazes_ActiveSession = nil
+                                end
                             end
                             task.wait(3.0)
                             isHandlingPlayAgain = false
@@ -2112,7 +2157,7 @@ SellRaritiesSection:AddToggle("SellMythicToggle", {
     Callback = function(Value) ConfigModule.Settings.SellMythic = Value ConfigModule.Save() end
 })
 
--- ABA OTIMIZAÇÃO (ANTI-CRASH MOBILE)
+-- ABA OTIMIZAÇÃO
 local PerformanceSection = Tabs.Performance:AddSection("Otimizador de Desempenho & RAM")
 
 PerformanceSection:AddToggle("FPSBoostToggle", {
