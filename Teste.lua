@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (BOSS RUSH 2S + AUTO-RELOAD PÓS-MORTE)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (BOSS RUSH AUTO-RETRY & RESPONSIVO)
 -- ====================================================================
 
 -- [[ 1. TRAVA SINGLETON & LIMPEZA DE AMBIENTE ]]
@@ -24,6 +24,7 @@ local TweenService = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Lighting = game:GetService("Lighting")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Teste.lua"
 local SCRIPT_NAME = "HubRapazes_Local.lua"
@@ -59,7 +60,7 @@ local function queueNextExecution()
                 local plrs = game:GetService("Players")
                 local lp = plrs.LocalPlayer or plrs.PlayerAdded:Wait()
                 lp:WaitForChild("PlayerGui", 40)
-                task.wait(3.0)
+                task.wait(2.5)
                 
                 local success = false
                 if readfile and isfile and isfile("%s") then
@@ -568,15 +569,24 @@ function CharacterModule.FlyToPortal(targetCFrame)
     SharedState.CurrentTween:Play()
 end
 
+-- Acionador de Botão Triplo (Firesignal + VirtualInputManager + Connections)
 function CharacterModule.TriggerButton(btn)
     if not btn or not SharedState.IsRunning then return end
     pcall(function()
+        if btn:IsA("GuiButton") and btn.AbsolutePosition and btn.AbsoluteSize then
+            local center = btn.AbsolutePosition + (btn.AbsoluteSize / 2)
+            VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, true, game, 1)
+            task.wait(0.04)
+            VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, false, game, 1)
+        end
         if firesignal then
             if btn.Activated then firesignal(btn.Activated) end
             if btn.MouseButton1Click then firesignal(btn.MouseButton1Click) end
+            if btn.MouseButton1Down then firesignal(btn.MouseButton1Down) end
+            if btn.MouseButton1Up then firesignal(btn.MouseButton1Up) end
         end
         if getconnections then
-            for _, evName in ipairs({"Activated", "MouseButton1Click"}) do
+            for _, evName in ipairs({"Activated", "MouseButton1Click", "MouseButton1Down"}) do
                 if btn[evName] then
                     for _, c in ipairs(getconnections(btn[evName])) do c:Fire() end
                 end
@@ -1094,7 +1104,7 @@ function QuestModule.ClaimAll()
     local tabs = {
         questsFrame:FindFirstChild("Buttons") and questsFrame.Buttons:FindFirstChild("Hourly"),
         questsFrame:FindFirstChild("Buttons") and questsFrame.Buttons:FindFirstChild("Daily"),
-        questsFrame:FindFirstChild("Buttons") and questsFrame.Buttons:FindFirstChild("Weekly")
+        questsFrame:FindFirstChild("Weekly")
     }
 
     local claimed = 0
@@ -1219,14 +1229,12 @@ function FlowModule.RunSAO()
         return
     end
 
-    -- 1. Cartas Automáticas
     if SAOModule.CheckBonus() then
         SharedState.HasTarget = false
         CharacterModule.StopMovement()
         return
     end
 
-    -- 2. Boss Secreto / Virus
     if SharedState.IsVirusActive then
         local _, enemyPart = TargetingModule.GetClosestEnemy("SAO")
         if enemyPart then
@@ -1241,7 +1249,6 @@ function FlowModule.RunSAO()
 
     local wave = FlowModule.GetWave()
 
-    -- 3. COMBATE REGULAR (Varre apenas monstros com vida ativa confirmada)
     local currentMob, mobPart = TargetingModule.GetClosestEnemy("SAO")
     if currentMob and mobPart then
         if wave >= 16 then
@@ -1254,7 +1261,6 @@ function FlowModule.RunSAO()
 
     CharacterModule.StopMovement()
 
-    -- 4. TRANSIÇÃO DE PORTAIS
     if wave >= 16 and not SharedState.HasEnteredBossRoom then
         local distToP2 = (root.Position - SAO_PORTAL_2.Position).Magnitude
         if distToP2 < 300 and distToP2 > 2.0 then
@@ -1277,12 +1283,10 @@ function FlowModule.RunSAO()
         end
     end
 
-    -- 5. STANDBY SEGURO
     SharedState.HasTarget = false
     CharacterModule.StopMovement()
 end
 
--- Rota Bleach
 function FlowModule.RunBleach()
     local _, root = CharacterModule.Get()
     if not root or CharacterModule.IsActionBlocked() then return end
@@ -1340,7 +1344,6 @@ function FlowModule.RunBleach()
     end
 end
 
--- Rota One Piece
 function FlowModule.RunOnePiece()
     local _, root = CharacterModule.Get()
     if not root or CharacterModule.IsActionBlocked() then return end
@@ -1403,7 +1406,6 @@ function FlowModule.RunOnePiece()
     end
 end
 
--- Rota Boss Rush
 function FlowModule.RunBossRush()
     if CharacterModule.IsActionBlocked() then return end
     local _, enemyPart = TargetingModule.GetClosestEnemy("Boss Rush")
@@ -1416,7 +1418,6 @@ function FlowModule.RunBossRush()
     end
 end
 
--- Rota Incursão
 function FlowModule.RunIncursion()
     if CharacterModule.IsActionBlocked() then return end
     local _, enemyPart = TargetingModule.GetClosestEnemy("Incursão")
@@ -1429,7 +1430,6 @@ function FlowModule.RunIncursion()
     end
 end
 
--- Rota Infinity
 function FlowModule.RunInfinity()
     if CharacterModule.IsActionBlocked() then return end
     if InfinityModule.CheckBonus() then
@@ -1459,8 +1459,8 @@ function DungeonStateModule.CheckStart()
     if not main then return end
 
     local targetFrames = {
-        main:FindFirstChild("DungeonFrame"),
         main:FindFirstChild("BossRushFrame"),
+        main:FindFirstChild("DungeonFrame"),
         main:FindFirstChild("RaidFrame"),
         main:FindFirstChild("InfinityCreator")
     }
@@ -1501,7 +1501,6 @@ function DungeonStateModule.CheckEngage()
     return false
 end
 
--- Busca reforçada para botões de conclusão/retry no Boss Rush e Dungeons normais
 function DungeonStateModule.CheckEnd()
     local main = pgui and pgui:FindFirstChild("Main")
     if not main then return false, nil end
@@ -1542,15 +1541,6 @@ local function onPlayerDiedHandler()
     SharedState.LastRoomState = "Room1"
     SharedState.HasTarget = false
     SharedState.IsSelectingBonus = false
-    hasQueuedTeleport = false -- Libera nova fila para a partida seguinte
-
-    local curWave = FlowModule.GetWave()
-    if curWave < 16 then
-        SharedState.HasEnteredBossRoom = false
-    end
-    if curWave < 12 then
-        SharedState.HasPassedPortal1 = false
-    end
 
     -- BOSS RUSH: Espera 2 segundos após a morte e clica para recomeçar
     if ConfigModule.Settings.SelectedPhase == "Boss Rush" and ConfigModule.Settings.AutoPlayAgain then
@@ -1559,15 +1549,19 @@ local function onPlayerDiedHandler()
             for _ = 1, 40 do
                 if not SharedState.IsRunning then break end
                 local ended, retryBtn = DungeonStateModule.CheckEnd()
+                
+                -- Se encontrou o botão na GUI ou tenta via Remote oficial
                 if ended and retryBtn then
                     SharedState.IsDungeonEnded = true
-                    queueNextExecution()
-                    task.wait(0.2)
                     CharacterModule.TriggerButton(retryBtn)
-                    if getgenv then
-                        getgenv().HubDosRapazes_Running = nil
-                        getgenv().HubDosRapazes_ActiveSession = nil
-                    end
+                    pcall(function()
+                        if dungeonRemote then
+                            dungeonRemote:FireServer("PlayAgain")
+                            dungeonRemote:FireServer("Retry")
+                        end
+                    end)
+                    task.wait(0.5)
+                    SharedState.IsDungeonEnded = false
                     break
                 end
                 task.wait(0.25)
@@ -1580,7 +1574,7 @@ local function onPlayerDiedHandler()
     if (ConfigModule.Settings.SelectedPhase == "Infinity" or ConfigModule.Settings.SelectedPhase == "SAO") and ConfigModule.Settings.AutoPlayAgain then
         task.spawn(function()
             task.wait(3.0)
-            for _ = 1, 20 do
+            for _ = 1, 25 do
                 if not SharedState.IsRunning then break end
                 local ended, retryBtn = DungeonStateModule.CheckEnd()
                 if ended and retryBtn then
@@ -1588,10 +1582,6 @@ local function onPlayerDiedHandler()
                     queueNextExecution()
                     task.wait(0.2)
                     CharacterModule.TriggerButton(retryBtn)
-                    if getgenv then
-                        getgenv().HubDosRapazes_Running = nil
-                        getgenv().HubDosRapazes_ActiveSession = nil
-                    end
                     break
                 end
                 task.wait(0.4)
@@ -1614,10 +1604,6 @@ local function onPlayerDiedHandler()
             queueNextExecution()
             task.wait(0.2)
             CharacterModule.TriggerButton(retryBtn)
-            if getgenv then
-                getgenv().HubDosRapazes_Running = nil
-                getgenv().HubDosRapazes_ActiveSession = nil
-            end
             task.wait(3.0)
         end
     end)
@@ -1642,6 +1628,7 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
     SharedState.LastRoomState = "Room1"
     SharedState.HasTarget = false
     SharedState.IsSelectingBonus = false
+    SharedState.IsDungeonEnded = false
     hasQueuedTeleport = false
 
     local curWave = FlowModule.GetWave()
@@ -1746,17 +1733,23 @@ task.spawn(function()
                     if ConfigModule.Settings.AutoPlayAgain and not isHandlingPlayAgain then
                         isHandlingPlayAgain = true
                         task.spawn(function()
-                            task.wait(3.0)
+                            task.wait(2.5)
                             if SharedState.IsRunning then
-                                queueNextExecution()
+                                -- Disparo de Retry
+                                if ConfigModule.Settings.SelectedPhase ~= "Boss Rush" then
+                                    queueNextExecution()
+                                end
                                 task.wait(0.2)
                                 CharacterModule.TriggerButton(playAgainBtn)
-                                if getgenv then
-                                    getgenv().HubDosRapazes_Running = nil
-                                    getgenv().HubDosRapazes_ActiveSession = nil
-                                end
+                                pcall(function()
+                                    if dungeonRemote then
+                                        dungeonRemote:FireServer("PlayAgain")
+                                        dungeonRemote:FireServer("Retry")
+                                    end
+                                end)
                             end
-                            task.wait(3.0)
+                            task.wait(2.5)
+                            SharedState.IsDungeonEnded = false
                             isHandlingPlayAgain = false
                         end)
                     end
