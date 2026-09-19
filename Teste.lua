@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (TARGET REAL + COMBATE + PLAYAGAIN)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (CONFLITOS RESOLVIDOS & FLUIDO)
 -- ====================================================================
 
 -- [[ 1. TRAVA SINGLETON & LIMPEZA DE AMBIENTE ]]
@@ -131,7 +131,7 @@ local SharedState = {
 -- [[ 2. CONFIGURAÇÕES ]]
 local ConfigModule = {}
 ConfigModule.Settings = {
-    SelectedPhase = "SAO",
+    SelectedPhase = "Boss Rush",
     PositionMode = "Nas Costas",
     CustomWeaponName = "Yoru",
     AutoFarm = true,
@@ -199,7 +199,7 @@ function ConfigModule.Load()
 end
 ConfigModule.Load()
 
--- [[ 3. MÓDULO OTIMIZADOR DE FPS & ANTI-CRASH (MOBILE) ]]
+-- [[ 3. MÓDULO OTIMIZADOR DE FPS ]]
 local OptimizerModule = {}
 
 function OptimizerModule.CleanInstance(v)
@@ -210,38 +210,28 @@ function OptimizerModule.CleanInstance(v)
                 v.Enabled = false
             end
         end
-
-        if v:IsA("Light") then
-            v.Enabled = false
-        end
-
+        if v:IsA("Light") then v.Enabled = false end
         if v:IsA("MeshPart") or v:IsA("Part") then
             v.Material = Enum.Material.SmoothPlastic
             v.CastShadow = false
         end
-
-        if v:IsA("Decal") or v:IsA("Texture") then
-            v.Transparency = 1
-        end
+        if v:IsA("Decal") or v:IsA("Texture") then v.Transparency = 1 end
     end)
 end
 
 function OptimizerModule.ApplyAll()
     if not ConfigModule.Settings.FPSBoost then return end
-
     pcall(function()
         if ConfigModule.Settings.DisableShadows then
             Lighting.GlobalShadows = false
             Lighting.FogEnd = 9e9
             Lighting.Brightness = 1
         end
-
         for _, effect in ipairs(Lighting:GetChildren()) do
             if effect:IsA("PostEffect") or effect:IsA("BloomEffect") or effect:IsA("BlurEffect") or effect:IsA("DepthOfFieldEffect") or effect:IsA("SunRaysEffect") then
                 effect.Enabled = false
             end
         end
-
         for _, desc in ipairs(workspace:GetDescendants()) do
             OptimizerModule.CleanInstance(desc)
         end
@@ -250,9 +240,7 @@ end
 
 workspace.DescendantAdded:Connect(function(child)
     if ConfigModule.Settings.FPSBoost then
-        task.delay(0.1, function()
-            OptimizerModule.CleanInstance(child)
-        end)
+        task.delay(0.1, function() OptimizerModule.CleanInstance(child) end)
     end
 end)
 
@@ -304,7 +292,6 @@ function WebhookModule.Send(payloadTable)
     task.spawn(function()
         local httpRequest = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
         if not httpRequest then return end
-
         pcall(function()
             httpRequest({
                 Url = ConfigModule.Settings.WebhookURL,
@@ -321,13 +308,10 @@ function WebhookModule.ProcessDungeonDrops()
     local df = pgui and pgui:FindFirstChild("Main") and (pgui.Main:FindFirstChild("DungeonFrame") or pgui.Main:FindFirstChild("BossRushFrame") or pgui.Main:FindFirstChild("RaidFrame"))
     local stats = df and df:FindFirstChild("DungeonStats")
     local rewardedHolder = stats and stats:FindFirstChild("RewardedHolder")
-
     if not rewardedHolder then return end
 
     local droppedItems = {}
-    local hasSecret = false
-    local hasMythic = false
-
+    local hasSecret, hasMythic = false, false
     for _, child in ipairs(rewardedHolder:GetChildren()) do
         if child:IsA("Frame") or child:IsA("ImageLabel") or child:IsA("GuiObject") then
             local itemName = child.Name
@@ -338,48 +322,35 @@ function WebhookModule.ProcessDungeonDrops()
                 if r:find("secret") then hasSecret = true end
                 if r:find("mythic") then hasMythic = true end
             end
-
             local chanceLabel = child:FindFirstChild("DropChance")
             local chanceTxt = (chanceLabel and chanceLabel:IsA("TextLabel")) and chanceLabel.Text or ""
-
             table.insert(droppedItems, string.format("• **%s** %s", itemName, chanceTxt ~= "" and ("(" .. chanceTxt .. ")") or ""))
         end
     end
 
-    local shouldNotify = false
-    if ConfigModule.Settings.NotifyEveryRun then
-        shouldNotify = true
-    elseif ConfigModule.Settings.NotifySecrets and hasSecret then
-        shouldNotify = true
-    elseif ConfigModule.Settings.NotifyMythics and hasMythic then
-        shouldNotify = true
-    end
-
+    local shouldNotify = ConfigModule.Settings.NotifyEveryRun or (ConfigModule.Settings.NotifySecrets and hasSecret) or (ConfigModule.Settings.NotifyMythics and hasMythic)
     if shouldNotify then
         SharedState.HasSentWebhook = true
         local dropsText = #droppedItems > 0 and table.concat(droppedItems, "\n") or "Nenhum item especial"
         local embedColor = hasSecret and 16711680 or (hasMythic and 16744192 or 65450)
-
-        local embed = {
-            ["title"] = "⚔️ Fase Concluída - " .. tostring(ConfigModule.Settings.SelectedPhase),
-            ["color"] = embedColor,
-            ["fields"] = {
-                { ["name"] = "👤 Jogador", ["value"] = player.Name, ["inline"] = true },
-                { ["name"] = "🗺️ Fase", ["value"] = ConfigModule.Settings.SelectedPhase, ["inline"] = true },
-                { ["name"] = "🎁 Drops da Partida", ["value"] = dropsText, ["inline"] = false }
-            },
-            ["footer"] = { ["text"] = "Hub dos Rapazes • " .. os.date("%X") }
-        }
-
         WebhookModule.Send({
             ["username"] = "Hub dos Rapazes Bot",
             ["avatar_url"] = "https://i.imgur.com/8Qf9Z2N.png",
-            ["embeds"] = { embed }
+            ["embeds"] = {{
+                ["title"] = "⚔️ Fase Concluída - " .. tostring(ConfigModule.Settings.SelectedPhase),
+                ["color"] = embedColor,
+                ["fields"] = {
+                    { ["name"] = "👤 Jogador", ["value"] = player.Name, ["inline"] = true },
+                    { ["name"] = "🗺️ Fase", ["value"] = ConfigModule.Settings.SelectedPhase, ["inline"] = true },
+                    { ["name"] = "🎁 Drops da Partida", ["value"] = dropsText, ["inline"] = false }
+                },
+                ["footer"] = { ["text"] = "Hub dos Rapazes • " .. os.date("%X") }
+            }}
         })
     end
 end
 
--- [[ 5. PERSONAGEM & FÍSICA ESTÁVEL ]]
+-- [[ 5. PERSONAGEM & FÍSICA ESTÁVEL (SEM CONFLITO DE VELOCIDADE) ]]
 local CharacterModule = {}
 local diedConnection = nil
 local charConnection = nil
@@ -420,63 +391,28 @@ function CharacterModule.IsActionBlocked()
     local now = tick()
     if now < SharedState.StartLockUntil then return true end
     if now < SharedState.RespawnLockUntil then return true end
-    if SharedState.IsRespawning or SharedState.EnteringPortal or SharedState.IsTransitioning or SharedState.IsDungeonEnded or not SharedState.IsRunning then
-        return true
-    end
-    return false
+    return SharedState.IsRespawning or SharedState.EnteringPortal or SharedState.IsTransitioning or SharedState.IsDungeonEnded or not SharedState.IsRunning
 end
 
 flightStabilizer = RunService.Stepped:Connect(function()
     if SharedState.IsRunning and ConfigModule.Settings.AutoFarm and not CharacterModule.IsActionBlocked() then
-        if SharedState.HasTarget and not SharedState.IsSelectingBonus then
-            local _, root, hum = CharacterModule.Get()
-            if root and hum and hum.Health > 0 then
-                root.AssemblyAngularVelocity = Vector3.zero
-                if not SharedState.CurrentTween then
-                    root.AssemblyLinearVelocity = Vector3.new(0, 0.01, 0)
-                end
-            end
-        else
-            local _, root = CharacterModule.Get()
-            if root then
-                root.AssemblyLinearVelocity = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-            end
-        end
-    else
-        local _, root = CharacterModule.Get()
-        if root then
-            root.AssemblyLinearVelocity = Vector3.zero
+        local _, root, hum = CharacterModule.Get()
+        if root and hum and hum.Health > 0 then
             root.AssemblyAngularVelocity = Vector3.zero
+            -- Não anula a velocidade com zero durante o deslocamento ativo
+            if not SharedState.CurrentTween and not SharedState.HasTarget then
+                root.AssemblyLinearVelocity = Vector3.zero
+            end
         end
     end
 end)
 
 function CharacterModule.GetSafeCFrame(targetPosition, lookAtPosition)
-    local char = player.Character
-    local rayOrigin = targetPosition + Vector3.new(0, 15, 0)
-    local rayDirection = Vector3.new(0, -35, 0)
-    
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    if char then params.FilterDescendantsInstances = {char} end
-    
-    local hit = workspace:Raycast(rayOrigin, rayDirection, params)
     local safeY = targetPosition.Y
-
-    if hit then
-        local floorY = hit.Position.Y
-        if safeY < (floorY + 2.5) then 
-            safeY = floorY + 2.5 
-        end
-    end
-
     if ConfigModule.Settings.SelectedPhase == "SAO" and safeY < 1005 then
         safeY = 1005.5
     end
-
-    local safePos = Vector3.new(targetPosition.X, safeY, targetPosition.Z)
-    return CFrame.new(safePos, lookAtPosition)
+    return CFrame.new(Vector3.new(targetPosition.X, safeY, targetPosition.Z), lookAtPosition)
 end
 
 function CharacterModule.FlyToEnemy(targetPart, overrideMode)
@@ -516,22 +452,21 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
     local targetPos = targetCFrame.Position
     local distance = (root.Position - targetPos).Magnitude
 
-    if distance <= 1.2 then return end
+    if distance <= 1.5 then 
+        root.CFrame = targetCFrame
+        return 
+    end
 
-    if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 2.0 and SharedState.CurrentTween then
+    if SharedState.CurrentTween and SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 3.0 then
         return
     end
 
     SharedState.CurrentTargetPos = targetPos
-    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 15), 0.15, 2.0)
+    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 15), 0.1, 2.0)
 
     if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
-    SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = targetCFrame})
+    SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out), {CFrame = targetCFrame})
     SharedState.CurrentTween:Play()
-end
-
-function CharacterModule.FollowBehindLive(targetPart)
-    CharacterModule.FlyToEnemy(targetPart, "Nas Costas")
 end
 
 function CharacterModule.FlyToPortal(targetCFrame)
@@ -579,7 +514,6 @@ function InfinityMovement.Step(targetPart)
         InfinityMovement.HoldCenter()
         return 
     end
-
     local _, root = CharacterModule.Get()
     if not root or not targetPart or not targetPart.Parent then 
         InfinityMovement.HoldCenter()
@@ -592,11 +526,7 @@ function InfinityMovement.Step(targetPart)
     local height = ConfigModule.Settings.InfinityOrbitHeight or 12.5
 
     orbitAngle = (orbitAngle + (RunService.Heartbeat:Wait() * speed)) % (math.pi * 2)
-
-    local offsetX = math.cos(orbitAngle) * radius
-    local offsetZ = math.sin(orbitAngle) * radius
-    local desiredPosition = enemyPos + Vector3.new(offsetX, height, offsetZ)
-
+    local desiredPosition = enemyPos + Vector3.new(math.cos(orbitAngle) * radius, height, math.sin(orbitAngle) * radius)
     local targetCFrame = CFrame.lookAt(desiredPosition, enemyPos)
     local distance = (root.Position - desiredPosition).Magnitude
 
@@ -646,14 +576,12 @@ end
 
 function InfinityModule.ForceSkip()
     local executed = false
-
     if dungeonRemote then
         pcall(function()
             dungeonRemote:FireServer("InfinitySkipWave")
             executed = true
         end)
     end
-
     local main = pgui:FindFirstChild("Main")
     local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
     local skipBtn = dungeonFrame and dungeonFrame:FindFirstChild("SkipWave")
@@ -661,7 +589,6 @@ function InfinityModule.ForceSkip()
         CharacterModule.TriggerButton(skipBtn)
         executed = true
     end
-
     return executed
 end
 
@@ -692,19 +619,15 @@ function SAOModule.CheckBonus()
         SharedState.IsSelectingBonus = true
         CharacterModule.StopMovement()
 
-        local timeCard = nil
-        local damageCard = nil
-        local fallbackCard = nil
-
+        local timeCard, damageCard, fallbackCard = nil, nil, nil
         for _, card in ipairs(bonuses:GetChildren()) do
             if card:IsA("GuiObject") and card.Visible and card.Name:find("Bonus") then
                 if not fallbackCard then fallbackCard = card end
 
                 local bName = card:FindFirstChild("BonusName")
                 local bDesc = card:FindFirstChild("BonusDescription")
-                local combinedText = ((bName and bName:IsA("TextLabel")) and bName.Text or "") .. " " ..
-                                     ((bDesc and bDesc:IsA("TextLabel")) and bDesc.Text or "")
-                combinedText = combinedText:lower()
+                local combinedText = (((bName and bName:IsA("TextLabel")) and bName.Text or "") .. " " ..
+                                     ((bDesc and bDesc:IsA("TextLabel")) and bDesc.Text or "")):lower()
 
                 if combinedText:find("second") or combinedText:find("tempo") or combinedText:find("timer") then
                     timeCard = card
@@ -719,7 +642,6 @@ function SAOModule.CheckBonus()
             CharacterModule.TriggerButton(targetToClick)
             task.wait(0.4)
         end
-
         return true
     end
 
@@ -727,7 +649,7 @@ function SAOModule.CheckBonus()
     return false
 end
 
--- [[ 7. DETECÇÃO DE INIMIGOS (RIGOROSA & COMPATÍVEL) ]]
+-- [[ 7. DETECÇÃO DE INIMIGOS (PRECISA & SEM FALSOS POSITIVOS) ]]
 local TargetingModule = {}
 
 local function isChest(objName)
@@ -736,10 +658,10 @@ local function isChest(objName)
 end
 
 function TargetingModule.IsAlive(obj)
-    if not obj or not obj.Parent then return false end
+    if not obj or not obj.Parent or not obj:IsA("Model") then return false end
     if isChest(obj.Name) then return false end
     
-    -- 1. Verifica se tem Humanoid no modelo ou nós filhos
+    -- 1. Humanoid direto ou filho
     local hum = obj:FindFirstChildOfClass("Humanoid") or obj:FindFirstChildWhichIsA("Humanoid", true)
     if hum then 
         if hum.Health <= 0.1 or hum:GetState() == Enum.HumanoidStateType.Dead then
@@ -748,23 +670,23 @@ function TargetingModule.IsAlive(obj)
         return true
     end
     
-    -- 2. Verifica se tem Atributo de HP
+    -- 2. Atributo de HP
     local hpAttr = obj:GetAttribute("Health") or obj:GetAttribute("HP") or obj:GetAttribute("CurrentHealth")
     if hpAttr and tonumber(hpAttr) then 
         return tonumber(hpAttr) > 0.1 
     end
     
-    -- 3. Verifica se tem Value de HP
+    -- 3. Value de HP
     local hpVal = obj:FindFirstChild("Health") or obj:FindFirstChild("HP")
     if hpVal and hpVal:IsA("ValueBase") and tonumber(hpVal.Value) then 
         return tonumber(hpVal.Value) > 0.1 
     end
 
-    -- 4. Validação direta por container de inimigos (ex: PirateEmperor)
+    -- 4. Inimigo dentro de Game.Enemies (Boss Rush)
     local cur = obj.Parent
     while cur and cur ~= workspace do
         local n = cur.Name:lower()
-        if n == "enemies" or n == "boss" or n == "bossrush" or n == "stages" then
+        if n == "enemies" or n == "boss" or n == "bossrush" then
             return true
         end
         cur = cur.Parent
@@ -786,14 +708,8 @@ function TargetingModule.GetTargetPart(obj)
         or obj:FindFirstChildWhichIsA("BasePart")
     
     if not part then return nil end
-
-    if ConfigModule.Settings.SelectedPhase == "SAO" and part.Position.Y < 985 then
-        return nil
-    end
-
-    if part.Position.Y > -2000 then
-        return part
-    end
+    if ConfigModule.Settings.SelectedPhase == "SAO" and part.Position.Y < 985 then return nil end
+    if part.Position.Y > -2000 then return part end
     return nil
 end
 
@@ -828,10 +744,9 @@ function TargetingModule.GetLivingEnemies(phase)
 
     for _, container in ipairs(searchContainers) do
         if container then
-            for _, desc in ipairs(container:GetDescendants()) do
+            for _, desc in ipairs(container:GetChildren()) do
                 if desc:IsA("Model") then addEntity(desc) end
             end
-            if container:IsA("Model") then addEntity(container) end
         end
     end
 
@@ -996,7 +911,7 @@ function AutoSellModule.LockHighTierItems()
     if favoritedCount > 0 then
         Fluent:Notify({
             Title = "🔒 Auto-Favorite",
-            Content = string.format("%d itens de alto valor protegidos!", favoritedCount),
+            Content = string.format("%d itens protegidos!", favoritedCount),
             Duration = 4
         })
     end
@@ -1392,7 +1307,7 @@ function FlowModule.RunBossRush()
     local _, enemyPart = TargetingModule.GetClosestEnemy("Boss Rush")
     if enemyPart and enemyPart.Parent then
         SharedState.HasTarget = true
-        CharacterModule.FlyToEnemy(enemyPart, ConfigModule.Settings.PositionMode)
+        CharacterModule.FlyToEnemy(enemyPart)
     else
         SharedState.HasTarget = false
         CharacterModule.StopMovement()
