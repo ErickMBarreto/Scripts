@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (COM OTIMIZADOR DE FPS & ANTI-CRASH)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (MOVIMENTO DESTRAVADO & FLUIDO)
 -- ====================================================================
 
 -- [[ 1. TRAVA SINGLETON & LIMPEZA DE AMBIENTE ]]
@@ -481,6 +481,7 @@ function CharacterModule.GetSafeCFrame(targetPosition, lookAtPosition)
     return CFrame.new(safePos, lookAtPosition)
 end
 
+-- SISTEMA DE MOVIMENTAÇÃO DESTRAVADO (SEM CONFLITO DE CANCELAMENTO)
 function CharacterModule.FlyToEnemy(targetPart, overrideMode)
     if CharacterModule.IsActionBlocked() or SharedState.IsSelectingBonus then 
         CharacterModule.StopMovement()
@@ -518,9 +519,17 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
     local targetPos = targetCFrame.Position
     local distance = (root.Position - targetPos).Magnitude
 
-    if distance <= 1.2 then return end
+    if distance <= 1.5 then 
+        if SharedState.CurrentTween then
+            SharedState.CurrentTween:Cancel()
+            SharedState.CurrentTween = nil
+        end
+        root.CFrame = targetCFrame
+        return 
+    end
 
-    if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 2.0 and SharedState.CurrentTween then
+    -- Se já estiver se movendo para a proximidade do monstro, deixa o Tween terminar sem cortar no meio
+    if SharedState.CurrentTween and SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 4.0 then
         return
     end
 
@@ -528,7 +537,7 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
     local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 15), 0.15, 2.0)
 
     if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
-    SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = targetCFrame})
+    SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out), {CFrame = targetCFrame})
     SharedState.CurrentTween:Play()
 end
 
@@ -759,6 +768,7 @@ function TargetingModule.IsAlive(obj)
         return false 
     end
 
+    -- Aceita qualquer modelo válido dentro das pastas de inimigos
     local cur = obj.Parent
     while cur and cur ~= workspace do
         local n = cur.Name:lower()
