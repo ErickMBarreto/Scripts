@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (START CORRIGIDO + PLAYAGAIN FLUIDO)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (LUAU GC FIX + PLAYAGAIN FLUIDO)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL LIMPA E ORIGINAL ]]
@@ -212,8 +212,6 @@ function OptimizerModule.ApplyAll()
             OptimizerModule.CleanInstance(desc)
         end
     end)
-
-    collectgarbage("collect")
 end
 
 workspace.DescendantAdded:Connect(function(child)
@@ -521,7 +519,7 @@ function CharacterModule.FlyToPortal(targetCFrame)
     SharedState.CurrentTween:Play()
 end
 
--- TRIGGERBUTTON NATIVO ROBUSTO
+-- TRIGGERBUTTON ROBUSTO
 function CharacterModule.TriggerButton(btn)
     if not btn or not SharedState.IsRunning then return end
     pcall(function()
@@ -1396,7 +1394,6 @@ end
 -- [[ 12. ESTADOS DA DUNGEON & AUTO-START ]]
 local DungeonStateModule = {}
 
--- Auto-Start direto e responsivo
 function DungeonStateModule.CheckStart()
     if not pgui or (tick() - SharedState.LastStartAttempt) < 0.5 then return end
     SharedState.LastStartAttempt = tick()
@@ -1448,7 +1445,6 @@ function DungeonStateModule.CheckEngage()
     return false
 end
 
--- Detecção direta do botão PlayAgain confirmado
 function DungeonStateModule.CheckEnd()
     local main = pgui and pgui:FindFirstChild("Main")
     if not main then return false, nil end
@@ -1504,7 +1500,7 @@ local function onPlayerDiedHandler()
         SharedState.HasPassedPortal1 = false
     end
 
-    -- MONITORAMENTO PÓS-MORTE: Varredura de até 25 segundos (cobre os 8 a 10s de delay da tela de derrota)
+    -- MONITORIZAÇÃO PÓS-MORTE: Até 25 segundos para apanhar os 8 a 10s da interface
     if ConfigModule.Settings.AutoPlayAgain then
         task.spawn(function()
             task.wait(1.5)
@@ -1654,7 +1650,6 @@ task.spawn(function()
                     end)
                 end
 
-                -- VITÓRIA DA FASE: Aguarda os 3 segundos
                 local ended, playAgainBtn = DungeonStateModule.CheckEnd()
                 if ended and playAgainBtn then
                     SharedState.IsDungeonEnded = true
@@ -1665,10 +1660,6 @@ task.spawn(function()
                     CharacterModule.StopMovement()
 
                     pcall(WebhookModule.ProcessDungeonDrops)
-
-                    task.spawn(function()
-                        collectgarbage("collect")
-                    end)
 
                     if ConfigModule.Settings.AutoPlayAgain and not isHandlingPlayAgain then
                         isHandlingPlayAgain = true
@@ -2112,15 +2103,6 @@ PerformanceSection:AddToggle("BlackScreenToggle", {
         ConfigModule.Settings.BlackScreenAFK = Value
         ConfigModule.Save()
         OptimizerModule.SetBlackScreen(Value)
-    end
-})
-
-PerformanceSection:AddButton({
-    Title = "🧹 Limpar Memória RAM Agora",
-    Description = "Força a coleta de lixo do Lua para aliviar a memória",
-    Callback = function()
-        OptimizerModule.ApplyAll()
-        Fluent:Notify({ Title = "RAM", Content = "Memória do jogo limpa com sucesso!", Duration = 3 })
     end
 })
 
