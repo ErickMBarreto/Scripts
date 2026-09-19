@@ -167,7 +167,6 @@ ConfigModule.Settings = {
     NotifySecrets = true,
     NotifyMythics = true,
     NotifyEveryRun = false,
-    -- Configurações Anti-Crash (Mobile)
     FPSBoost = true,
     DisableParticles = true,
     DisableShadows = true,
@@ -202,7 +201,6 @@ ConfigModule.Load()
 
 -- [[ 3. MÓDULO OTIMIZADOR DE FPS & ANTI-CRASH (MOBILE) ]]
 local OptimizerModule = {}
-local blackScreenFrame = nil
 
 function OptimizerModule.CleanInstance(v)
     if not ConfigModule.Settings.FPSBoost then return end
@@ -563,10 +561,9 @@ function CharacterModule.TriggerButton(btn)
         if firesignal then
             if btn.Activated then firesignal(btn.Activated) end
             if btn.MouseButton1Click then firesignal(btn.MouseButton1Click) end
-            if btn.MouseButton1Down then firesignal(btn.MouseButton1Down) end
         end
         if getconnections then
-            for _, evName in ipairs({"Activated", "MouseButton1Click", "MouseButton1Down"}) do
+            for _, evName in ipairs({"Activated", "MouseButton1Click"}) do
                 if btn[evName] then
                     for _, c in ipairs(getconnections(btn[evName])) do c:Fire() end
                 end
@@ -732,7 +729,7 @@ function SAOModule.CheckBonus()
     return false
 end
 
--- [[ 7. DETECÇÃO DE INIMIGOS (CORRIGIDA COM SUPORTE A BOSS RUSH / PIRATEEMPEROR) ]]
+-- [[ 7. DETECÇÃO DE INIMIGOS (COM SUPORTE A PIRATEEMPEROR / BOSS RUSH) ]]
 local TargetingModule = {}
 
 local function isChest(objName)
@@ -744,7 +741,7 @@ function TargetingModule.IsAlive(obj)
     if not obj or not obj.Parent then return false end
     if isChest(obj.Name) then return false end
     
-    local hum = obj:FindFirstChildOfClass("Humanoid")
+    local hum = obj:FindFirstChildOfClass("Humanoid") or obj:FindFirstChildWhichIsA("Humanoid", true)
     if hum then 
         if hum.Health <= 0.1 or hum:GetState() == Enum.HumanoidStateType.Dead then
             return false
@@ -762,7 +759,6 @@ function TargetingModule.IsAlive(obj)
         return false 
     end
 
-    -- SUPORTE AO BOSS RUSH (modelos em Game.Enemies sem Humanoid direto)
     local cur = obj.Parent
     while cur and cur ~= workspace do
         local n = cur.Name:lower()
@@ -1498,7 +1494,6 @@ function DungeonStateModule.CheckEnd()
     local main = pgui and pgui:FindFirstChild("Main")
     if not main then return false, nil end
 
-    -- Busca direta pelo botão PlayAgain confirmado
     for _, btn in ipairs(main:GetDescendants()) do
         if btn:IsA("GuiButton") and btn.Name == "PlayAgain" and btn.Visible then
             return true, btn
@@ -2113,7 +2108,7 @@ SellRaritiesSection:AddToggle("SellMythicToggle", {
     Callback = function(Value) ConfigModule.Settings.SellMythic = Value ConfigModule.Save() end
 })
 
--- ABA OTIMIZAÇÃO
+-- ABA OTIMIZAÇÃO (NOVA - ANTI-CRASH MOBILE)
 local PerformanceSection = Tabs.Performance:AddSection("Otimizador de Desempenho & RAM")
 
 PerformanceSection:AddToggle("FPSBoostToggle", {
