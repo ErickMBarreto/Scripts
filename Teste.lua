@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (COM OTIMIZADOR DE FPS & ANTI-CRASH)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (TELEPORTE ADAPTATIVO MOBILE)
 -- ====================================================================
 
 -- [[ 1. TRAVA SINGLETON & LIMPEZA DE AMBIENTE ]]
@@ -37,6 +37,7 @@ pcall(function()
     end
 end)
 
+-- Rotina de teleporte com sincronização reforçada para mobile
 local hasQueuedTeleport = false
 local function queueNextExecution()
     if hasQueuedTeleport then return end
@@ -49,9 +50,20 @@ local function queueNextExecution()
                 if getgenv then 
                     getgenv().HubDosRapazes_Running = nil 
                     getgenv().HubDosRapazes_ActiveSession = nil
+                    getgenv().HubDosRapazes_Loaded = nil
                 end
-                repeat task.wait(0.5) until game:IsLoaded() and game.Players.LocalPlayer
-                task.wait(2.0)
+                
+                -- Espera o carregamento real do jogo e dos elementos críticos
+                if not game:IsLoaded() then 
+                    pcall(function() game.Loaded:Wait() end) 
+                end
+                
+                local plrs = game:GetService("Players")
+                local lp = plrs.LocalPlayer or plrs.PlayerAdded:Wait()
+                lp:WaitForChild("PlayerGui", 40)
+                
+                -- Tempo de respiro para estabilização de rede no celular novo
+                task.wait(3.5)
                 
                 local success = false
                 if readfile and isfile and isfile("%s") then
@@ -73,9 +85,12 @@ local function queueNextExecution()
     end
 end
 
-if not game:IsLoaded() then game.Loaded:Wait() end
+if not game:IsLoaded() then 
+    pcall(function() game.Loaded:Wait() end) 
+end
+
 local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
-local pgui = player:WaitForChild("PlayerGui", 20)
+local pgui = player:WaitForChild("PlayerGui", 30)
 
 for _, gui in ipairs({CoreGui, pgui}) do
     if gui then
@@ -167,7 +182,6 @@ ConfigModule.Settings = {
     NotifySecrets = true,
     NotifyMythics = true,
     NotifyEveryRun = false,
-    -- Configurações Anti-Crash (Mobile)
     FPSBoost = true,
     DisableParticles = true,
     DisableShadows = true,
@@ -200,9 +214,8 @@ function ConfigModule.Load()
 end
 ConfigModule.Load()
 
--- [[ 3. MÓDULO OTIMIZADOR DE FPS & ANTI-CRASH (MOBILE) ]]
+-- [[ 3. MÓDULO OTIMIZADOR DE FPS & ANTI-CRASH ]]
 local OptimizerModule = {}
-local blackScreenFrame = nil
 
 function OptimizerModule.CleanInstance(v)
     if not ConfigModule.Settings.FPSBoost then return end
@@ -251,11 +264,9 @@ function OptimizerModule.ApplyAll()
         end
     end)
 
-    -- Libera RAM retida no garbage collector do Lua
     collectgarbage("collect")
 end
 
--- Listener para novos efeitos instanciados (skills de mobs/armas)
 workspace.DescendantAdded:Connect(function(child)
     if ConfigModule.Settings.FPSBoost then
         task.delay(0.1, function()
@@ -264,7 +275,6 @@ workspace.DescendantAdded:Connect(function(child)
     end
 end)
 
--- Black Screen AFK (Economia extrema de bateria e GPU)
 function OptimizerModule.SetBlackScreen(enabled)
     pcall(function()
         local sg = CoreGui:FindFirstChild("HubRapazes_BlackScreen") or pgui:FindFirstChild("HubRapazes_BlackScreen")
@@ -300,7 +310,6 @@ function OptimizerModule.SetBlackScreen(enabled)
     end)
 end
 
--- Executa uma otimização inicial suave após o carregamento
 task.spawn(function()
     task.wait(3.0)
     OptimizerModule.ApplyAll()
@@ -737,7 +746,7 @@ function SAOModule.CheckBonus()
     return false
 end
 
--- [[ 7. DETECÇÃO DE INIMIGOS (ORIGINAL + FILTRO DE BAÚ) ]]
+-- [[ 7. DETECÇÃO DE INIMIGOS ]]
 local TargetingModule = {}
 
 local function isChest(objName)
@@ -1689,7 +1698,6 @@ task.spawn(function()
 
                     pcall(WebhookModule.ProcessDungeonDrops)
 
-                    -- Coleta de lixo e limpeza de memória após o término da partida
                     task.spawn(function()
                         collectgarbage("collect")
                     end)
@@ -2104,7 +2112,7 @@ SellRaritiesSection:AddToggle("SellMythicToggle", {
     Callback = function(Value) ConfigModule.Settings.SellMythic = Value ConfigModule.Save() end
 })
 
--- ABA OTIMIZAÇÃO (NOVA - ANTI-CRASH MOBILE)
+-- ABA OTIMIZAÇÃO (ANTI-CRASH MOBILE)
 local PerformanceSection = Tabs.Performance:AddSection("Otimizador de Desempenho & RAM")
 
 PerformanceSection:AddToggle("FPSBoostToggle", {
