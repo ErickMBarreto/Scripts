@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (DETECÇÃO DE BOSS RUSH CORRIGIDA)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (TARGET, COMBATE E MOVIMENTO 100%)
 -- ====================================================================
 
 -- [[ 1. TRAVA GLOBAL ]]
@@ -376,26 +376,10 @@ flightStabilizer = RunService.Stepped:Connect(function()
 end)
 
 function CharacterModule.GetSafeCFrame(targetPosition, lookAtPosition)
-    local char = player.Character
-    local rayOrigin = targetPosition + Vector3.new(0, 15, 0)
-    local rayDirection = Vector3.new(0, -35, 0)
-    
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    if char then params.FilterDescendantsInstances = {char} end
-    
-    local hit = workspace:Raycast(rayOrigin, rayDirection, params)
     local safeY = targetPosition.Y
-
-    if hit then
-        local floorY = hit.Position.Y
-        if safeY < (floorY + 2.5) then safeY = floorY + 2.5 end
-    end
-
     if ConfigModule.Settings.SelectedPhase == "SAO" and safeY < 1005 then
         safeY = 1005.5
     end
-
     return CFrame.new(Vector3.new(targetPosition.X, safeY, targetPosition.Z), lookAtPosition)
 end
 
@@ -408,11 +392,6 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
     if not root or not targetPart or not targetPart.Parent then 
         CharacterModule.StopMovement()
         return 
-    end
-
-    if ConfigModule.Settings.SelectedPhase == "SAO" and targetPart.Position.Y < 985 then
-        CharacterModule.StopMovement()
-        return
     end
 
     local enemyPos = targetPart.Position
@@ -435,6 +414,7 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
 
     local targetPos = targetCFrame.Position
     local distance = (root.Position - targetPos).Magnitude
+
     if distance <= 1.2 then return end
 
     if SharedState.CurrentTargetPos and (SharedState.CurrentTargetPos - targetPos).Magnitude < 1.5 and SharedState.CurrentTween then
@@ -442,7 +422,7 @@ function CharacterModule.FlyToEnemy(targetPart, overrideMode)
     end
 
     SharedState.CurrentTargetPos = targetPos
-    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 15), 0.15, 2.0)
+    local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 15), 0.1, 2.0)
 
     if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
     SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = targetCFrame})
@@ -635,7 +615,7 @@ function SAOModule.CheckBonus()
     return false
 end
 
--- [[ 7. DETECÇÃO DE INIMIGOS (CORRIGIDA: DETETA O BOSS SEM HUMANOID NA RAIZ) ]]
+-- [[ 7. DETECÇÃO DE INIMIGOS (DETECÇÃO TOTAL E CIRÚRGICA) ]]
 local TargetingModule = {}
 
 local function isChest(objName)
@@ -647,7 +627,7 @@ function TargetingModule.IsAlive(obj)
     if not obj or not obj.Parent then return false end
     if isChest(obj.Name) then return false end
 
-    -- Se tiver Humanoid direto ou nos descendentes
+    -- 1. Verifica se tem Humanoid
     local hum = obj:FindFirstChildOfClass("Humanoid") or obj:FindFirstChildWhichIsA("Humanoid", true)
     if hum then
         if hum.Health <= 0.1 or hum:GetState() == Enum.HumanoidStateType.Dead then
@@ -656,22 +636,26 @@ function TargetingModule.IsAlive(obj)
         return true
     end
 
-    -- Se tiver atributo de vida
+    -- 2. Verifica se tem atributo de HP
     local hpAttr = obj:GetAttribute("Health") or obj:GetAttribute("HP") or obj:GetAttribute("CurrentHealth")
     if hpAttr and tonumber(hpAttr) then
         return tonumber(hpAttr) > 0.1
     end
 
-    -- Se tiver ValueBase de vida
+    -- 3. Verifica se tem ValueBase de HP
     local hpVal = obj:FindFirstChild("Health") or obj:FindFirstChild("HP")
     if hpVal and hpVal:IsA("ValueBase") and tonumber(hpVal.Value) then
         return tonumber(hpVal.Value) > 0.1
     end
 
-    -- REGRA DE OURO PARA O BOSS RUSH:
-    -- Se o modelo está dentro de Enemies/Boss, não é o jogador e tem peças físicas, ele está vivo!
-    if obj.Parent and (obj.Parent.Name == "Enemies" or obj.Parent.Name == "Boss" or obj.Parent.Name == "BossRush") then
-        return true
+    -- 4. CONFIRMADO NO SEU PRINT: Modelos dentro de Game.Enemies (PirateEmperor etc.)
+    local cur = obj.Parent
+    while cur and cur ~= workspace do
+        local n = cur.Name:lower()
+        if n == "enemies" or n == "boss" or n == "bossrush" or n == "stages" then
+            return true
+        end
+        cur = cur.Parent
     end
 
     return false
@@ -685,6 +669,7 @@ function TargetingModule.GetTargetPart(obj)
         or obj:FindFirstChild("HitBox")
         or obj:FindFirstChild("Head")
         or obj:FindFirstChild("Torso")
+        or obj:FindFirstChild("UpperTorso")
         or (obj:IsA("Model") and obj.PrimaryPart)
         or obj:FindFirstChildWhichIsA("BasePart")
 
@@ -738,7 +723,6 @@ function TargetingModule.GetLivingEnemies(phase)
         end
     end
 
-    -- Varredura ampla
     if #list == 0 then
         if gameFolder then
             for _, desc in ipairs(gameFolder:GetDescendants()) do
@@ -1452,7 +1436,7 @@ end)
 local initialRoutinesScheduled = false
 local isHandlingVictory = false
 
--- Loop 1: Ataque M1
+-- Loop 1: Ataque M1 (bater constante se houver alvo)
 task.spawn(function()
     while SharedState.IsRunning do
         if ConfigModule.Settings.AutoAttack and not SharedState.IsDungeonEnded and not CharacterModule.IsActionBlocked() then
