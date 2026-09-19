@@ -1,12 +1,12 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (LUAU GC FIX + PLAYAGAIN FLUIDO)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (CARREGAMENTO RESILIENTE)
 -- ====================================================================
 
--- [[ 1. TRAVA GLOBAL LIMPA E ORIGINAL ]]
-if getgenv and getgenv().HubDosRapazes_Loaded then
-    return
-end
+-- [[ 1. RESET E LIMPEZA DE SESSÃO ]]
 if getgenv then
+    if getgenv().HubDosRapazes_Loaded and getgenv().HubDosRapazes_Shutdown then
+        pcall(getgenv().HubDosRapazes_Shutdown)
+    end
     getgenv().HubDosRapazes_Loaded = true
 end
 
@@ -66,7 +66,15 @@ for _, gui in ipairs({CoreGui, pgui}) do
     end
 end
 
-local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+local loadSuccess, Fluent = pcall(function()
+    return loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+end)
+
+if not loadSuccess or not Fluent then
+    if getgenv then getgenv().HubDosRapazes_Loaded = nil end
+    warn("[Hub dos Rapazes] Falha ao descarregar a interface. Tente novamente.")
+    return
+end
 
 local SharedState = {
     IsRunning = true,
@@ -1500,7 +1508,6 @@ local function onPlayerDiedHandler()
         SharedState.HasPassedPortal1 = false
     end
 
-    -- MONITORIZAÇÃO PÓS-MORTE: Até 25 segundos para apanhar os 8 a 10s da interface
     if ConfigModule.Settings.AutoPlayAgain then
         task.spawn(function()
             task.wait(1.5)
@@ -1802,6 +1809,10 @@ function UIModule.Shutdown()
             end
         end
     end
+end
+
+if getgenv then
+    getgenv().HubDosRapazes_Shutdown = UIModule.Shutdown
 end
 
 task.spawn(function()
