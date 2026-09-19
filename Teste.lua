@@ -1,13 +1,13 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (BOSS RUSH DEDICADO & ISOLADO)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (TRAVA SINGLETON RÍGIDA & ANTI-DUPLICAÇÃO)
 -- ====================================================================
 
--- [[ 1. RESET E LIMPEZA DE AMBIENTE ]]
+-- [[ 1. TRAVA SINGLETON RÍGIDA ]]
 if getgenv then
-    if getgenv().HubDosRapazes_Loaded and getgenv().HubDosRapazes_Shutdown then
-        pcall(getgenv().HubDosRapazes_Shutdown)
+    if getgenv().HubDosRapazes_Running then
+        return
     end
-    getgenv().HubDosRapazes_Loaded = true
+    getgenv().HubDosRapazes_Running = true
 end
 
 local CoreGui = game:GetService("CoreGui")
@@ -30,12 +30,20 @@ pcall(function()
     end
 end)
 
+-- Enfileiramento com trava estrita de uma única execução
+local hasQueued = false
 local function queueNextExecution()
+    if hasQueued then return end
+    hasQueued = true
+
     local queueFunc = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or queueonteleport
     if queueFunc then
         pcall(function()
             queueFunc(string.format([[
-                if getgenv then getgenv().HubDosRapazes_Loaded = nil end
+                if getgenv then 
+                    getgenv().HubDosRapazes_Running = nil 
+                    getgenv().HubDosRapazes_Loaded = nil
+                end
                 repeat task.wait(0.5) until game:IsLoaded() and game.Players.LocalPlayer
                 task.wait(2.5)
                 
@@ -56,10 +64,11 @@ end
 local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
 local pgui = player:WaitForChild("PlayerGui", 30)
 
+-- Limpa interfaces antigas residuais
 for _, gui in ipairs({CoreGui, pgui}) do
     if gui then
         for _, child in ipairs(gui:GetChildren()) do
-            if child.Name == "IBdihP_PersistentToggle" or child.Name:find("Fluent") then
+            if child.Name == "IBdihP_PersistentToggle" or child.Name:find("Fluent") or child.Name == "HubRapazes_BlackScreen" then
                 pcall(function() child:Destroy() end)
             end
         end
@@ -71,7 +80,7 @@ local loadSuccess, Fluent = pcall(function()
 end)
 
 if not loadSuccess or not Fluent then
-    if getgenv then getgenv().HubDosRapazes_Loaded = nil end
+    if getgenv then getgenv().HubDosRapazes_Running = nil end
     return
 end
 
@@ -557,10 +566,7 @@ function InfinityMovement.Step(targetPart)
 
     orbitAngle = (orbitAngle + (RunService.Heartbeat:Wait() * speed)) % (math.pi * 2)
 
-    local offsetX = math.cos(orbitAngle) * radius
-    local offsetZ = math.sin(orbitAngle) * radius
-    local desiredPosition = enemyPos + Vector3.new(offsetX, height, offsetZ)
-
+    local desiredPosition = enemyPos + Vector3.new(math.cos(orbitAngle) * radius, height, math.sin(orbitAngle) * radius)
     local targetCFrame = CFrame.lookAt(desiredPosition, enemyPos)
     local distance = (root.Position - desiredPosition).Magnitude
 
@@ -653,9 +659,7 @@ function SAOModule.CheckBonus()
         SharedState.IsSelectingBonus = true
         CharacterModule.StopMovement()
 
-        local timeCard = nil
-        local damageCard = nil
-        local fallbackCard = nil
+        local timeCard, damageCard, fallbackCard = nil, nil, nil
 
         for _, card in ipairs(bonuses:GetChildren()) do
             if card:IsA("GuiObject") and card.Visible and card.Name:find("Bonus") then
@@ -663,9 +667,8 @@ function SAOModule.CheckBonus()
 
                 local bName = card:FindFirstChild("BonusName")
                 local bDesc = card:FindFirstChild("BonusDescription")
-                local combinedText = ((bName and bName:IsA("TextLabel")) and bName.Text or "") .. " " ..
-                                     ((bDesc and bDesc:IsA("TextLabel")) and bDesc.Text or "")
-                combinedText = combinedText:lower()
+                local combinedText = (((bName and bName:IsA("TextLabel")) and bName.Text or "") .. " " ..
+                                     ((bDesc and bDesc:IsA("TextLabel")) and bDesc.Text or "")):lower()
 
                 if combinedText:find("second") or combinedText:find("tempo") or combinedText:find("timer") then
                     timeCard = card
@@ -1381,9 +1384,8 @@ end
 -- [[ 12. ESTADOS DA DUNGEON & AUTO-START ]]
 local DungeonStateModule = {}
 
--- INÍCIO DIRETO DO BOSS RUSH E DEMAIS FASES
 function DungeonStateModule.CheckStart()
-    if not pgui or (tick() - SharedState.LastStartAttempt) < 0.3 then return end
+    if not pgui or (tick() - SharedState.LastStartAttempt) < 0.35 then return end
     SharedState.LastStartAttempt = tick()
 
     -- 1. Varredura direta cirúrgica por [Start]
@@ -1527,6 +1529,7 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
     SharedState.HasTarget = false
     SharedState.IsSelectingBonus = false
     SharedState.IsDungeonEnded = false
+    hasQueued = false -- Reseta a fila de teleporte para a nova partida
 
     CharacterModule.StopMovement()
     bindCharacterEvents(newChar)
@@ -1734,7 +1737,10 @@ floatBtn.MouseButton1Click:Connect(function() toggleUI(true) end)
 
 function UIModule.Shutdown()
     SharedState.IsRunning = false
-    if getgenv then getgenv().HubDosRapazes_Loaded = nil end
+    if getgenv then 
+        getgenv().HubDosRapazes_Running = nil 
+        getgenv().HubDosRapazes_Loaded = nil
+    end
     CharacterModule.StopMovement()
     if charConnection then charConnection:Disconnect() end
     if diedConnection then diedConnection:Disconnect() end
