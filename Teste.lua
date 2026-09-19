@@ -1,13 +1,20 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (CARREGAMENTO RESILIENTE)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (COM OTIMIZADOR DE FPS & ANTI-CRASH)
 -- ====================================================================
 
--- [[ 1. RESET E LIMPEZA DE SESSÃO ]]
+-- [[ 1. TRAVA SINGLETON & LIMPEZA DE AMBIENTE ]]
+local CurrentSessionId = tostring(os.time()) .. "_" .. tostring(math.random(1000, 9999))
+
 if getgenv then
-    if getgenv().HubDosRapazes_Loaded and getgenv().HubDosRapazes_Shutdown then
+    if getgenv().HubDosRapazes_ActiveSession and getgenv().HubDosRapazes_Running then
+        return
+    end
+    getgenv().HubDosRapazes_ActiveSession = CurrentSessionId
+    getgenv().HubDosRapazes_Running = true
+    
+    if getgenv().HubDosRapazes_Shutdown then
         pcall(getgenv().HubDosRapazes_Shutdown)
     end
-    getgenv().HubDosRapazes_Loaded = true
 end
 
 local CoreGui = game:GetService("CoreGui")
@@ -18,7 +25,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Lighting = game:GetService("Lighting")
 
-local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Scripts/refs/heads/main/Teste.lua"
+local scriptURL = "https://raw.githubusercontent.com/ErickMBarreto/Script/refs/heads/main/Teste.Lua"
 local SCRIPT_NAME = "HubRapazes_Local.lua"
 
 pcall(function()
@@ -30,18 +37,35 @@ pcall(function()
     end
 end)
 
+local hasQueuedTeleport = false
 local function queueNextExecution()
+    if hasQueuedTeleport then return end
+    hasQueuedTeleport = true
+
     local queueFunc = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or queueonteleport
     if queueFunc then
         pcall(function()
             queueFunc(string.format([[
-                if getgenv then getgenv().HubDosRapazes_Loaded = nil end
+                if getgenv then 
+                    getgenv().HubDosRapazes_Running = nil 
+                    getgenv().HubDosRapazes_ActiveSession = nil
+                end
                 repeat task.wait(0.5) until game:IsLoaded() and game.Players.LocalPlayer
                 task.wait(2.0)
                 
+                local success = false
                 if readfile and isfile and isfile("%s") then
-                    loadstring(readfile("%s"))()
-                else
+                    local content = readfile("%s")
+                    if content and #content > 500 then
+                        local fn = loadstring(content)
+                        if fn then
+                            success = true
+                            pcall(fn)
+                        end
+                    end
+                end
+                
+                if not success then
                     loadstring(game:HttpGet("%s"))()
                 end
             ]], SCRIPT_NAME, SCRIPT_NAME, scriptURL))
@@ -49,12 +73,9 @@ local function queueNextExecution()
     end
 end
 
-if not game:IsLoaded() then 
-    pcall(function() game.Loaded:Wait() end) 
-end
-
+if not game:IsLoaded() then game.Loaded:Wait() end
 local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
-local pgui = player:WaitForChild("PlayerGui", 30)
+local pgui = player:WaitForChild("PlayerGui", 20)
 
 for _, gui in ipairs({CoreGui, pgui}) do
     if gui then
@@ -66,15 +87,20 @@ for _, gui in ipairs({CoreGui, pgui}) do
     end
 end
 
-local loadSuccess, Fluent = pcall(function()
+local successFluent, Fluent = pcall(function()
     return loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
 end)
 
-if not loadSuccess or not Fluent then
-    if getgenv then getgenv().HubDosRapazes_Loaded = nil end
-    warn("[Hub dos Rapazes] Falha ao descarregar a interface. Tente novamente.")
+if not successFluent or not Fluent then
+    if getgenv then 
+        getgenv().HubDosRapazes_Running = nil 
+        getgenv().HubDosRapazes_ActiveSession = nil
+    end
+    warn("[Hub dos Rapazes] Falha ao carregar a interface. Tente executar novamente.")
     return
 end
+
+local FIXED_START_WAIT_TIME = 5.0
 
 local SharedState = {
     IsRunning = true,
@@ -94,7 +120,7 @@ local SharedState = {
     LastPortalAttempt = 0,
     LastStartAttempt = 0,
     HasClickedStart = false,
-    StartLockUntil = 0,
+    StartLockUntil = tick() + FIXED_START_WAIT_TIME,
     RespawnLockUntil = 0,
     HasTarget = false,
     IsSelectingBonus = false,
@@ -119,7 +145,7 @@ ConfigModule.Settings = {
     SkillMaxDistance = 22,
     HeightAboveEnemy = 8.5,
     BackDistance = 4.5,
-    TweenSpeed = 50,
+    TweenSpeed = 48,
     AttackSpeed = 0.15,
     AutoClaimQuests = false,
     AutoSell = false,
@@ -141,6 +167,7 @@ ConfigModule.Settings = {
     NotifySecrets = true,
     NotifyMythics = true,
     NotifyEveryRun = false,
+    -- Configurações Anti-Crash (Mobile)
     FPSBoost = true,
     DisableParticles = true,
     DisableShadows = true,
@@ -173,14 +200,17 @@ function ConfigModule.Load()
 end
 ConfigModule.Load()
 
--- [[ 3. MÓDULO OTIMIZADOR DE FPS ]]
+-- [[ 3. MÓDULO OTIMIZADOR DE FPS & ANTI-CRASH (MOBILE) ]]
 local OptimizerModule = {}
+local blackScreenFrame = nil
 
 function OptimizerModule.CleanInstance(v)
     if not ConfigModule.Settings.FPSBoost then return end
     pcall(function()
         if ConfigModule.Settings.DisableParticles then
-            if v:IsA("ParticleEmitter") or v:IsA("Sparkles") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Trail") or v:IsA("Beam") then
+            if v:IsA("ParticleEmitter") or v:IsA("Sparkles") or v:IsA("Smoke") or v:IsA("Fire") then
+                v.Enabled = false
+            elseif v:IsA("Trail") or v:IsA("Beam") then
                 v.Enabled = false
             end
         end
@@ -220,8 +250,12 @@ function OptimizerModule.ApplyAll()
             OptimizerModule.CleanInstance(desc)
         end
     end)
+
+    -- Libera RAM retida no garbage collector do Lua
+    collectgarbage("collect")
 end
 
+-- Listener para novos efeitos instanciados (skills de mobs/armas)
 workspace.DescendantAdded:Connect(function(child)
     if ConfigModule.Settings.FPSBoost then
         task.delay(0.1, function()
@@ -230,6 +264,7 @@ workspace.DescendantAdded:Connect(function(child)
     end
 end)
 
+-- Black Screen AFK (Economia extrema de bateria e GPU)
 function OptimizerModule.SetBlackScreen(enabled)
     pcall(function()
         local sg = CoreGui:FindFirstChild("HubRapazes_BlackScreen") or pgui:FindFirstChild("HubRapazes_BlackScreen")
@@ -250,7 +285,7 @@ function OptimizerModule.SetBlackScreen(enabled)
                 local txt = Instance.new("TextLabel", bg)
                 txt.Size = UDim2.new(1, 0, 0, 40)
                 txt.Position = UDim2.new(0, 0, 0.45, 0)
-                txt.Text = "MODO AFK ATIVO (POUPANDO BATERIA E RAM)"
+                txt.Text = "MODO AFK ATIVO (ECONOMIZANDO BATERIA E RAM)"
                 txt.TextColor3 = Color3.fromRGB(0, 255, 170)
                 txt.Font = Enum.Font.GothamBold
                 txt.TextSize = 14
@@ -265,8 +300,9 @@ function OptimizerModule.SetBlackScreen(enabled)
     end)
 end
 
+-- Executa uma otimização inicial suave após o carregamento
 task.spawn(function()
-    task.wait(2.5)
+    task.wait(3.0)
     OptimizerModule.ApplyAll()
 end)
 
@@ -527,17 +563,15 @@ function CharacterModule.FlyToPortal(targetCFrame)
     SharedState.CurrentTween:Play()
 end
 
--- TRIGGERBUTTON ROBUSTO
 function CharacterModule.TriggerButton(btn)
     if not btn or not SharedState.IsRunning then return end
     pcall(function()
         if firesignal then
             if btn.Activated then firesignal(btn.Activated) end
             if btn.MouseButton1Click then firesignal(btn.MouseButton1Click) end
-            if btn.MouseButton1Down then firesignal(btn.MouseButton1Down) end
         end
         if getconnections then
-            for _, evName in ipairs({"Activated", "MouseButton1Click", "MouseButton1Down"}) do
+            for _, evName in ipairs({"Activated", "MouseButton1Click"}) do
                 if btn[evName] then
                     for _, c in ipairs(getconnections(btn[evName])) do c:Fire() end
                 end
@@ -703,7 +737,7 @@ function SAOModule.CheckBonus()
     return false
 end
 
--- [[ 7. DETECÇÃO DE INIMIGOS ]]
+-- [[ 7. DETECÇÃO DE INIMIGOS (ORIGINAL + FILTRO DE BAÚ) ]]
 local TargetingModule = {}
 
 local function isChest(objName)
@@ -1055,7 +1089,7 @@ function QuestModule.ClaimAll()
     local tabs = {
         questsFrame:FindFirstChild("Buttons") and questsFrame.Buttons:FindFirstChild("Hourly"),
         questsFrame:FindFirstChild("Buttons") and questsFrame.Buttons:FindFirstChild("Daily"),
-        questsFrame:FindFirstChild("Weekly")
+        questsFrame:FindFirstChild("Buttons") and questsFrame.Buttons:FindFirstChild("Weekly")
     }
 
     local claimed = 0
@@ -1180,12 +1214,14 @@ function FlowModule.RunSAO()
         return
     end
 
+    -- 1. Cartas Automáticas
     if SAOModule.CheckBonus() then
         SharedState.HasTarget = false
         CharacterModule.StopMovement()
         return
     end
 
+    -- 2. Boss Secreto / Virus
     if SharedState.IsVirusActive then
         local _, enemyPart = TargetingModule.GetClosestEnemy("SAO")
         if enemyPart then
@@ -1200,6 +1236,7 @@ function FlowModule.RunSAO()
 
     local wave = FlowModule.GetWave()
 
+    -- 3. COMBATE REGULAR (Varre apenas monstros com vida ativa confirmada)
     local currentMob, mobPart = TargetingModule.GetClosestEnemy("SAO")
     if currentMob and mobPart then
         if wave >= 16 then
@@ -1212,6 +1249,7 @@ function FlowModule.RunSAO()
 
     CharacterModule.StopMovement()
 
+    -- 4. TRANSIÇÃO DE PORTAIS
     if wave >= 16 and not SharedState.HasEnteredBossRoom then
         local distToP2 = (root.Position - SAO_PORTAL_2.Position).Magnitude
         if distToP2 < 300 and distToP2 > 2.0 then
@@ -1234,10 +1272,12 @@ function FlowModule.RunSAO()
         end
     end
 
+    -- 5. STANDBY SEGURO
     SharedState.HasTarget = false
     CharacterModule.StopMovement()
 end
 
+-- Rota Bleach
 function FlowModule.RunBleach()
     local _, root = CharacterModule.Get()
     if not root or CharacterModule.IsActionBlocked() then return end
@@ -1295,6 +1335,7 @@ function FlowModule.RunBleach()
     end
 end
 
+-- Rota One Piece
 function FlowModule.RunOnePiece()
     local _, root = CharacterModule.Get()
     if not root or CharacterModule.IsActionBlocked() then return end
@@ -1357,6 +1398,7 @@ function FlowModule.RunOnePiece()
     end
 end
 
+-- Rota Boss Rush
 function FlowModule.RunBossRush()
     if CharacterModule.IsActionBlocked() then return end
     local _, enemyPart = TargetingModule.GetClosestEnemy("Boss Rush")
@@ -1369,6 +1411,7 @@ function FlowModule.RunBossRush()
     end
 end
 
+-- Rota Incursão
 function FlowModule.RunIncursion()
     if CharacterModule.IsActionBlocked() then return end
     local _, enemyPart = TargetingModule.GetClosestEnemy("Incursão")
@@ -1381,6 +1424,7 @@ function FlowModule.RunIncursion()
     end
 end
 
+-- Rota Infinity
 function FlowModule.RunInfinity()
     if CharacterModule.IsActionBlocked() then return end
     if InfinityModule.CheckBonus() then
@@ -1403,34 +1447,33 @@ end
 local DungeonStateModule = {}
 
 function DungeonStateModule.CheckStart()
-    if not pgui or (tick() - SharedState.LastStartAttempt) < 0.5 then return end
+    if not pgui or (tick() - SharedState.LastStartAttempt) < 1.0 then return end
     SharedState.LastStartAttempt = tick()
     
     local main = pgui:FindFirstChild("Main")
     if not main then return end
 
-    for _, btn in ipairs(main:GetDescendants()) do
-        if btn:IsA("GuiButton") and btn.Visible then
-            local name = btn.Name:lower()
-            local isStartButton = (name == "start" or name == "play" or name == "dungeonstart" or name == "comecar")
+    local targetFrames = {
+        main:FindFirstChild("DungeonFrame"),
+        main:FindFirstChild("BossRushFrame"),
+        main:FindFirstChild("RaidFrame"),
+        main:FindFirstChild("InfinityCreator")
+    }
 
-            if not isStartButton then
-                local lbl = btn:FindFirstChildOfClass("TextLabel")
-                if lbl and lbl.Visible then
-                    local txt = lbl.Text:lower()
-                    if txt:find("start") or txt:find("play") or txt:find("começar") or txt:find("jogar") then
-                        isStartButton = true
-                    end
-                end
-            end
-
-            if isStartButton then
-                CharacterModule.TriggerButton(btn)
+    for _, frame in ipairs(targetFrames) do
+        if frame and frame.Visible then
+            local startBtn = frame:FindFirstChild("Start", true) 
+                or frame:FindFirstChild("Play", true) 
+                or (frame:FindFirstChild("DungeonStart") and frame.DungeonStart:FindFirstChild("Play"))
+                
+            if startBtn and startBtn:IsA("GuiObject") and startBtn.Visible then
+                CharacterModule.TriggerButton(startBtn)
                 SharedState.IsVirusActive = false
                 SharedState.HasClickedStart = true
                 SharedState.HasPassedPortal1 = false
                 SharedState.HasEnteredBossRoom = false
-                SharedState.StartLockUntil = tick() + 1.0
+                SharedState.StartLockUntil = tick() + FIXED_START_WAIT_TIME
+                CharacterModule.StopMovement()
                 return
             end
         end
@@ -1457,34 +1500,19 @@ function DungeonStateModule.CheckEnd()
     local main = pgui and pgui:FindFirstChild("Main")
     if not main then return false, nil end
 
-    for _, btn in ipairs(main:GetDescendants()) do
-        if btn:IsA("GuiButton") and btn.Name == "PlayAgain" and btn.Visible then
-            return true, btn
-        end
-    end
+    local df = main:FindFirstChild("DungeonFrame") or main:FindFirstChild("RaidFrame") or main:FindFirstChild("BossRushFrame")
+    local dungeonStats = (df and df:FindFirstChild("DungeonStats")) or main:FindFirstChild("DungeonStats", true)
 
-    local targetFrames = {
-        main:FindFirstChild("BossRushFrame"),
-        main:FindFirstChild("DungeonFrame"),
-        main:FindFirstChild("RaidFrame"),
-        main:FindFirstChild("DungeonStats", true)
-    }
-
-    for _, container in ipairs(targetFrames) do
-        if container and container.Visible then
-            for _, obj in ipairs(container:GetDescendants()) do
-                if obj:IsA("GuiButton") and obj.Visible then
-                    local name = obj.Name:lower()
-                    if name == "playagain" or name:find("retry") or name:find("again") or name:find("replay") then
-                        return true, obj
-                    end
-                    local label = obj:FindFirstChildOfClass("TextLabel")
-                    if label and label.Visible then
-                        local txt = label.Text:lower()
-                        if txt:find("play again") or txt:find("retry") or txt:find("jogar novamente") then
-                            return true, obj
-                        end
-                    end
+    if dungeonStats and dungeonStats.Visible then
+        for _, obj in ipairs(dungeonStats:GetDescendants()) do
+            if obj:IsA("GuiButton") and obj.Visible then
+                local name = obj.Name:lower()
+                if name:find("playagain") or name:find("retry") or name:find("again") then
+                    return true, obj
+                end
+                local label = obj:FindFirstChildOfClass("TextLabel")
+                if label and (label.Text:lower():find("play again") or label.Text:lower():find("jogar novamente")) then
+                    return true, obj
                 end
             end
         end
@@ -1508,11 +1536,10 @@ local function onPlayerDiedHandler()
         SharedState.HasPassedPortal1 = false
     end
 
-    if ConfigModule.Settings.AutoPlayAgain then
+    if (ConfigModule.Settings.SelectedPhase == "Boss Rush" or ConfigModule.Settings.SelectedPhase == "Infinity" or ConfigModule.Settings.SelectedPhase == "SAO") and ConfigModule.Settings.AutoPlayAgain then
         task.spawn(function()
-            task.wait(1.5)
-            
-            for _ = 1, 80 do
+            task.wait(3.0)
+            for _ = 1, 15 do
                 if not SharedState.IsRunning then break end
                 local ended, retryBtn = DungeonStateModule.CheckEnd()
                 if ended and retryBtn then
@@ -1520,14 +1547,9 @@ local function onPlayerDiedHandler()
                     queueNextExecution()
                     task.wait(0.2)
                     CharacterModule.TriggerButton(retryBtn)
-                    pcall(function()
-                        if dungeonRemote then
-                            dungeonRemote:FireServer("PlayAgain")
-                        end
-                    end)
                     break
                 end
-                task.wait(0.3)
+                task.wait(0.5)
             end
         end)
         return
@@ -1571,7 +1593,6 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
     SharedState.LastRoomState = "Room1"
     SharedState.HasTarget = false
     SharedState.IsSelectingBonus = false
-    SharedState.IsDungeonEnded = false
 
     local curWave = FlowModule.GetWave()
     if curWave < 16 then
@@ -1668,6 +1689,11 @@ task.spawn(function()
 
                     pcall(WebhookModule.ProcessDungeonDrops)
 
+                    -- Coleta de lixo e limpeza de memória após o término da partida
+                    task.spawn(function()
+                        collectgarbage("collect")
+                    end)
+
                     if ConfigModule.Settings.AutoPlayAgain and not isHandlingPlayAgain then
                         isHandlingPlayAgain = true
                         task.spawn(function()
@@ -1676,14 +1702,8 @@ task.spawn(function()
                                 queueNextExecution()
                                 task.wait(0.2)
                                 CharacterModule.TriggerButton(playAgainBtn)
-                                pcall(function()
-                                    if dungeonRemote then
-                                        dungeonRemote:FireServer("PlayAgain")
-                                    end
-                                end)
                             end
                             task.wait(3.0)
-                            SharedState.IsDungeonEnded = false
                             isHandlingPlayAgain = false
                         end)
                     end
@@ -1788,7 +1808,10 @@ floatBtn.MouseButton1Click:Connect(function() toggleUI(true) end)
 
 function UIModule.Shutdown()
     SharedState.IsRunning = false
-    if getgenv then getgenv().HubDosRapazes_Loaded = nil end
+    if getgenv then 
+        getgenv().HubDosRapazes_Running = nil 
+        getgenv().HubDosRapazes_ActiveSession = nil
+    end
     CharacterModule.StopMovement()
     if charConnection then charConnection:Disconnect() end
     if diedConnection then diedConnection:Disconnect() end
@@ -2081,7 +2104,7 @@ SellRaritiesSection:AddToggle("SellMythicToggle", {
     Callback = function(Value) ConfigModule.Settings.SellMythic = Value ConfigModule.Save() end
 })
 
--- ABA OTIMIZAÇÃO
+-- ABA OTIMIZAÇÃO (NOVA - ANTI-CRASH MOBILE)
 local PerformanceSection = Tabs.Performance:AddSection("Otimizador de Desempenho & RAM")
 
 PerformanceSection:AddToggle("FPSBoostToggle", {
@@ -2114,6 +2137,15 @@ PerformanceSection:AddToggle("BlackScreenToggle", {
         ConfigModule.Settings.BlackScreenAFK = Value
         ConfigModule.Save()
         OptimizerModule.SetBlackScreen(Value)
+    end
+})
+
+PerformanceSection:AddButton({
+    Title = "🧹 Limpar Memória RAM Agora",
+    Description = "Força a coleta de lixo do Lua para aliviar a memória",
+    Callback = function()
+        OptimizerModule.ApplyAll()
+        Fluent:Notify({ Title = "RAM", Content = "Memória do jogo limpa com sucesso!", Duration = 3 })
     end
 })
 
