@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (AUTO ENGAGE RESTAURADO)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (SAO: TEMPO -> DANO -> QUALQUER UMA)
 -- ====================================================================
 
 -- [[ 1. TRAVA SINGLETON & LIMPEZA DE AMBIENTE ]]
@@ -128,7 +128,7 @@ local SharedState = {
 -- [[ 2. CONFIGURAÇÕES ]]
 local ConfigModule = {}
 ConfigModule.Settings = {
-    SelectedPhase = "Boss Rush",
+    SelectedPhase = "SAO",
     PositionMode = "Nas Costas",
     CustomWeaponName = "Yoru",
     AutoFarm = true,
@@ -187,7 +187,7 @@ function ConfigModule.Load()
 end
 ConfigModule.Load()
 
--- [[ 3. VERIFICADOR DE HIERARQUIA VISÍVEL ]]
+-- [[ 3. HIERARQUIA VISÍVEL ]]
 local function isActuallyVisible(guiObj)
     if not guiObj then return false end
     local current = guiObj
@@ -410,9 +410,10 @@ function CharacterModule.TriggerButton(btn)
         if firesignal then
             if btn.Activated then firesignal(btn.Activated) end
             if btn.MouseButton1Click then firesignal(btn.MouseButton1Click) end
+            if btn.MouseButton1Down then firesignal(btn.MouseButton1Down) end
         end
         if getconnections then
-            for _, evName in ipairs({"Activated", "MouseButton1Click"}) do
+            for _, evName in ipairs({"Activated", "MouseButton1Click", "MouseButton1Down"}) do
                 if btn[evName] then
                     for _, c in ipairs(getconnections(btn[evName])) do c:Fire() end
                 end
@@ -718,6 +719,7 @@ function QuestModule.ClaimAll()
                                     questRemote:FireServer(slot.Name)
                                 end)
                             end
+                            claimed = claimed + 1
                             task.wait(0.12)
                         end
                     end
@@ -801,6 +803,83 @@ function FlowModule.PassPortal(targetCFrame, onCompleteCallback)
     end
 end
 
+-- MÓDULO SAO (PRIORIDADE ESTRITA: TEMPO -> DANO -> QUALQUER UMA)
+local SAOModule = {}
+
+function SAOModule.CheckBonus()
+    local main = pgui:FindFirstChild("Main")
+    local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
+    local bonuses = dungeonFrame and dungeonFrame:FindFirstChild("Bonuses")
+
+    if bonuses and isActuallyVisible(bonuses) then
+        SharedState.IsSelectingBonus = true
+        CharacterModule.StopMovement()
+
+        -- Coleta os botões reais de cartas visíveis
+        local availableCards = {}
+        for i = 1, 3 do
+            local card = bonuses:FindFirstChild("Bonus" .. i)
+            if card and isActuallyVisible(card) then
+                table.insert(availableCards, card)
+            end
+        end
+
+        if #availableCards == 0 then
+            for _, child in ipairs(bonuses:GetChildren()) do
+                if child:IsA("GuiButton") and isActuallyVisible(child) then
+                    table.insert(availableCards, child)
+                end
+            end
+        end
+
+        if #availableCards > 0 then
+            local timeCard = nil
+            local damageCard = nil
+            local fallbackCard = availableCards[1]
+
+            -- Analisa o texto de cada carta
+            for _, card in ipairs(availableCards) do
+                local fullText = ""
+                for _, desc in ipairs(card:GetDescendants()) do
+                    if desc:IsA("TextLabel") and desc.Text ~= "" then
+                        fullText = fullText .. " " .. desc.Text:lower()
+                    end
+                end
+
+                -- Prioridade 1: Tempo
+                if fullText:find("second") or fullText:find("tempo") or fullText:find("timer") or fullText:find("segundo") or fullText:find("time") then
+                    timeCard = card
+                -- Prioridade 2: Dano
+                elseif fullText:find("damage") or fullText:find("dano") or fullText:find("atk") or fullText:find("attack") or fullText:find("strength") then
+                    damageCard = card
+                end
+            end
+
+            -- Escolhe estritamente: Tempo -> Dano -> Fallback
+            local targetCard = timeCard or damageCard or fallbackCard
+
+            if targetCard then
+                CharacterModule.TriggerButton(targetCard)
+
+                local dr = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Dungeon")
+                if dr then
+                    pcall(function()
+                        dr:FireServer("ChooseBonus", targetCard.Name)
+                        dr:FireServer("Bonus", targetCard.Name)
+                        dr:FireServer(targetCard.Name)
+                    end)
+                end
+
+                task.wait(0.5)
+                return true
+            end
+        end
+    end
+
+    SharedState.IsSelectingBonus = false
+    return false
+end
+
 function FlowModule.RunBossRush()
     local closestBoss, bossPart = TargetingModule.GetClosestEnemy("Boss Rush")
     if closestBoss and bossPart and bossPart.Parent then
@@ -865,6 +944,13 @@ end
 function FlowModule.RunSAO()
     local _, root = CharacterModule.Get()
     if not root or CharacterModule.IsActionBlocked() then return end
+
+    -- 1. Verifica e seleciona as cartas com prioridade
+    if SAOModule.CheckBonus() then
+        SharedState.HasTarget = false
+        CharacterModule.StopMovement()
+        return
+    end
 
     local wave = FlowModule.GetWave()
     local currentMob, mobPart = TargetingModule.GetClosestEnemy("SAO")
@@ -1036,7 +1122,7 @@ local isHandlingPlayAgain = false
 task.spawn(function()
     while SharedState.IsRunning do
         if ConfigModule.Settings.AutoAttack and not SharedState.IsDungeonEnded and not CharacterModule.IsActionBlocked() then
-            if SharedState.HasTarget then
+            if SharedState.HasTarget and not SharedState.IsSelectingBonus then
                 CombatModule.ExecuteM1()
             end
         end
@@ -1048,7 +1134,7 @@ end)
 task.spawn(function()
     while SharedState.IsRunning do
         if ConfigModule.Settings.AutoSkills and not SharedState.IsDungeonEnded and not CharacterModule.IsActionBlocked() then
-            if SharedState.HasTarget then
+            if SharedState.HasTarget and not SharedState.IsSelectingBonus then
                 CombatModule.ExecuteSkills()
             end
         end
@@ -1212,7 +1298,7 @@ if getgenv then getgenv().HubDosRapazes_Shutdown = UIModule.Shutdown end
 local PhaseSection = Tabs.Farm:AddSection("Fase & Posição")
 PhaseSection:AddDropdown("PhaseSelector", {
     Title = "Selecionar Fase",
-    Values = { "Boss Rush", "One Piece", "SAO", "Incursão" },
+    Values = { "SAO", "Boss Rush", "One Piece", "Incursão" },
     Default = ConfigModule.Settings.SelectedPhase,
     Callback = function(Value) ConfigModule.Settings.SelectedPhase = Value ConfigModule.Save() end
 })
