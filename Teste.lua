@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (FASES RESTAURADAS & INFINITY CALIBRADO)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (INTERFACE COMPLETA RESTAURADA)
 -- ====================================================================
 
 -- [[ 1. TRAVA SINGLETON & LIMPEZA DE AMBIENTE ]]
@@ -128,7 +128,7 @@ local SharedState = {
 -- [[ 2. CONFIGURAÇÕES ]]
 local ConfigModule = {}
 ConfigModule.Settings = {
-    SelectedPhase = "Infinity",
+    SelectedPhase = "Boss Rush",
     PositionMode = "Nas Costas",
     CustomWeaponName = "Yoru",
     AutoFarm = true,
@@ -154,11 +154,6 @@ ConfigModule.Settings = {
     SellEpic = true,
     SellLegendary = true,
     SellMythic = false,
-    InfinityCardSlot = 1,
-    InfinityAutoSkipWave = true,
-    InfinityOrbitRadius = 10.0,
-    InfinityOrbitHeight = 12.5,
-    InfinityOrbitSpeed = 3.0,
     WebhookEnabled = false,
     WebhookURL = "https://discord.com/api/webhooks/1542138848195248258/Xqpgk33GsjM5UrMxT0IqIvkKvKulvSJQVc6CSuPmrf6lmrjNXwjxCwGCOK0aJun-Y83o",
     NotifySecrets = true,
@@ -192,7 +187,7 @@ function ConfigModule.Load()
 end
 ConfigModule.Load()
 
--- [[ 3. HIERARQUIA VISÍVEL ]]
+-- [[ 3. VERIFICADOR DE HIERARQUIA VISÍVEL ]]
 local function isActuallyVisible(guiObj)
     if not guiObj then return false end
     local current = guiObj
@@ -274,7 +269,7 @@ function WebhookModule.ProcessDungeonDrops()
     end
 end
 
--- [[ 5. PERSONAGEM E MOVIMENTAÇÃO ]]
+-- [[ 5. PERSONAGEM E MOVIMENTO ESTÁVEL ]]
 local CharacterModule = {}
 local diedConnection = nil
 local charConnection = nil
@@ -426,151 +421,7 @@ function CharacterModule.TriggerButton(btn)
     end)
 end
 
--- [[ 6. MÓDULO INFINITY (KITING ORBITAL, SKIP E CARTAS) ]]
-local InfinityMovement = {}
-local orbitAngle = 0
-
-function InfinityMovement.Step(targetPart)
-    if CharacterModule.IsActionBlocked() then 
-        InfinityMovement.HoldCenter()
-        return 
-    end
-    local _, root = CharacterModule.Get()
-    if not root or not targetPart or not targetPart.Parent then 
-        InfinityMovement.HoldCenter()
-        return 
-    end
-
-    local enemyPos = targetPart.Position
-    local speed = ConfigModule.Settings.InfinityOrbitSpeed or 3.0
-    local radius = ConfigModule.Settings.InfinityOrbitRadius or 10.0
-    local height = ConfigModule.Settings.InfinityOrbitHeight or 12.5
-
-    orbitAngle = (orbitAngle + (RunService.Heartbeat:Wait() * speed)) % (math.pi * 2)
-    local desiredPosition = enemyPos + Vector3.new(math.cos(orbitAngle) * radius, height, math.sin(orbitAngle) * radius)
-    local targetCFrame = CFrame.lookAt(desiredPosition, enemyPos)
-    local distance = (root.Position - desiredPosition).Magnitude
-
-    if distance > 14 then
-        if SharedState.CurrentTween then SharedState.CurrentTween:Cancel() end
-        local duration = math.clamp(distance / math.max(ConfigModule.Settings.TweenSpeed, 20), 0.2, 1.2)
-        SharedState.CurrentTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = targetCFrame})
-        SharedState.CurrentTween:Play()
-    else
-        if SharedState.CurrentTween then
-            SharedState.CurrentTween:Cancel()
-            SharedState.CurrentTween = nil
-        end
-        root.CFrame = root.CFrame:Lerp(targetCFrame, 0.20)
-    end
-end
-
-function InfinityMovement.HoldCenter()
-    CharacterModule.StopMovement()
-end
-
-local InfinityModule = {}
-local dungeonRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Dungeon", 10)
-
-function InfinityModule.CheckBonus()
-    local main = pgui:FindFirstChild("Main")
-    local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
-    local bonuses = dungeonFrame and dungeonFrame:FindFirstChild("Bonuses")
-
-    if bonuses and isActuallyVisible(bonuses) then
-        SharedState.IsSelectingBonus = true
-        CharacterModule.StopMovement()
-
-        local slotIndex = ConfigModule.Settings.InfinityCardSlot or 1
-        local targetCardName = "Bonus" .. tostring(slotIndex)
-        local cardButton = bonuses:FindFirstChild(targetCardName) or bonuses:FindFirstChild("Bonus1")
-
-        if cardButton and isActuallyVisible(cardButton) then
-            CharacterModule.TriggerButton(cardButton)
-        end
-        return true
-    end
-
-    SharedState.IsSelectingBonus = false
-    return false
-end
-
-function InfinityModule.ForceSkip()
-    local executed = false
-    if dungeonRemote then
-        pcall(function()
-            dungeonRemote:FireServer("InfinitySkipWave")
-            executed = true
-        end)
-    end
-    local main = pgui:FindFirstChild("Main")
-    local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
-    local skipBtn = dungeonFrame and dungeonFrame:FindFirstChild("SkipWave")
-    if skipBtn and isActuallyVisible(skipBtn) then
-        CharacterModule.TriggerButton(skipBtn)
-        executed = true
-    end
-    return executed
-end
-
-task.spawn(function()
-    while SharedState.IsRunning do
-        if ConfigModule.Settings.SelectedPhase == "Infinity" and ConfigModule.Settings.InfinityAutoSkipWave then
-            local main = pgui:FindFirstChild("Main")
-            local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
-            local skipBtn = dungeonFrame and dungeonFrame:FindFirstChild("SkipWave")
-
-            if skipBtn and isActuallyVisible(skipBtn) then
-                InfinityModule.ForceSkip()
-                task.wait(1.5)
-            end
-        end
-        task.wait(0.25)
-    end
-end)
-
-local SAOModule = {}
-
-function SAOModule.CheckBonus()
-    local main = pgui:FindFirstChild("Main")
-    local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
-    local bonuses = dungeonFrame and dungeonFrame:FindFirstChild("Bonuses")
-
-    if bonuses and isActuallyVisible(bonuses) then
-        SharedState.IsSelectingBonus = true
-        CharacterModule.StopMovement()
-
-        local timeCard, damageCard, fallbackCard = nil, nil, nil
-        for _, card in ipairs(bonuses:GetChildren()) do
-            if card:IsA("GuiObject") and isActuallyVisible(card) and card.Name:find("Bonus") then
-                if not fallbackCard then fallbackCard = card end
-
-                local bName = card:FindFirstChild("BonusName")
-                local bDesc = card:FindFirstChild("BonusDescription")
-                local combinedText = (((bName and bName:IsA("TextLabel")) and bName.Text or "") .. " " ..
-                                     ((bDesc and bDesc:IsA("TextLabel")) and bDesc.Text or "")):lower()
-
-                if combinedText:find("second") or combinedText:find("tempo") or combinedText:find("timer") then
-                    timeCard = card
-                elseif combinedText:find("damage") or combinedText:find("dano") or combinedText:find("atk") or combinedText:find("attack") then
-                    damageCard = card
-                end
-            end
-        end
-
-        local targetToClick = timeCard or damageCard or fallbackCard
-        if targetToClick then
-            CharacterModule.TriggerButton(targetToClick)
-            task.wait(0.4)
-        end
-        return true
-    end
-
-    SharedState.IsSelectingBonus = false
-    return false
-end
-
--- [[ 7. DETECÇÃO UNIVERSAL DE INIMIGOS (COM PEÇA "Bot") ]]
+-- [[ 6. DETECÇÃO DE INIMIGOS ]]
 local TargetingModule = {}
 
 function TargetingModule.GetTargetPart(obj)
@@ -593,13 +444,13 @@ function TargetingModule.GetLivingEnemies(phase)
     local gameFolder = workspace:FindFirstChild("Game")
     local enemiesFolder = gameFolder and gameFolder:FindFirstChild("Enemies")
 
-    if (phase == "Boss Rush" or phase == "Infinity") and enemiesFolder then
+    if phase == "Boss Rush" and enemiesFolder then
         for _, obj in ipairs(enemiesFolder:GetChildren()) do
             if obj:IsA("Model") and obj ~= char and TargetingModule.GetTargetPart(obj) then
                 table.insert(list, obj)
             end
         end
-        if #list > 0 then return list end
+        return list
     end
 
     local searchContainers = {
@@ -650,7 +501,7 @@ function TargetingModule.GetClosestEnemy(phase)
     return closestEnemy, closestPart
 end
 
--- [[ 8. COMBATE ]]
+-- [[ 7. COMBATE ]]
 local CombatModule = {}
 local attackRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Attack", 10)
 local skillRemote = ReplicatedStorage:WaitForChild("Remotes", 10):FindFirstChild("Skill") or ReplicatedStorage:WaitForChild("Remotes", 10):FindFirstChild("Spell")
@@ -722,7 +573,7 @@ function CombatModule.ExecuteSkills()
     end
 end
 
--- [[ 9. AUTO-SELL ]]
+-- [[ 8. AUTO-SELL & AUTO-FAVORITE ]]
 local AutoSellModule = {}
 local equipRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Equip", 10)
 local lastSellTick = 0
@@ -825,7 +676,7 @@ function AutoSellModule.Execute()
     SharedState.IsSelling = false
 end
 
--- [[ 10. MISSÕES ]]
+-- [[ 9. MISSÕES ]]
 local QuestModule = {}
 local questRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Quest", 10)
 
@@ -867,7 +718,6 @@ function QuestModule.ClaimAll()
                                     questRemote:FireServer(slot.Name)
                                 end)
                             end
-                            claimed = claimed + 1
                             task.wait(0.12)
                         end
                     end
@@ -880,11 +730,9 @@ function QuestModule.ClaimAll()
     SharedState.IsClaiming = false
 end
 
--- [[ 11. FLUXO DAS FASES ]]
+-- [[ 10. FLUXO DAS FASES ]]
 local FlowModule = {}
 
-local BLEACH_PORTAL_1 = CFrame.new(4557.2, -305.5, 1925.0)
-local BLEACH_PORTAL_2 = CFrame.new(5411.5, -561.0, 2550.0)
 local OP_PORTAL_1_WAVE7  = CFrame.new(1196.6, -240.9, 1855.1)
 local OP_PORTAL_2_WAVE12 = CFrame.new(2909.3, -105.7, 2151.7)
 local SAO_PORTAL_1 = CFrame.new(3460.3, 1006.1, 197.2)
@@ -909,6 +757,50 @@ function FlowModule.GetWave()
     return 1
 end
 
+function FlowModule.PassPortal(targetCFrame, onCompleteCallback)
+    local _, root = CharacterModule.Get()
+    if not root then return end
+
+    if SharedState.EnteringPortal and (tick() - SharedState.LastPortalAttempt) > 4.0 then
+        SharedState.EnteringPortal = false
+    end
+
+    if SharedState.EnteringPortal then return end
+
+    local dist = (root.Position - targetCFrame.Position).Magnitude
+    if dist > 3.0 then
+        CharacterModule.FlyToPortal(targetCFrame)
+    else
+        SharedState.EnteringPortal = true
+        SharedState.LastPortalAttempt = tick()
+        CharacterModule.StopMovement()
+
+        local oldPos = root.Position
+        local startWait = tick()
+
+        while (tick() - startWait) < 2.5 do
+            task.wait(0.08)
+            local _, curRoot = CharacterModule.Get()
+            if curRoot and (curRoot.Position - oldPos).Magnitude > 8 then
+                break
+            end
+        end
+
+        task.wait(0.5)
+
+        local _, finalRoot = CharacterModule.Get()
+        if finalRoot then
+            finalRoot.AssemblyLinearVelocity = Vector3.zero
+            finalRoot.AssemblyAngularVelocity = Vector3.zero
+        end
+
+        SharedState.EnteringPortal = false
+        if onCompleteCallback then
+            onCompleteCallback()
+        end
+    end
+end
+
 function FlowModule.RunBossRush()
     local closestBoss, bossPart = TargetingModule.GetClosestEnemy("Boss Rush")
     if closestBoss and bossPart and bossPart.Parent then
@@ -920,40 +812,95 @@ function FlowModule.RunBossRush()
     end
 end
 
-function FlowModule.RunInfinity()
-    if CharacterModule.IsActionBlocked() then return end
-    if InfinityModule.CheckBonus() then
-        SharedState.HasTarget = false
+function FlowModule.RunOnePiece()
+    local _, root = CharacterModule.Get()
+    if not root or CharacterModule.IsActionBlocked() then return end
+
+    local currentRoom = "Room1"
+    if root.Position.X >= 2200 and root.Position.X <= 2650 and root.Position.Z >= 1950 then
+        currentRoom = "BossRoom"
+    elseif root.Position.X >= 1400 then
+        currentRoom = "Room2"
+    end
+
+    if currentRoom ~= SharedState.LastRoomState then
+        SharedState.LastRoomState = currentRoom
         CharacterModule.StopMovement()
+        SharedState.EnteringPortal = false
+        SharedState.IsTransitioning = true
+        task.wait(0.4)
+        SharedState.IsTransitioning = false
         return
     end
 
-    local closestMob, mobPart = TargetingModule.GetClosestEnemy("Infinity")
-    if closestMob and mobPart and mobPart.Parent then
+    if SharedState.EnteringPortal then return end
+    local wave = FlowModule.GetWave()
+
+    if wave >= 12 then
+        if currentRoom == "Room1" then
+            SharedState.HasTarget = true
+            FlowModule.PassPortal(OP_PORTAL_1_WAVE7)
+            return
+        elseif currentRoom == "Room2" then
+            SharedState.HasTarget = true
+            FlowModule.PassPortal(OP_PORTAL_2_WAVE12)
+            return
+        end
+    elseif wave >= 7 and currentRoom == "Room1" then
         SharedState.HasTarget = true
-        InfinityMovement.Step(mobPart)
+        FlowModule.PassPortal(OP_PORTAL_1_WAVE7)
+        return
+    end
+
+    local _, enemyPart = TargetingModule.GetClosestEnemy("One Piece")
+    if enemyPart then
+        SharedState.HasTarget = true
+        CharacterModule.FlyToEnemy(enemyPart)
     else
         SharedState.HasTarget = false
-        InfinityMovement.HoldCenter()
+        CharacterModule.StopMovement()
     end
 end
 
 function FlowModule.RunSAO()
     local _, root = CharacterModule.Get()
     if not root or CharacterModule.IsActionBlocked() then return end
-    if SAOModule.CheckBonus() then
-        SharedState.HasTarget = false
-        CharacterModule.StopMovement()
-        return
-    end
+
+    local wave = FlowModule.GetWave()
     local currentMob, mobPart = TargetingModule.GetClosestEnemy("SAO")
     if currentMob and mobPart then
+        if wave >= 16 then SharedState.HasEnteredBossRoom = true end
         SharedState.HasTarget = true
         CharacterModule.FlyToEnemy(mobPart)
-    else
-        SharedState.HasTarget = false
-        CharacterModule.StopMovement()
+        return
     end
+
+    CharacterModule.StopMovement()
+
+    if wave >= 16 and not SharedState.HasEnteredBossRoom then
+        local distToP2 = (root.Position - SAO_PORTAL_2.Position).Magnitude
+        if distToP2 < 300 and distToP2 > 2.0 then
+            SharedState.HasTarget = true
+            FlowModule.PassPortal(SAO_PORTAL_2, function()
+                SharedState.HasEnteredBossRoom = true
+                task.wait(0.5)
+            end)
+            return
+        end
+    elseif wave >= 12 and wave < 16 and not SharedState.HasPassedPortal1 then
+        local distToP1 = (root.Position - SAO_PORTAL_1.Position).Magnitude
+        if distToP1 < 350 and distToP1 > 2.0 then
+            SharedState.HasTarget = true
+            FlowModule.PassPortal(SAO_PORTAL_1, function()
+                SharedState.HasPassedPortal1 = true
+                task.wait(0.5)
+            end)
+            return
+        end
+    end
+
+    SharedState.HasTarget = false
+    CharacterModule.StopMovement()
 end
 
 function FlowModule.RunIncursion()
@@ -968,7 +915,7 @@ function FlowModule.RunIncursion()
     end
 end
 
--- [[ 12. CHECAGEM REAL DE START & PLAYAGAIN ]]
+-- [[ 11. CHECAGEM REAL DE START & PLAYAGAIN ]]
 local DungeonStateModule = {}
 
 function DungeonStateModule.CheckStart()
@@ -978,7 +925,6 @@ function DungeonStateModule.CheckStart()
     local main = pgui:FindFirstChild("Main")
     if not main then return end
 
-    -- Boss Rush
     local brCreator = main:FindFirstChild("BossRushCreator")
     local brStart = brCreator and brCreator:FindFirstChild("Start", true)
     if brStart and isActuallyVisible(brStart) then
@@ -986,15 +932,6 @@ function DungeonStateModule.CheckStart()
         return
     end
 
-    -- Infinity Creator
-    local infCreator = main:FindFirstChild("InfinityCreator")
-    local infPlay = infCreator and infCreator:FindFirstChild("Play", true)
-    if infPlay and isActuallyVisible(infPlay) then
-        CharacterModule.TriggerButton(infPlay)
-        return
-    end
-
-    -- Genérico para outras Dungeons
     for _, btn in ipairs(main:GetDescendants()) do
         if btn:IsA("GuiButton") and (btn.Name == "Start" or btn.Name == "Play") and isActuallyVisible(btn) then
             CharacterModule.TriggerButton(btn)
@@ -1074,14 +1011,14 @@ charConnection = player.CharacterAdded:Connect(function(newChar)
     task.delay(1.0, function() SharedState.IsRespawning = false end)
 end)
 
--- [[ 13. LOOPS PRINCIPAIS ]]
+-- [[ 12. LOOPS PRINCIPAIS ]]
 local isHandlingPlayAgain = false
 
--- Loop 1: Ataque M1
+-- Loop 1: M1
 task.spawn(function()
     while SharedState.IsRunning do
         if ConfigModule.Settings.AutoAttack and not SharedState.IsDungeonEnded and not CharacterModule.IsActionBlocked() then
-            if SharedState.HasTarget and not SharedState.IsSelectingBonus then
+            if SharedState.HasTarget then
                 CombatModule.ExecuteM1()
             end
         end
@@ -1093,7 +1030,7 @@ end)
 task.spawn(function()
     while SharedState.IsRunning do
         if ConfigModule.Settings.AutoSkills and not SharedState.IsDungeonEnded and not CharacterModule.IsActionBlocked() then
-            if SharedState.HasTarget and not SharedState.IsSelectingBonus then
+            if SharedState.HasTarget then
                 CombatModule.ExecuteSkills()
             end
         end
@@ -1138,10 +1075,10 @@ task.spawn(function()
                     end
                 else
                     SharedState.IsDungeonEnded = false
-                    if ConfigModule.Settings.SelectedPhase == "Infinity" then
-                        FlowModule.RunInfinity()
-                    elseif ConfigModule.Settings.SelectedPhase == "Boss Rush" then
+                    if ConfigModule.Settings.SelectedPhase == "Boss Rush" then
                         FlowModule.RunBossRush()
+                    elseif ConfigModule.Settings.SelectedPhase == "One Piece" then
+                        FlowModule.RunOnePiece()
                     elseif ConfigModule.Settings.SelectedPhase == "SAO" then
                         FlowModule.RunSAO()
                     elseif ConfigModule.Settings.SelectedPhase == "Incursão" then
@@ -1157,7 +1094,7 @@ task.spawn(function()
     end
 end)
 
--- [[ 14. INTERFACE VISUAL FLUENT ]]
+-- [[ 13. INTERFACE VISUAL FLUENT ]]
 local UIModule = {}
 
 local Window = Fluent:CreateWindow({
@@ -1172,7 +1109,6 @@ local Window = Fluent:CreateWindow({
 
 local Tabs = {
     Farm = Window:AddTab({ Title = "Farm" }),
-    Infinity = Window:AddTab({ Title = "Infinity" }),
     Sell = Window:AddTab({ Title = "Auto-Sell" }),
     Webhook = Window:AddTab({ Title = "Discord" }),
     Settings = Window:AddTab({ Title = "Settings" })
@@ -1247,7 +1183,7 @@ if getgenv then getgenv().HubDosRapazes_Shutdown = UIModule.Shutdown end
 local PhaseSection = Tabs.Farm:AddSection("Fase & Posição")
 PhaseSection:AddDropdown("PhaseSelector", {
     Title = "Selecionar Fase",
-    Values = { "Infinity", "Boss Rush", "SAO", "Incursão" },
+    Values = { "Boss Rush", "One Piece", "SAO", "Incursão" },
     Default = ConfigModule.Settings.SelectedPhase,
     Callback = function(Value) ConfigModule.Settings.SelectedPhase = Value ConfigModule.Save() end
 })
@@ -1312,94 +1248,124 @@ CombatSection:AddToggle("AutoSkillsToggle", {
     Callback = function(Value) ConfigModule.Settings.AutoSkills = Value end
 })
 
--- ABA INFINITY
-local InfinitySection = Tabs.Infinity:AddSection("Ações de Wave")
-InfinitySection:AddButton({
-    Title = "⚡ Forçar Skip Agora",
-    Callback = function()
-        local ok = InfinityModule.ForceSkip()
-        if ok then
-            Fluent:Notify({ Title = "Skip", Content = "Comando disparado!", Duration = 2.5 })
-        end
-    end
-})
-InfinitySection:AddToggle("InfinitySkipWaveToggle", {
-    Title = "Auto Skip Wave",
-    Default = ConfigModule.Settings.InfinityAutoSkipWave,
-    Callback = function(Value) ConfigModule.Settings.InfinityAutoSkipWave = Value ConfigModule.Save() end
-})
-InfinitySection:AddDropdown("CardSlotSelector", {
-    Title = "Carta Padrão para Seleção",
-    Values = { "Carta 1 (Esquerda)", "Carta 2 (Centro)", "Carta 3 (Direita)" },
-    Default = "Carta 1 (Esquerda)",
-    Callback = function(Value)
-        if Value == "Carta 1 (Esquerda)" then ConfigModule.Settings.InfinityCardSlot = 1
-        elseif Value == "Carta 2 (Centro)" then ConfigModule.Settings.InfinityCardSlot = 2
-        elseif Value == "Carta 3 (Direita)" then ConfigModule.Settings.InfinityCardSlot = 3
-        end
-        ConfigModule.Save()
-    end
-})
-
-local KitingSection = Tabs.Infinity:AddSection("Kiting Orbital 3D")
-KitingSection:AddSlider("InfinityRadiusSlider", {
-    Title = "Raio da Órbita",
-    Default = ConfigModule.Settings.InfinityOrbitRadius,
-    Min = 6.0, Max = 18.0, Rounding = 1,
-    Callback = function(Value) ConfigModule.Settings.InfinityOrbitRadius = Value ConfigModule.Save() end
-})
-KitingSection:AddSlider("InfinityHeightSlider", {
-    Title = "Altura da Órbita",
-    Default = ConfigModule.Settings.InfinityOrbitHeight,
-    Min = 8.0, Max = 20.0, Rounding = 1,
-    Callback = function(Value) ConfigModule.Settings.InfinityOrbitHeight = Value ConfigModule.Save() end
-})
-KitingSection:AddSlider("InfinitySpeedSlider", {
-    Title = "Velocidade da Rotação",
-    Default = ConfigModule.Settings.InfinityOrbitSpeed,
-    Min = 1.0, Max = 7.0, Rounding = 1,
-    Callback = function(Value) ConfigModule.Settings.InfinityOrbitSpeed = Value ConfigModule.Save() end
-})
-
 -- ABA AUTO-SELL
-local FavoriteSection = Tabs.Sell:AddSection("Proteção de Itens")
+local FavoriteSection = Tabs.Sell:AddSection("Proteção de Itens (Auto-Favorite)")
 FavoriteSection:AddToggle("AutoFavSecretsToggle", {
     Title = "Auto-Favorite Secretos",
+    Description = "Bloqueia e favorita itens Secretos",
     Default = ConfigModule.Settings.AutoFavoriteSecrets,
     Callback = function(Value) ConfigModule.Settings.AutoFavoriteSecrets = Value ConfigModule.Save() end
 })
 FavoriteSection:AddToggle("AutoFavMythicsToggle", {
     Title = "Auto-Favorite Míticos",
+    Description = "Bloqueia e favorita itens Míticos",
     Default = ConfigModule.Settings.AutoFavoriteMythics,
     Callback = function(Value) ConfigModule.Settings.AutoFavoriteMythics = Value ConfigModule.Save() end
 })
-local SellMainSection = Tabs.Sell:AddSection("Venda")
+FavoriteSection:AddButton({
+    Title = "🔒 Bloquear / Favoritar Raros Agora",
+    Callback = function() pcall(AutoSellModule.LockHighTierItems) end
+})
+
+local SellMainSection = Tabs.Sell:AddSection("Controle de Venda")
 SellMainSection:AddToggle("AutoSellToggle", {
     Title = "Ativar Auto-Sell",
+    Description = "Vende automaticamente ao entrar na fase",
     Default = ConfigModule.Settings.AutoSell,
     Callback = function(Value) ConfigModule.Settings.AutoSell = Value ConfigModule.Save() end
 })
+SellMainSection:AddSlider("SellDelaySlider", {
+    Title = "Tempo de Espera para Venda (s)",
+    Default = ConfigModule.Settings.SellDelaySeconds,
+    Min = 1, Max = 30, Rounding = 0,
+    Callback = function(Value) ConfigModule.Settings.SellDelaySeconds = Value ConfigModule.Save() end
+})
 SellMainSection:AddButton({
-    Title = "💰 Vender Agora",
+    Title = "💰 Executar Venda Imediata",
     Callback = function() pcall(AutoSellModule.Execute) end
 })
 
--- ABA WEBHOOK
+local SellRaritiesSection = Tabs.Sell:AddSection("Filtro de Raridades para Venda")
+SellRaritiesSection:AddToggle("SellCommonToggle", {
+    Title = "Vender Comuns",
+    Default = ConfigModule.Settings.SellCommon,
+    Callback = function(Value) ConfigModule.Settings.SellCommon = Value ConfigModule.Save() end
+})
+SellRaritiesSection:AddToggle("SellRareToggle", {
+    Title = "Vender Raros",
+    Default = ConfigModule.Settings.SellRare,
+    Callback = function(Value) ConfigModule.Settings.SellRare = Value ConfigModule.Save() end
+})
+SellRaritiesSection:AddToggle("SellEpicToggle", {
+    Title = "Vender Épicos",
+    Default = ConfigModule.Settings.SellEpic,
+    Callback = function(Value) ConfigModule.Settings.SellEpic = Value ConfigModule.Save() end
+})
+SellRaritiesSection:AddToggle("SellLegendaryToggle", {
+    Title = "Vender Lendários",
+    Default = ConfigModule.Settings.SellLegendary,
+    Callback = function(Value) ConfigModule.Settings.SellLegendary = Value ConfigModule.Save() end
+})
+SellRaritiesSection:AddToggle("SellMythicToggle", {
+    Title = "Vender Míticos",
+    Default = ConfigModule.Settings.SellMythic,
+    Callback = function(Value) ConfigModule.Settings.SellMythic = Value ConfigModule.Save() end
+})
+
+-- ABA WEBHOOK DISCORD
 local WebhookSection = Tabs.Webhook:AddSection("Configuração do Webhook")
 WebhookSection:AddToggle("WebhookEnableToggle", {
-    Title = "Ativar Webhook",
+    Title = "Ativar Notificações no Discord",
     Default = ConfigModule.Settings.WebhookEnabled,
     Callback = function(Value) ConfigModule.Settings.WebhookEnabled = Value ConfigModule.Save() end
 })
 WebhookSection:AddInput("WebhookURLBox", {
     Title = "URL do Webhook",
     Default = ConfigModule.Settings.WebhookURL,
+    Placeholder = "Cole o link https://discord.com/api/webhooks/...",
     Finished = true,
     Callback = function(Value) ConfigModule.Settings.WebhookURL = Value ConfigModule.Save() end
 })
+WebhookSection:AddButton({
+    Title = "🧪 Testar Envio no Discord",
+    Callback = function()
+        if ConfigModule.Settings.WebhookURL ~= "" then
+            WebhookModule.Send({
+                ["username"] = "Hub dos Rapazes Bot",
+                ["avatar_url"] = "https://i.imgur.com/8Qf9Z2N.png",
+                ["embeds"] = {{
+                    ["title"] = "✅ Webhook Conectado com Sucesso!",
+                    ["description"] = "As notificações de drops estão ativas.",
+                    ["color"] = 65450,
+                    ["footer"] = { ["text"] = "Hub dos Rapazes • Teste" }
+                }}
+            })
+            Fluent:Notify({ Title = "Webhook", Content = "Mensagem de teste enviada!", Duration = 4 })
+        else
+            Fluent:Notify({ Title = "Erro", Content = "Cole a URL primeiro.", Duration = 4 })
+        end
+    end
+})
+
+local WebhookFilters = Tabs.Webhook:AddSection("Filtros de Alerta")
+WebhookFilters:AddToggle("NotifySecretsToggle", {
+    Title = "Avisar Drops Secretos",
+    Default = ConfigModule.Settings.NotifySecrets,
+    Callback = function(Value) ConfigModule.Settings.NotifySecrets = Value ConfigModule.Save() end
+})
+WebhookFilters:AddToggle("NotifyMythicsToggle", {
+    Title = "Avisar Drops Míticos",
+    Default = ConfigModule.Settings.NotifyMythics,
+    Callback = function(Value) ConfigModule.Settings.NotifyMythics = Value ConfigModule.Save() end
+})
+WebhookFilters:AddToggle("NotifyEveryRunToggle", {
+    Title = "Avisar Todas as Runs (Resumo Geral)",
+    Default = ConfigModule.Settings.NotifyEveryRun,
+    Callback = function(Value) ConfigModule.Settings.NotifyEveryRun = Value ConfigModule.Save() end
+})
 
 -- ABA SETTINGS
-local QuestsSection = Tabs.Settings:AddSection("Missões")
+local QuestsSection = Tabs.Settings:AddSection("Missões (Quests)")
 QuestsSection:AddToggle("AutoClaimQuestsToggle", {
     Title = "Auto-Claim de Missões",
     Default = ConfigModule.Settings.AutoClaimQuests,
@@ -1409,7 +1375,7 @@ QuestsSection:AddButton({
     Title = "⚡ Resgatar Missões Agora",
     Callback = function() pcall(QuestModule.ClaimAll) end
 })
-local SettingsSection = Tabs.Settings:AddSection("Script")
+local SettingsSection = Tabs.Settings:AddSection("Gerenciamento")
 SettingsSection:AddButton({
     Title = "Encerrar Script",
     Callback = UIModule.Shutdown
