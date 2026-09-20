@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (INTERFACE COMPLETA RESTAURADA)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (AUTO ENGAGE RESTAURADO)
 -- ====================================================================
 
 -- [[ 1. TRAVA SINGLETON & LIMPEZA DE AMBIENTE ]]
@@ -915,7 +915,7 @@ function FlowModule.RunIncursion()
     end
 end
 
--- [[ 11. CHECAGEM REAL DE START & PLAYAGAIN ]]
+-- [[ 11. CHECAGEM REAL DE START, ENGAGE & PLAYAGAIN ]]
 local DungeonStateModule = {}
 
 function DungeonStateModule.CheckStart()
@@ -925,6 +925,7 @@ function DungeonStateModule.CheckStart()
     local main = pgui:FindFirstChild("Main")
     if not main then return end
 
+    -- Boss Rush
     local brCreator = main:FindFirstChild("BossRushCreator")
     local brStart = brCreator and brCreator:FindFirstChild("Start", true)
     if brStart and isActuallyVisible(brStart) then
@@ -932,12 +933,29 @@ function DungeonStateModule.CheckStart()
         return
     end
 
+    -- Genérico para outras Dungeons
     for _, btn in ipairs(main:GetDescendants()) do
         if btn:IsA("GuiButton") and (btn.Name == "Start" or btn.Name == "Play") and isActuallyVisible(btn) then
             CharacterModule.TriggerButton(btn)
             return
         end
     end
+end
+
+function DungeonStateModule.CheckEngage()
+    if not ConfigModule.Settings.AutoEngage then return false end
+    local main = pgui and pgui:FindFirstChild("Main")
+    local virusFrame = main and main:FindFirstChild("VirusFrame")
+    if virusFrame and isActuallyVisible(virusFrame) then
+        local confirmBtn = virusFrame:FindFirstChild("Confirm", true) or virusFrame:FindFirstChild("Engage", true)
+        if confirmBtn and confirmBtn:IsA("GuiObject") and isActuallyVisible(confirmBtn) then
+            CharacterModule.TriggerButton(confirmBtn)
+            SharedState.IsVirusActive = true
+            SharedState.IsDungeonEnded = false
+            return true
+        end
+    end
+    return false
 end
 
 function DungeonStateModule.CheckEnd()
@@ -1075,14 +1093,25 @@ task.spawn(function()
                     end
                 else
                     SharedState.IsDungeonEnded = false
-                    if ConfigModule.Settings.SelectedPhase == "Boss Rush" then
-                        FlowModule.RunBossRush()
-                    elseif ConfigModule.Settings.SelectedPhase == "One Piece" then
-                        FlowModule.RunOnePiece()
-                    elseif ConfigModule.Settings.SelectedPhase == "SAO" then
-                        FlowModule.RunSAO()
-                    elseif ConfigModule.Settings.SelectedPhase == "Incursão" then
-                        FlowModule.RunIncursion()
+                    local engaged = false
+                    if ConfigModule.Settings.AutoEngage and not SharedState.IsVirusActive then
+                        engaged = DungeonStateModule.CheckEngage()
+                    end
+
+                    if engaged then
+                        SharedState.IsDungeonEnded = false
+                        SharedState.IsVirusActive = true
+                        task.wait(1.0)
+                    else
+                        if ConfigModule.Settings.SelectedPhase == "Boss Rush" then
+                            FlowModule.RunBossRush()
+                        elseif ConfigModule.Settings.SelectedPhase == "One Piece" then
+                            FlowModule.RunOnePiece()
+                        elseif ConfigModule.Settings.SelectedPhase == "SAO" then
+                            FlowModule.RunSAO()
+                        elseif ConfigModule.Settings.SelectedPhase == "Incursão" then
+                            FlowModule.RunIncursion()
+                        end
                     end
                 end
             else
@@ -1226,6 +1255,15 @@ CombatSection:AddSlider("TweenSpeed", {
     Default = ConfigModule.Settings.TweenSpeed,
     Min = 20, Max = 90, Rounding = 0,
     Callback = function(Value) ConfigModule.Settings.TweenSpeed = Value ConfigModule.Save() end
+})
+CombatSection:AddToggle("AutoEngageToggle", {
+    Title = "Auto Engage (Boss Secreto)",
+    Description = "Confirma a entrada no boss secreto automaticamente",
+    Default = ConfigModule.Settings.AutoEngage,
+    Callback = function(Value) 
+        ConfigModule.Settings.AutoEngage = Value 
+        ConfigModule.Save()
+    end
 })
 CombatSection:AddToggle("AutoPlayAgainToggle", {
     Title = "Auto Play Again",
