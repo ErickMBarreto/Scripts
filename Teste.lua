@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (SAO: TEMPO -> DANO -> QUALQUER UMA)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (SAO BÔNUS 100% CALIBRADO)
 -- ====================================================================
 
 -- [[ 1. TRAVA SINGLETON & LIMPEZA DE AMBIENTE ]]
@@ -187,7 +187,7 @@ function ConfigModule.Load()
 end
 ConfigModule.Load()
 
--- [[ 3. HIERARQUIA VISÍVEL ]]
+-- [[ 3. VERIFICADOR DE HIERARQUIA VISÍVEL ]]
 local function isActuallyVisible(guiObj)
     if not guiObj then return false end
     local current = guiObj
@@ -404,18 +404,29 @@ function CharacterModule.FlyToPortal(targetCFrame)
     SharedState.CurrentTween:Play()
 end
 
+-- CLIQUE NATIVO EM CASCATA COM SUPORTE TOTAL A TOUCH / IMAGEBUTTON
 function CharacterModule.TriggerButton(btn)
     if not btn or not SharedState.IsRunning then return end
     pcall(function()
         if firesignal then
+            if btn.InputBegan then
+                local dummyInput = {
+                    UserInputType = Enum.UserInputType.Touch,
+                    UserInputState = Enum.UserInputState.Begin,
+                    Position = Vector3.new(btn.AbsolutePosition.X + btn.AbsoluteSize.X / 2, btn.AbsolutePosition.Y + btn.AbsoluteSize.Y / 2, 0)
+                }
+                pcall(function() firesignal(btn.InputBegan, dummyInput) end)
+            end
+            if btn.MouseButton1Down then firesignal(btn.MouseButton1Down) end
             if btn.Activated then firesignal(btn.Activated) end
             if btn.MouseButton1Click then firesignal(btn.MouseButton1Click) end
-            if btn.MouseButton1Down then firesignal(btn.MouseButton1Down) end
         end
         if getconnections then
-            for _, evName in ipairs({"Activated", "MouseButton1Click", "MouseButton1Down"}) do
+            for _, evName in ipairs({"Activated", "MouseButton1Click", "MouseButton1Down", "InputBegan"}) do
                 if btn[evName] then
-                    for _, c in ipairs(getconnections(btn[evName])) do c:Fire() end
+                    for _, c in ipairs(getconnections(btn[evName])) do
+                        pcall(function() c:Fire() end)
+                    end
                 end
             end
         end
@@ -803,7 +814,7 @@ function FlowModule.PassPortal(targetCFrame, onCompleteCallback)
     end
 end
 
--- MÓDULO SAO (PRIORIDADE ESTRITA: TEMPO -> DANO -> QUALQUER UMA)
+-- MÓDULO SAO COM LEITURA REAL E DISPARO DE BÔNUS
 local SAOModule = {}
 
 function SAOModule.CheckBonus()
@@ -815,64 +826,70 @@ function SAOModule.CheckBonus()
         SharedState.IsSelectingBonus = true
         CharacterModule.StopMovement()
 
-        -- Coleta os botões reais de cartas visíveis
-        local availableCards = {}
-        for i = 1, 3 do
-            local card = bonuses:FindFirstChild("Bonus" .. i)
+        local cards = {
+            bonuses:FindFirstChild("Bonus1"),
+            bonuses:FindFirstChild("Bonus2"),
+            bonuses:FindFirstChild("Bonus3")
+        }
+
+        local timeCard = nil
+        local damageCard = nil
+        local fallbackCard = nil
+
+        for _, card in ipairs(cards) do
             if card and isActuallyVisible(card) then
-                table.insert(availableCards, card)
-            end
-        end
+                if not fallbackCard then fallbackCard = card end
 
-        if #availableCards == 0 then
-            for _, child in ipairs(bonuses:GetChildren()) do
-                if child:IsA("GuiButton") and isActuallyVisible(child) then
-                    table.insert(availableCards, child)
-                end
-            end
-        end
-
-        if #availableCards > 0 then
-            local timeCard = nil
-            local damageCard = nil
-            local fallbackCard = availableCards[1]
-
-            -- Analisa o texto de cada carta
-            for _, card in ipairs(availableCards) do
-                local fullText = ""
+                -- Coleta todo e qualquer texto do card
+                local gatheredText = ""
                 for _, desc in ipairs(card:GetDescendants()) do
-                    if desc:IsA("TextLabel") and desc.Text ~= "" then
-                        fullText = fullText .. " " .. desc.Text:lower()
+                    if desc:IsA("TextLabel") then
+                        if desc.Text and desc.Text ~= "" then
+                            gatheredText = gatheredText .. " " .. desc.Text:lower()
+                        end
+                        if desc.ContentText and desc.ContentText ~= "" then
+                            gatheredText = gatheredText .. " " .. desc.ContentText:lower()
+                        end
                     end
                 end
 
-                -- Prioridade 1: Tempo
-                if fullText:find("second") or fullText:find("tempo") or fullText:find("timer") or fullText:find("segundo") or fullText:find("time") then
+                -- Lê também os atributos caso os textos estejam armazenados neles
+                pcall(function()
+                    for k, v in pairs(card:GetAttributes()) do
+                        gatheredText = gatheredText .. " " .. tostring(k):lower() .. " " .. tostring(v):lower()
+                    end
+                end)
+
+                -- 1. Prioridade Tempo (segundos, timer, time, 120, etc)
+                if gatheredText:find("second") or gatheredText:find("tempo") or gatheredText:find("timer") or gatheredText:find("segundo") or gatheredText:find("120") then
                     timeCard = card
-                -- Prioridade 2: Dano
-                elseif fullText:find("damage") or fullText:find("dano") or fullText:find("atk") or fullText:find("attack") or fullText:find("strength") then
+                -- 2. Prioridade Dano (damage, dano, atk, strength)
+                elseif gatheredText:find("damage") or gatheredText:find("dano") or gatheredText:find("atk") or gatheredText:find("attack") or gatheredText:find("strength") then
                     damageCard = card
                 end
             end
+        end
 
-            -- Escolhe estritamente: Tempo -> Dano -> Fallback
-            local targetCard = timeCard or damageCard or fallbackCard
+        -- Aplica a regra: Tempo -> Dano -> Fallback
+        local targetCard = timeCard or damageCard or fallbackCard
 
-            if targetCard then
-                CharacterModule.TriggerButton(targetCard)
+        if targetCard then
+            -- Clique na interface com simulação completa
+            CharacterModule.TriggerButton(targetCard)
 
-                local dr = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Dungeon")
-                if dr then
-                    pcall(function()
-                        dr:FireServer("ChooseBonus", targetCard.Name)
-                        dr:FireServer("Bonus", targetCard.Name)
-                        dr:FireServer(targetCard.Name)
-                    end)
-                end
-
-                task.wait(0.5)
-                return true
+            -- Disparo via Remote
+            local dr = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Dungeon")
+            if dr then
+                pcall(function()
+                    dr:FireServer("ChooseBonus", targetCard.Name)
+                    dr:FireServer("Bonus", targetCard.Name)
+                    dr:FireServer(targetCard.Name)
+                    dr:FireServer("SelectBonus", targetCard.Name)
+                end)
             end
+
+            task.wait(0.6)
+            return true
         end
     end
 
@@ -945,7 +962,7 @@ function FlowModule.RunSAO()
     local _, root = CharacterModule.Get()
     if not root or CharacterModule.IsActionBlocked() then return end
 
-    -- 1. Verifica e seleciona as cartas com prioridade
+    -- 1. Verifica e seleciona as cartas de bônus prioritariamente
     if SAOModule.CheckBonus() then
         SharedState.HasTarget = false
         CharacterModule.StopMovement()
