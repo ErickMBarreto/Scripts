@@ -1,5 +1,5 @@
 -- ====================================================================
--- HUB DOS RAPAZES - ANIME DUNGEONS (ANTI-CRASH & MEMORY OPTIMIZED)
+-- HUB DOS RAPAZES - ANIME DUNGEONS (SAO BÔNUS 100% CALIBRADO)
 -- ====================================================================
 
 -- [[ 1. TRAVA SINGLETON & LIMPEZA DE AMBIENTE ]]
@@ -40,10 +40,6 @@ local hasQueuedTeleport = false
 local function queueNextExecution()
     if hasQueuedTeleport then return end
     hasQueuedTeleport = true
-
-    if getgenv and getgenv().HubDosRapazes_Shutdown then
-        pcall(getgenv().HubDosRapazes_Shutdown)
-    end
 
     local queueFunc = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or queueonteleport
     if queueFunc then
@@ -120,8 +116,6 @@ local SharedState = {
     CurrentTargetPos = nil,
     LastPortalAttempt = 0,
     LastStartAttempt = 0,
-    LastBonusCheck = 0,
-    LastBonusClick = 0,
     HasClickedStart = false,
     StartLockUntil = 0,
     RespawnLockUntil = 0,
@@ -193,17 +187,7 @@ function ConfigModule.Load()
 end
 ConfigModule.Load()
 
--- [[ 3. GERENCIADOR DE MEMÓRIA ]]
-task.spawn(function()
-    while SharedState.IsRunning do
-        task.wait(20)
-        pcall(function()
-            collectgarbage("step", 100)
-        end)
-    end
-end)
-
--- [[ 4. HIERARQUIA VISÍVEL ]]
+-- [[ 3. VERIFICADOR DE HIERARQUIA VISÍVEL ]]
 local function isActuallyVisible(guiObj)
     if not guiObj then return false end
     local current = guiObj
@@ -219,7 +203,7 @@ local function isActuallyVisible(guiObj)
     return true
 end
 
--- [[ 5. DISCORD WEBHOOK ]]
+-- [[ 4. DISCORD WEBHOOK ]]
 local WebhookModule = {}
 
 function WebhookModule.Send(payloadTable)
@@ -285,7 +269,7 @@ function WebhookModule.ProcessDungeonDrops()
     end
 end
 
--- [[ 6. PERSONAGEM E MOVIMENTO ]]
+-- [[ 5. PERSONAGEM E MOVIMENTO ESTÁVEL ]]
 local CharacterModule = {}
 local diedConnection = nil
 local charConnection = nil
@@ -420,6 +404,7 @@ function CharacterModule.FlyToPortal(targetCFrame)
     SharedState.CurrentTween:Play()
 end
 
+-- CLIQUE NATIVO EM CASCATA COM SUPORTE TOTAL A TOUCH / IMAGEBUTTON
 function CharacterModule.TriggerButton(btn)
     if not btn or not SharedState.IsRunning then return end
     pcall(function()
@@ -448,10 +433,8 @@ function CharacterModule.TriggerButton(btn)
     end)
 end
 
--- [[ 7. DETECÇÃO DE INIMIGOS COM CACHE ]]
+-- [[ 6. DETECÇÃO DE INIMIGOS ]]
 local TargetingModule = {}
-local cachedEnemies = {}
-local lastEnemyScan = 0
 
 function TargetingModule.GetTargetPart(obj)
     if not obj or not obj.Parent then return nil end
@@ -467,11 +450,6 @@ function TargetingModule.GetTargetPart(obj)
 end
 
 function TargetingModule.GetLivingEnemies(phase)
-    if (tick() - lastEnemyScan) < 0.25 and #cachedEnemies > 0 then
-        return cachedEnemies
-    end
-    lastEnemyScan = tick()
-
     local list = {}
     local char = player.Character
 
@@ -484,7 +462,6 @@ function TargetingModule.GetLivingEnemies(phase)
                 table.insert(list, obj)
             end
         end
-        cachedEnemies = list
         return list
     end
 
@@ -499,7 +476,7 @@ function TargetingModule.GetLivingEnemies(phase)
 
     for _, container in ipairs(searchContainers) do
         if container then
-            for _, desc in ipairs(container:GetChildren()) do
+            for _, desc in ipairs(container:GetDescendants()) do
                 if desc:IsA("Model") and desc ~= char and not Players:GetPlayerFromCharacter(desc) then
                     local hum = desc:FindFirstChildOfClass("Humanoid")
                     if (not hum or hum.Health > 0.1) and TargetingModule.GetTargetPart(desc) then
@@ -510,7 +487,6 @@ function TargetingModule.GetLivingEnemies(phase)
         end
     end
 
-    cachedEnemies = list
     return list
 end
 
@@ -524,7 +500,7 @@ function TargetingModule.GetClosestEnemy(phase)
 
     for _, enemy in ipairs(enemies) do
         local targetPart = TargetingModule.GetTargetPart(enemy)
-        if targetPart and targetPart:IsA("BasePart") and targetPart.Parent then
+        if targetPart and targetPart:IsA("BasePart") then
             local dist = (root.Position - targetPart.Position).Magnitude
             if dist < minDistance then
                 minDistance = dist
@@ -537,7 +513,7 @@ function TargetingModule.GetClosestEnemy(phase)
     return closestEnemy, closestPart
 end
 
--- [[ 8. COMBATE ]]
+-- [[ 7. COMBATE ]]
 local CombatModule = {}
 local attackRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Attack", 10)
 local skillRemote = ReplicatedStorage:WaitForChild("Remotes", 10):FindFirstChild("Skill") or ReplicatedStorage:WaitForChild("Remotes", 10):FindFirstChild("Spell")
@@ -609,7 +585,7 @@ function CombatModule.ExecuteSkills()
     end
 end
 
--- [[ 9. AUTO-SELL & AUTO-FAVORITE ]]
+-- [[ 8. AUTO-SELL & AUTO-FAVORITE ]]
 local AutoSellModule = {}
 local equipRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Equip", 10)
 local lastSellTick = 0
@@ -712,6 +688,61 @@ function AutoSellModule.Execute()
     SharedState.IsSelling = false
 end
 
+-- [[ 9. MISSÕES ]]
+local QuestModule = {}
+local questRemote = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("Quest", 10)
+
+function QuestModule.ClaimAll()
+    if not ConfigModule.Settings.AutoClaimQuests or SharedState.IsClaiming or not SharedState.IsRunning then return end
+    local main = pgui:FindFirstChild("Main")
+    local mainFrame = main and main:FindFirstChild("MainFrame")
+    local questsFrame = mainFrame and mainFrame:FindFirstChild("Quests")
+    local questsHolder = questsFrame and questsFrame:FindFirstChild("QuestsHolder")
+    local claimBtn = questsFrame and questsFrame:FindFirstChild("Information") and questsFrame.Information:FindFirstChild("Claim")
+    if not questsFrame or not questsHolder or not claimBtn then return end
+
+    SharedState.IsClaiming = true
+    local originalVisible = questsFrame.Visible
+    questsFrame.Visible = false
+
+    local tabs = {
+        questsFrame:FindFirstChild("Buttons") and questsFrame.Buttons:FindFirstChild("Hourly"),
+        questsFrame:FindFirstChild("Buttons") and questsFrame.Buttons:FindFirstChild("Daily"),
+        questsFrame:FindFirstChild("Weekly")
+    }
+
+    for _, tab in ipairs(tabs) do
+        if tab then
+            CharacterModule.TriggerButton(tab)
+            task.wait(0.12)
+            for _, slot in ipairs(questsHolder:GetChildren()) do
+                if slot:IsA("GuiButton") then
+                    local pLabel = slot:FindFirstChild("QuestProgress", true)
+                    if pLabel and pLabel:IsA("TextLabel") then
+                        local txt = pLabel.Text:lower()
+                        if txt == "claim" or txt == "resgatar" or txt == "completed" then
+                            CharacterModule.TriggerButton(slot)
+                            task.wait(0.1)
+                            CharacterModule.TriggerButton(claimBtn)
+                            if questRemote then
+                                pcall(function()
+                                    questRemote:FireServer("Claim", slot.Name)
+                                    questRemote:FireServer(slot.Name)
+                                end)
+                            end
+                            claimed = claimed + 1
+                            task.wait(0.12)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    questsFrame.Visible = originalVisible
+    SharedState.IsClaiming = false
+end
+
 -- [[ 10. FLUXO DAS FASES ]]
 local FlowModule = {}
 
@@ -783,26 +814,17 @@ function FlowModule.PassPortal(targetCFrame, onCompleteCallback)
     end
 end
 
--- SELETOR SAO ULTRA-ESTÁVEL (SEM VAZAMENTO DE MEMÓRIA)
+-- MÓDULO SAO COM LEITURA REAL E DISPARO DE BÔNUS
 local SAOModule = {}
 
 function SAOModule.CheckBonus()
-    if (tick() - SharedState.LastBonusCheck) < 0.4 then 
-        return SharedState.IsSelectingBonus 
-    end
-    SharedState.LastBonusCheck = tick()
-
-    local main = pgui and pgui:FindFirstChild("Main")
+    local main = pgui:FindFirstChild("Main")
     local dungeonFrame = main and main:FindFirstChild("DungeonFrame")
     local bonuses = dungeonFrame and dungeonFrame:FindFirstChild("Bonuses")
 
     if bonuses and isActuallyVisible(bonuses) then
         SharedState.IsSelectingBonus = true
         CharacterModule.StopMovement()
-
-        if (tick() - SharedState.LastBonusClick) < 1.0 then
-            return true
-        end
 
         local cards = {
             bonuses:FindFirstChild("Bonus1"),
@@ -818,8 +840,9 @@ function SAOModule.CheckBonus()
             if card and isActuallyVisible(card) then
                 if not fallbackCard then fallbackCard = card end
 
+                -- Coleta todo e qualquer texto do card
                 local gatheredText = ""
-                for _, desc in ipairs(card:GetChildren()) do
+                for _, desc in ipairs(card:GetDescendants()) do
                     if desc:IsA("TextLabel") then
                         if desc.Text and desc.Text ~= "" then
                             gatheredText = gatheredText .. " " .. desc.Text:lower()
@@ -830,32 +853,42 @@ function SAOModule.CheckBonus()
                     end
                 end
 
+                -- Lê também os atributos caso os textos estejam armazenados neles
                 pcall(function()
                     for k, v in pairs(card:GetAttributes()) do
                         gatheredText = gatheredText .. " " .. tostring(k):lower() .. " " .. tostring(v):lower()
                     end
                 end)
 
+                -- 1. Prioridade Tempo (segundos, timer, time, 120, etc)
                 if gatheredText:find("second") or gatheredText:find("tempo") or gatheredText:find("timer") or gatheredText:find("segundo") or gatheredText:find("120") then
                     timeCard = card
+                -- 2. Prioridade Dano (damage, dano, atk, strength)
                 elseif gatheredText:find("damage") or gatheredText:find("dano") or gatheredText:find("atk") or gatheredText:find("attack") or gatheredText:find("strength") then
                     damageCard = card
                 end
             end
         end
 
+        -- Aplica a regra: Tempo -> Dano -> Fallback
         local targetCard = timeCard or damageCard or fallbackCard
 
         if targetCard then
-            SharedState.LastBonusClick = tick()
+            -- Clique na interface com simulação completa
             CharacterModule.TriggerButton(targetCard)
 
+            -- Disparo via Remote
             local dr = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Dungeon")
             if dr then
                 pcall(function()
                     dr:FireServer("ChooseBonus", targetCard.Name)
+                    dr:FireServer("Bonus", targetCard.Name)
+                    dr:FireServer(targetCard.Name)
+                    dr:FireServer("SelectBonus", targetCard.Name)
                 end)
             end
+
+            task.wait(0.6)
             return true
         end
     end
@@ -929,6 +962,7 @@ function FlowModule.RunSAO()
     local _, root = CharacterModule.Get()
     if not root or CharacterModule.IsActionBlocked() then return end
 
+    -- 1. Verifica e seleciona as cartas de bônus prioritariamente
     if SAOModule.CheckBonus() then
         SharedState.HasTarget = false
         CharacterModule.StopMovement()
@@ -984,16 +1018,17 @@ function FlowModule.RunIncursion()
     end
 end
 
--- [[ 11. CHECAGEM DE START, ENGAGE & PLAYAGAIN ]]
+-- [[ 11. CHECAGEM REAL DE START, ENGAGE & PLAYAGAIN ]]
 local DungeonStateModule = {}
 
 function DungeonStateModule.CheckStart()
-    if not pgui or (tick() - SharedState.LastStartAttempt) < 1.0 then return end
+    if not pgui or (tick() - SharedState.LastStartAttempt) < 0.8 then return end
     SharedState.LastStartAttempt = tick()
     
     local main = pgui:FindFirstChild("Main")
     if not main then return end
 
+    -- Boss Rush
     local brCreator = main:FindFirstChild("BossRushCreator")
     local brStart = brCreator and brCreator:FindFirstChild("Start", true)
     if brStart and isActuallyVisible(brStart) then
@@ -1001,6 +1036,7 @@ function DungeonStateModule.CheckStart()
         return
     end
 
+    -- Genérico para outras Dungeons
     for _, btn in ipairs(main:GetDescendants()) do
         if btn:IsA("GuiButton") and (btn.Name == "Start" or btn.Name == "Play") and isActuallyVisible(btn) then
             CharacterModule.TriggerButton(btn)
@@ -1119,7 +1155,7 @@ task.spawn(function()
                 CombatModule.ExecuteSkills()
             end
         end
-        task.wait(0.12)
+        task.wait(0.1)
     end
 end)
 
@@ -1470,6 +1506,16 @@ WebhookFilters:AddToggle("NotifyEveryRunToggle", {
 })
 
 -- ABA SETTINGS
+local QuestsSection = Tabs.Settings:AddSection("Missões (Quests)")
+QuestsSection:AddToggle("AutoClaimQuestsToggle", {
+    Title = "Auto-Claim de Missões",
+    Default = ConfigModule.Settings.AutoClaimQuests,
+    Callback = function(Value) ConfigModule.Settings.AutoClaimQuests = Value ConfigModule.Save() end
+})
+QuestsSection:AddButton({
+    Title = "⚡ Resgatar Missões Agora",
+    Callback = function() pcall(QuestModule.ClaimAll) end
+})
 local SettingsSection = Tabs.Settings:AddSection("Gerenciamento")
 SettingsSection:AddButton({
     Title = "Encerrar Script",
