@@ -839,6 +839,7 @@ local currentQuestReps = 0
 local lastQuestCompletedFlag = false
 local selectedQuestIndex = math.clamp(tonumber(settings.savedQuestIndex) or 1, 1, #GRIND_QUESTS)
 local lastQuestActionTime = 0
+local repeatCooldownUntil = 0
 
 local function parseActiveQuest()
     local hasActiveQuest = false
@@ -877,7 +878,7 @@ local function parseActiveQuest()
                     end
                 end
             end
-            if (#repeatButtons > 0 and #pendingTargets == 0) or (#questSummary > 0 and #pendingTargets == 0) then
+            if #questSummary > 0 and #pendingTargets == 0 then
                 allCompleted = true
             end
         end
@@ -1312,7 +1313,7 @@ task.spawn(function()
 
         if settings.autoGrind and not isTraveling and not isGrindingMob and not isQuestBusy and root and tick() >= islandSettleUntil then
             local qRemote = getQuestsRemote()
-            if allComp and not lastQuestCompletedFlag then
+            if allComp and not lastQuestCompletedFlag and tick() >= repeatCooldownUntil then
                 lastQuestCompletedFlag = true
                 currentQuestReps = currentQuestReps + 1
             elseif not allComp then
@@ -1325,9 +1326,9 @@ task.spawn(function()
                     lastQuestActionTime = tick()
                     triggeredQuestAction = true
                     travelAndAcceptQuest(qEntry, false)
-                elseif allComp and (tick() - lastQuestActionTime) > 1.3 then
+                elseif allComp and tick() >= repeatCooldownUntil and (tick() - lastQuestActionTime) > 1.3 then
                     lastQuestActionTime = tick()
-                    triggeredQuestAction = true
+                    repeatCooldownUntil = tick() + 1.2
                     if settings.autoAdvanceQuest and currentQuestReps >= settings.questRepeatGoal then
                         currentQuestReps = 0
                         lastQuestCompletedFlag = false
@@ -1341,8 +1342,8 @@ task.spawn(function()
                     else
                         pcall(function() qRemote:FireServer("Repeat") end)
                         for _, btn in ipairs(repeatButtons) do clickGuiButton(btn) end
-                        task.wait(0.35)
                         lastQuestCompletedFlag = false
+                        triggeredQuestAction = false
                     end
                 end
             end
@@ -1369,4 +1370,3 @@ task.spawn(function()
         task.wait(0.35)
     end
 end)
-
