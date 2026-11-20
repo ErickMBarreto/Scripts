@@ -840,12 +840,218 @@ local lastQuestCompletedFlag = false
 local selectedQuestIndex = math.clamp(tonumber(settings.savedQuestIndex) or 1, 1, #GRIND_QUESTS)
 local lastQuestActionTime = 0
 
+local function parseActiveQuest()
+    local hasActiveQuest = false
+    local pendingTargets = {}
+    local allCompleted = false
+    local repeatButtons = {}
+    local questSummary = {}
+    local activeTitle = ""
+
+    pcall(function()
+        local aq = pGui:FindFirstChild("ScreenGuis")
+            and pGui.ScreenGuis:FindFirstChild("MainUI")
+            and pGui.ScreenGuis.MainUI:FindFirstChild("ProgressHUD")
+            and pGui.ScreenGuis.MainUI.ProgressHUD:FindFirstChild("ActiveQuest")
+        if aq and aq.Visible then
+            hasActiveQuest = true
+            local repBox = aq:FindFirstChild("Container") and aq.Container:FindFirstChild("RepeatQuest")
+            if repBox and repBox.Visible then
+                for _, child in ipairs(repBox:GetDescendants()) do
+                    if child:IsA("GuiButton") and child.Visible then
+                        table.insert(repeatButtons, child)
+                    end
+                end
+            end
+            for _, desc in ipairs(aq:GetDescendants()) do
+                if desc:IsA("TextLabel") and desc.Visible and desc.Text ~= "" then
+                    local txt = desc.Text
+                    if desc.Name == "Title" and txt ~= "REPEAT QUEST" then activeTitle = txt end
+                    local mobName, curStr, maxStr = txt:match("^Defeat%s+(.+):%s*(%d+)%s*/%s*(%d+)$")
+                        or txt:match("^([^:]+):%s*(%d+)%s*/%s*(%d+)$")
+                    if mobName and curStr and maxStr then
+                        local cVal = tonumber(curStr) or 0
+                        local mVal = tonumber(maxStr) or 1
+                        table.insert(questSummary, string.format("%s (%d/%d)", mobName, cVal, mVal))
+                        if cVal < mVal then table.insert(pendingTargets, mobName:lower()) end
+                    end
+                end
+            end
+            if (#repeatButtons > 0 and #pendingTargets == 0) or (#questSummary > 0 and #pendingTargets == 0) then
+                allCompleted = true
+            end
+        end
+    end)
+    return hasActiveQuest, pendingTargets, allCompleted, repeatButtons, questSummary, activeTitle
+end
+
+local function isMobAlive(mob)
+    if not mob or not mob.Parent then return false end
+    if mob:GetAttribute("Dead") == true then return false end
+    local hrp = mob:FindFirstChild("HumanoidRootPart")
+    if not hrp or not hrp:IsA("BasePart") then return false end
+    local head = mob:FindFirstChild("Head")
+    if head and head:IsA("BasePart") and head.Transparency >= 0.9 then return false end
+    local hum = mob:FindFirstChildOfClass("Humanoid")
+    if hum then
+        local hHP = hum:GetAttribute("HandlerHealth")
+        if type(hHP) == "number" and hHP <= 0 then return false end
+    end
+    return true
+end
+
+local function mobMatchesTargetList(mob, pendingTargets)
+    if #pendingTargets == 0 then return true end
+    local cands = {
+        tostring(mob:GetAttribute("OriginalName") or ""):lower(),
+        tostring(mob:GetAttribute("AlternativeName") or ""):lower(),
+        mob.Name:lower()
+    }
+    for _, tKey in ipairs(pendingTargets) do
+        for _, c in ipairs(cands) do
+            if c ~= "" and (c:find(tKey, 1, true) or tKey:find(c, 1, true)) then return true end
+        end
+    end
+    return false
+end
+
+local function findBestGrindMob(pendingTargets, islandAnchorPos, allowAnyInIsland)
+    local enemys = Workspace:FindFirstChild("Playability") and Workspace.Playability:FindFirstChild("Enemys")
+    if not enemys or not root then return nil end
+    local bestMob, bestScore = nil, math.huge
+    for _, mob in ipairs(enemys:GetChildren()) do
+        if isMobAlive(mob) and (allowAnyInIsland or mobMatchesTargetList(mob, pendingTargets)) then
+            local hrp = mob:FindFirstChild("HumanoidRootPart")
+            local distIsl = islandAnchorPos and (hrp.Position - islandAnchorPos).Magnitude or 0
+            if not islandAnchorPos or distIsl <= 3000 then
+                local dist = (hrp.Position - root.Position).Magnitude
+                local bonus = (mob:GetAttribute("Render") == true) and -400 or 0
+                local score = dist + bonus
+                if score < bestScore then
+                    bestScore = score
+                    bestMob = mob
+                end
+            end
+        end
+    end
+    return bestMob
+end
+
+local function equipCombatTool()
+    if not char then return nil end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return nil end
+    for _, t in ipairs(char:GetChildren()) do
+        if t:IsA("Tool") and not t.Name:lower():find("fruit") then return t end
+    end
+    local bp = player:FindFirstChild("Backpack")
+    if bp then
+        for _, t in ipairs(bp:GetChildren()) do
+            if t:IsA("Tool") and not t.Name:lower():find("fruit") then
+                hum:EquipTool(t)
+                task.wait(0.15)
+                return t
+            end
+        end
+    end
+    return nil
+end
+
+local function triggerCombatAttack(equippedTool, targetMob)
+    pcall(function()
+        if equippedTool and equippedTool.Parent == char then equippedTool:Activate() end
+    end)
+    pcall(function()
+        local combatRE = ReplicatedStorage:FindFirstChild("NetworkInstances")
+            and ReplicatedStorage.NetworkInstances:FindFirstChild("RemoteEvents")
+            and ReplicatedStorage.NetworkInstances.RemoteEvents:FindFirstChild("CombatTools")
+        if combatRE and combatRE:IsA("RemoteEvent") then
+            combatRE:FireServer(targetMob)
+        end
+    end)
+end
+
+local function applyHoverLock(hrp, hoverOffsetY)
+    if not root or not hrp then return nil end
+    local lockedPos = hrp.Position + Vector3.new(0, hoverOffsetY, 0)
+    local lookCf = CFrame.lookAt(lockedPos, hrp.Position)
+    root.CFrame = lookCf
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+
+    local bp = root:FindFirstChild("RPGHoverBP")
+    if not bp then
+        bp = Instance.new("BodyPosition")
+        bp.Name = "RPGHoverBP"
+        bp.MaxForce = Vector3.new(1e6, 1e6, 1e6)
+        bp.P = 15000
+        bp.D = 1200
+        bp.Parent = root
+    end
+    bp.Position = lockedPos
+
+    local bg = root:FindFirstChild("RPGHoverGyro")
+    if not bg then
+        bg = Instance.new("BodyGyro")
+        bg.Name = "RPGHoverGyro"
+        bg.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
+        bg.P = 15000
+        bg.D = 500
+        bg.Parent = root
+    end
+    bg.CFrame = lookCf
+    return lockedPos
+end
+
+local function engageGrindTarget(targetMob)
+    if not targetMob or not root then return end
+    local hrp = targetMob:FindFirstChild("HumanoidRootPart")
+    local hum = targetMob:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hrp.Parent then return end
+
+    local mLabel = tostring(targetMob:GetAttribute("OriginalName") or targetMob.Name)
+    if (hrp.Position - root.Position).Magnitude > 45 then
+        isTraveling = true
+        moveRootToPosition(hrp.Position + Vector3.new(0, settings.grindHeight, 0), mLabel, nil, false)
+        isTraveling = false
+    end
+
+    if isTraveling or isQuestBusy or not hrp.Parent or not isMobAlive(targetMob) then return end
+
+    isGrindingMob = true
+    local lockedPos = applyHoverLock(hrp, settings.grindHeight)
+    local tool = equipCombatTool()
+
+    while settings.autoGrind and not isTraveling and not isQuestBusy and isMobAlive(targetMob) and hrp.Parent do
+        local _, pTargetsNow, cNow = parseActiveQuest()
+        if cNow and #pTargetsNow == 0 then break end
+
+        local des = hrp.Position + Vector3.new(0, settings.grindHeight, 0)
+        if not lockedPos or (des - lockedPos).Magnitude > 4.5 then
+            lockedPos = applyHoverLock(hrp, settings.grindHeight)
+        end
+
+        local hHP = hum and hum:GetAttribute("HandlerHealth")
+        StatusLabel.Text = type(hHP) == "number"
+            and string.format("Travado em %s [HP: %.0f]...", mLabel, math.max(0, hHP))
+            or string.format("Travado em %s...", mLabel)
+
+        if not tool or tool.Parent ~= char then tool = equipCombatTool() end
+        triggerCombatAttack(tool, targetMob)
+        task.wait(0.25)
+    end
+
+    clearHoverConstraints(root)
+    isGrindingMob = false
+end
+
 createToggleRow(GrindPage, "autoGrind", "Auto-Farm de Inimigos", settings.autoGrind, function(v)
     settings.autoGrind = v
     if not v then
         questRunToken = questRunToken + 1
         isQuestBusy = false
         isTraveling = false
+        isGrindingMob = false
         if root then clearHoverConstraints(root) end
     end
     saveSettings()
@@ -956,7 +1162,7 @@ local function travelAndAcceptQuest(qEntry, abandonFirst)
     settleAfterTouchdown(standPos, lookTarget, 1.0, myToken)
     if not isTokenValid(myToken) then return end
 
-    islandSettleUntil = tick() + 1.2
+    islandSettleUntil = tick() + 0.8
     if myToken == questRunToken then
         isTraveling = false
         isQuestBusy = false
@@ -1090,167 +1296,6 @@ for _, isl in ipairs(ISLAND_ORDER) do
     end)
 end
 
-local function parseActiveQuest()
-    local hasActiveQuest = false
-    local pendingTargets = {}
-    local allCompleted = false
-    local repeatButtons = {}
-    local questSummary = {}
-    local activeTitle = ""
-
-    pcall(function()
-        local aq = pGui:FindFirstChild("ScreenGuis")
-            and pGui.ScreenGuis:FindFirstChild("MainUI")
-            and pGui.ScreenGuis.MainUI:FindFirstChild("ProgressHUD")
-            and pGui.ScreenGuis.MainUI.ProgressHUD:FindFirstChild("ActiveQuest")
-        if aq and aq.Visible then
-            hasActiveQuest = true
-            local repBox = aq:FindFirstChild("Container") and aq.Container:FindFirstChild("RepeatQuest")
-            if repBox and repBox.Visible then
-                for _, child in ipairs(repBox:GetDescendants()) do
-                    if child:IsA("GuiButton") then table.insert(repeatButtons, child) end
-                end
-            end
-            for _, desc in ipairs(aq:GetDescendants()) do
-                if desc:IsA("TextLabel") and desc.Visible and desc.Text ~= "" then
-                    local txt = desc.Text
-                    if desc.Name == "Title" and txt ~= "REPEAT QUEST" then activeTitle = txt end
-                    local mobName, curStr, maxStr = txt:match("^Defeat%s+(.+):%s*(%d+)%s*/%s*(%d+)$")
-                        or txt:match("^([^:]+):%s*(%d+)%s*/%s*(%d+)$")
-                    if mobName and curStr and maxStr then
-                        local cVal = tonumber(curStr) or 0
-                        local mVal = tonumber(maxStr) or 1
-                        table.insert(questSummary, string.format("%s (%d/%d)", mobName, cVal, mVal))
-                        if cVal < mVal then table.insert(pendingTargets, mobName:lower()) end
-                    end
-                end
-            end
-            if #repeatButtons > 0 or (#questSummary > 0 and #pendingTargets == 0) then
-                allCompleted = true
-            end
-        end
-    end)
-    return hasActiveQuest, pendingTargets, allCompleted, repeatButtons, questSummary, activeTitle
-end
-
-local function isMobAlive(mob)
-    if not mob or not mob.Parent then return false end
-    if mob:GetAttribute("Dead") == true then return false end
-    local hrp = mob:FindFirstChild("HumanoidRootPart")
-    if not hrp or not hrp:IsA("BasePart") then return false end
-    local head = mob:FindFirstChild("Head")
-    if head and head:IsA("BasePart") and head.Transparency >= 0.9 then return false end
-    local hum = mob:FindFirstChildOfClass("Humanoid")
-    if hum then
-        local hHP = hum:GetAttribute("HandlerHealth")
-        if type(hHP) == "number" and hHP <= 0 then return false end
-    end
-    return true
-end
-
-local function mobMatchesTargetList(mob, pendingTargets)
-    if #pendingTargets == 0 then return true end
-    local cands = {
-        tostring(mob:GetAttribute("OriginalName") or ""):lower(),
-        tostring(mob:GetAttribute("AlternativeName") or ""):lower(),
-        mob.Name:lower()
-    }
-    for _, tKey in ipairs(pendingTargets) do
-        for _, c in ipairs(cands) do
-            if c ~= "" and (c:find(tKey, 1, true) or tKey:find(c, 1, true)) then return true end
-        end
-    end
-    return false
-end
-
-local function findBestGrindMob(pendingTargets, islandAnchorPos, allowAnyInIsland)
-    local enemys = Workspace:FindFirstChild("Playability") and Workspace.Playability:FindFirstChild("Enemys")
-    if not enemys or not root then return nil end
-    local bestMob, bestScore = nil, math.huge
-    for _, mob in ipairs(enemys:GetChildren()) do
-        if isMobAlive(mob) and (allowAnyInIsland or mobMatchesTargetList(mob, pendingTargets)) then
-            local hrp = mob:FindFirstChild("HumanoidRootPart")
-            local distIsl = islandAnchorPos and (hrp.Position - islandAnchorPos).Magnitude or 0
-            if not islandAnchorPos or distIsl <= 3000 then
-                local dist = (hrp.Position - root.Position).Magnitude
-                local bonus = (mob:GetAttribute("Render") == true) and -400 or 0
-                local score = dist + bonus
-                if score < bestScore then
-                    bestScore = score
-                    bestMob = mob
-                end
-            end
-        end
-    end
-    return bestMob
-end
-
-local function equipCombatTool()
-    if not char then return nil end
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hum then return nil end
-    for _, t in ipairs(char:GetChildren()) do
-        if t:IsA("Tool") and not t.Name:lower():find("fruit") then return t end
-    end
-    local bp = player:FindFirstChild("Backpack")
-    if bp then
-        for _, t in ipairs(bp:GetChildren()) do
-            if t:IsA("Tool") and not t.Name:lower():find("fruit") then
-                hum:EquipTool(t)
-                task.wait(0.15)
-                return t
-            end
-        end
-    end
-    return nil
-end
-
-local function triggerCombatAttack(equippedTool, targetMob)
-    pcall(function()
-        if equippedTool and equippedTool.Parent == char then equippedTool:Activate() end
-    end)
-    pcall(function()
-        local combatRE = ReplicatedStorage:FindFirstChild("NetworkInstances")
-            and ReplicatedStorage.NetworkInstances:FindFirstChild("RemoteEvents")
-            and ReplicatedStorage.NetworkInstances.RemoteEvents:FindFirstChild("CombatTools")
-        if combatRE and combatRE:IsA("RemoteEvent") then
-            combatRE:FireServer(targetMob)
-        end
-    end)
-end
-
-local function applyHoverLock(hrp, hoverOffsetY)
-    if not root or not hrp then return nil end
-    local lockedPos = hrp.Position + Vector3.new(0, hoverOffsetY, 0)
-    local lookCf = CFrame.lookAt(lockedPos, hrp.Position)
-    root.CFrame = lookCf
-    root.AssemblyLinearVelocity = Vector3.zero
-    root.AssemblyAngularVelocity = Vector3.zero
-
-    local bp = root:FindFirstChild("RPGHoverBP")
-    if not bp then
-        bp = Instance.new("BodyPosition")
-        bp.Name = "RPGHoverBP"
-        bp.MaxForce = Vector3.new(1e6, 1e6, 1e6)
-        bp.P = 15000
-        bp.D = 1200
-        bp.Parent = root
-    end
-    bp.Position = lockedPos
-
-    local bg = root:FindFirstChild("RPGHoverGyro")
-    if not bg then
-        bg = Instance.new("BodyGyro")
-        bg.Name = "RPGHoverGyro"
-        bg.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
-        bg.P = 15000
-        bg.D = 500
-        bg.Parent = root
-    end
-    bg.CFrame = lookCf
-    return lockedPos
-end
-
 task.spawn(function()
     if not char then char = player.CharacterAdded:Wait() end
     root = char:WaitForChild("HumanoidRootPart")
@@ -1274,12 +1319,15 @@ task.spawn(function()
                 lastQuestCompletedFlag = false
             end
 
+            local triggeredQuestAction = false
             if settings.autoAcceptQuest and qRemote then
                 if not hasAQ and (tick() - lastQuestActionTime) > 2.2 then
                     lastQuestActionTime = tick()
+                    triggeredQuestAction = true
                     travelAndAcceptQuest(qEntry, false)
                 elseif allComp and (tick() - lastQuestActionTime) > 1.3 then
                     lastQuestActionTime = tick()
+                    triggeredQuestAction = true
                     if settings.autoAdvanceQuest and currentQuestReps >= settings.questRepeatGoal then
                         currentQuestReps = 0
                         lastQuestCompletedFlag = false
@@ -1293,15 +1341,16 @@ task.spawn(function()
                     else
                         pcall(function() qRemote:FireServer("Repeat") end)
                         for _, btn in ipairs(repeatButtons) do clickGuiButton(btn) end
+                        task.wait(0.35)
+                        lastQuestCompletedFlag = false
                     end
                 end
             end
 
-            if not isTraveling and not isQuestBusy then
+            if not triggeredQuestAction and not isTraveling and not isQuestBusy then
                 local islSpawn = ISLAND_SPAWNS[qEntry.island]
                 local targetMob = findBestGrindMob(pTargets, islSpawn, false) or findBestGrindMob(pTargets, islSpawn, true)
 
-                -- Se nao achou mob por perto ainda, aproxima do spawn da ilha para carregar inimigos
                 if not targetMob and islSpawn and (islSpawn - root.Position).Magnitude > 120 then
                     isTraveling = true
                     moveRootToPosition(islSpawn, qEntry.island, nil, false)
@@ -1310,36 +1359,7 @@ task.spawn(function()
                 end
 
                 if targetMob then
-                    local hrp = targetMob:FindFirstChild("HumanoidRootPart")
-                    local hum = targetMob:FindFirstChildOfClass("Humanoid")
-                    local mLabel = tostring(targetMob:GetAttribute("OriginalName") or targetMob.Name)
-                    if hrp and (hrp.Position - root.Position).Magnitude > 45 then
-                        isTraveling = true
-                        moveRootToPosition(hrp.Position + Vector3.new(0, settings.grindHeight, 0), mLabel, nil, false)
-                        isTraveling = false
-                    end
-                    if not isTraveling and not isQuestBusy and hrp and hrp.Parent and isMobAlive(targetMob) then
-                        isGrindingMob = true
-                        local lockedPos = applyHoverLock(hrp, settings.grindHeight)
-                        local tool = equipCombatTool()
-                        while settings.autoGrind and not isTraveling and not isQuestBusy and isMobAlive(targetMob) and hrp.Parent do
-                            local _, _, cNow = parseActiveQuest()
-                            if cNow then break end
-                            local des = hrp.Position + Vector3.new(0, settings.grindHeight, 0)
-                            if not lockedPos or (des - lockedPos).Magnitude > 4.5 then
-                                lockedPos = applyHoverLock(hrp, settings.grindHeight)
-                            end
-                            local hHP = hum and hum:GetAttribute("HandlerHealth")
-                            StatusLabel.Text = type(hHP) == "number"
-                                and string.format("Travado em %s [HP: %.0f]...", mLabel, math.max(0, hHP))
-                                or string.format("Travado em %s...", mLabel)
-                            if not tool or tool.Parent ~= char then tool = equipCombatTool() end
-                            triggerCombatAttack(tool, targetMob)
-                            task.wait(0.25)
-                        end
-                        clearHoverConstraints(root)
-                        isGrindingMob = false
-                    end
+                    engageGrindTarget(targetMob)
                 else
                     clearHoverConstraints(root)
                     StatusLabel.Text = "Aguardando respawn em " .. qEntry.island .. "..."
@@ -1349,3 +1369,4 @@ task.spawn(function()
         task.wait(0.35)
     end
 end)
+
