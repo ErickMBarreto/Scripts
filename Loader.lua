@@ -836,10 +836,9 @@ HopNowBtn.MouseButton1Click:Connect(executeServerHop)
 -- [MODULO: AUTO_GRIND]
 -- ============================================================================
 local currentQuestReps = 0
-local lastQuestCompletedFlag = false
 local selectedQuestIndex = math.clamp(tonumber(settings.savedQuestIndex) or 1, 1, #GRIND_QUESTS)
-local lastQuestActionTime = 0
-local repeatCooldownUntil = 0
+local botState = "IDLE" -- IDLE | HUNTING | REPEATING | ADVANCING
+local lastRepeatSentAt = 0
 
 local function parseActiveQuest()
     local hasActiveQuest = false
@@ -886,6 +885,23 @@ local function parseActiveQuest()
     return hasActiveQuest, pendingTargets, allCompleted, repeatButtons, questSummary, activeTitle
 end
 
+local function buildTargetKeywords(pendingTargets, qEntry)
+    local keys = {}
+    for _, t in ipairs(pendingTargets) do
+        local clean = tostring(t):lower():gsub("^defeat%s+", ""):match("^%s*(.-)%s*$")
+        if clean and clean ~= "" then
+            table.insert(keys, clean)
+        end
+    end
+    if #keys == 0 and qEntry and qEntry.quest then
+        local fromQuest = tostring(qEntry.quest):lower():gsub("^defeat%s+", ""):match("^%s*(.-)%s*$")
+        if fromQuest and fromQuest ~= "" then
+            table.insert(keys, fromQuest)
+        end
+    end
+    return keys
+end
+
 local function isMobAlive(mob)
     if not mob or not mob.Parent then return false end
     if mob:GetAttribute("Dead") == true then return false end
@@ -901,30 +917,33 @@ local function isMobAlive(mob)
     return true
 end
 
-local function mobMatchesTargetList(mob, pendingTargets)
-    if #pendingTargets == 0 then return true end
+local function mobMatchesQuestKeywords(mob, keywords)
+    if #keywords == 0 then return false end
     local cands = {
         tostring(mob:GetAttribute("OriginalName") or ""):lower(),
         tostring(mob:GetAttribute("AlternativeName") or ""):lower(),
         mob.Name:lower()
     }
-    for _, tKey in ipairs(pendingTargets) do
-        for _, c in ipairs(cands) do
-            if c ~= "" and (c:find(tKey, 1, true) or tKey:find(c, 1, true)) then return true end
+    for _, key in ipairs(keywords) do
+        for _, cand in ipairs(cands) do
+            if cand ~= "" and (cand:find(key, 1, true) or key:find(cand, 1, true)) then
+                return true
+            end
         end
     end
     return false
 end
 
-local function findBestGrindMob(pendingTargets, islandAnchorPos, allowAnyInIsland)
+local function findQuestMob(keywords, islandAnchorPos)
     local enemys = Workspace:FindFirstChild("Playability") and Workspace.Playability:FindFirstChild("Enemys")
-    if not enemys or not root then return nil end
+    if not enemys or not root or #keywords == 0 then return nil end
+
     local bestMob, bestScore = nil, math.huge
     for _, mob in ipairs(enemys:GetChildren()) do
-        if isMobAlive(mob) and (allowAnyInIsland or mobMatchesTargetList(mob, pendingTargets)) then
+        if isMobAlive(mob) and mobMatchesQuestKeywords(mob, keywords) then
             local hrp = mob:FindFirstChild("HumanoidRootPart")
             local distIsl = islandAnchorPos and (hrp.Position - islandAnchorPos).Magnitude or 0
-            if not islandAnchorPos or distIsl <= 3000 then
+            if not islandAnchorPos or distIsl <= 3200 then
                 local dist = (hrp.Position - root.Position).Magnitude
                 local bonus = (mob:GetAttribute("Render") == true) and -400 or 0
                 local score = dist + bonus
@@ -1004,46 +1023,58 @@ local function applyHoverLock(hrp, hoverOffsetY)
     return lockedPos
 end
 
-local function engageGrindTarget(targetMob)
-    if not targetMob or not root then return end
-    local hrp = targetMob:FindFirstChild("HumanoidRootPart")
-    local hum = targetMob:FindFirstChildOfClass("Humanoid")
-    if not hrp or not hrp.Parent then return end
+local function runAcceptMissionAtNpc(qEntry, abandonFirst)
+    if not qEntry or not root then return end
+    questRunToken = questRunToken + 1
+    local myToken = questRunToken
 
-    local mLabel = tostring(targetMob:GetAttribute("OriginalName") or targetMob.Name)
-    if (hrp.Position - root.Position).Magnitude > 45 then
-        isTraveling = true
-        moveRootToPosition(hrp.Position + Vector3.new(0, settings.grindHeight, 0), mLabel, nil, false)
-        isTraveling = false
-    end
-
-    if isTraveling or isQuestBusy or not hrp.Parent or not isMobAlive(targetMob) then return end
-
-    isGrindingMob = true
-    local lockedPos = applyHoverLock(hrp, settings.grindHeight)
-    local tool = equipCombatTool()
-
-    while settings.autoGrind and not isTraveling and not isQuestBusy and isMobAlive(targetMob) and hrp.Parent do
-        local _, pTargetsNow, cNow = parseActiveQuest()
-        if cNow and #pTargetsNow == 0 then break end
-
-        local des = hrp.Position + Vector3.new(0, settings.grindHeight, 0)
-        if not lockedPos or (des - lockedPos).Magnitude > 4.5 then
-            lockedPos = applyHoverLock(hrp, settings.grindHeight)
-        end
-
-        local hHP = hum and hum:GetAttribute("HandlerHealth")
-        StatusLabel.Text = type(hHP) == "number"
-            and string.format("Travado em %s [HP: %.0f]...", mLabel, math.max(0, hHP))
-            or string.format("Travado em %s...", mLabel)
-
-        if not tool or tool.Parent ~= char then tool = equipCombatTool() end
-        triggerCombatAttack(tool, targetMob)
-        task.wait(0.25)
-    end
-
-    clearHoverConstraints(root)
+    isQuestBusy = true
+    isTraveling = true
     isGrindingMob = false
+    clearHoverConstraints(root)
+
+    local qRemote = getQuestsRemote()
+    if abandonFirst and qRemote then
+        pcall(function() qRemote:FireServer("Abandon") end)
+        task.wait(0.35)
+        if not isTokenValid(myToken) then return end
+    end
+
+    local _, npcHrp = findQuestGiverForIsland(qEntry.island)
+    if not npcHrp and ISLAND_SPAWNS[qEntry.island] then
+        moveRootToPosition(ISLAND_SPAWNS[qEntry.island], qEntry.island, myToken, true)
+        if not isTokenValid(myToken) then return end
+        _, npcHrp = findQuestGiverForIsland(qEntry.island)
+    end
+
+    local standPos = root.Position
+    local lookTarget = npcHrp and npcHrp.Position or nil
+    if npcHrp then
+        standPos = npcHrp.Position + (npcHrp.CFrame.LookVector * 3.5) + Vector3.new(0, 1.5, 0)
+        if (standPos - root.Position).Magnitude > 4 then
+            moveRootToPosition(standPos, qEntry.island .. " NPC", myToken, false)
+            if not isTokenValid(myToken) then return end
+        end
+    end
+
+    StatusLabel.Text = string.format("Aguardando NPC (%s) - 2s...", qEntry.quest)
+    settleAfterTouchdown(standPos, lookTarget, 1.1, myToken)
+    if not isTokenValid(myToken) then return end
+
+    if qRemote then
+        StatusLabel.Text = "Aceitando missao: " .. qEntry.quest
+        pcall(function() qRemote:FireServer("AcceptGrinding", qEntry.quest) end)
+    end
+
+    settleAfterTouchdown(standPos, lookTarget, 1.0, myToken)
+    if not isTokenValid(myToken) then return end
+
+    islandSettleUntil = tick() + 0.5
+    if myToken == questRunToken then
+        isTraveling = false
+        isQuestBusy = false
+        botState = "HUNTING"
+    end
 end
 
 createToggleRow(GrindPage, "autoGrind", "Auto-Farm de Inimigos", settings.autoGrind, function(v)
@@ -1053,7 +1084,10 @@ createToggleRow(GrindPage, "autoGrind", "Auto-Farm de Inimigos", settings.autoGr
         isQuestBusy = false
         isTraveling = false
         isGrindingMob = false
+        botState = "IDLE"
         if root then clearHoverConstraints(root) end
+    else
+        botState = "IDLE"
     end
     saveSettings()
 end)
@@ -1117,64 +1151,12 @@ local function refreshSelUI()
 end
 refreshSelUI()
 
-local function travelAndAcceptQuest(qEntry, abandonFirst)
-    if not qEntry or not root or isQuestBusy then return end
-    questRunToken = questRunToken + 1
-    local myToken = questRunToken
-
-    isQuestBusy = true
-    isTraveling = true
-    isGrindingMob = false
-    clearHoverConstraints(root)
-
-    local qRemote = getQuestsRemote()
-    if abandonFirst and qRemote then
-        pcall(function() qRemote:FireServer("Abandon") end)
-        task.wait(0.35)
-        if not isTokenValid(myToken) then return end
-    end
-
-    local _, npcHrp = findQuestGiverForIsland(qEntry.island)
-    if not npcHrp and ISLAND_SPAWNS[qEntry.island] then
-        moveRootToPosition(ISLAND_SPAWNS[qEntry.island], qEntry.island, myToken, true)
-        if not isTokenValid(myToken) then return end
-        _, npcHrp = findQuestGiverForIsland(qEntry.island)
-    end
-
-    local standPos = root.Position
-    local lookTarget = npcHrp and npcHrp.Position or nil
-    if npcHrp then
-        standPos = npcHrp.Position + (npcHrp.CFrame.LookVector * 3.5) + Vector3.new(0, 1.5, 0)
-        if (standPos - root.Position).Magnitude > 4 then
-            moveRootToPosition(standPos, qEntry.island .. " NPC", myToken, false)
-            if not isTokenValid(myToken) then return end
-        end
-    end
-
-    StatusLabel.Text = string.format("Aguardando NPC (%s) - 2s...", qEntry.quest)
-    settleAfterTouchdown(standPos, lookTarget, 1.1, myToken)
-    if not isTokenValid(myToken) then return end
-
-    if qRemote then
-        StatusLabel.Text = "Aceitando nova missao: " .. qEntry.quest
-        pcall(function() qRemote:FireServer("AcceptGrinding", qEntry.quest) end)
-    end
-
-    settleAfterTouchdown(standPos, lookTarget, 1.0, myToken)
-    if not isTokenValid(myToken) then return end
-
-    islandSettleUntil = tick() + 0.8
-    if myToken == questRunToken then
-        isTraveling = false
-        isQuestBusy = false
-    end
-end
-
 PrevBtn.MouseButton1Click:Connect(function()
     selectedQuestIndex = (selectedQuestIndex - 2) % #GRIND_QUESTS + 1
     settings.savedQuestIndex = selectedQuestIndex
     saveSettings()
     currentQuestReps = 0
+    botState = "IDLE"
     refreshSelUI()
 end)
 
@@ -1183,17 +1165,19 @@ NextBtn.MouseButton1Click:Connect(function()
     settings.savedQuestIndex = selectedQuestIndex
     saveSettings()
     currentQuestReps = 0
+    botState = "IDLE"
     refreshSelUI()
 end)
 
 StartBtn.MouseButton1Click:Connect(function()
     if isQuestBusy then return end
     currentQuestReps = 0
+    botState = "ADVANCING"
     settings.savedQuestIndex = selectedQuestIndex
     settings.autoGrind = true
     if switchUpdaters["autoGrind"] then switchUpdaters["autoGrind"](true) end
     saveSettings()
-    task.spawn(function() travelAndAcceptQuest(GRIND_QUESTS[selectedQuestIndex], true) end)
+    task.spawn(function() runAcceptMissionAtNpc(GRIND_QUESTS[selectedQuestIndex], true) end)
 end)
 
 local OptRow = Instance.new("Frame", GrindPage)
@@ -1306,64 +1290,95 @@ task.spawn(function()
         local hasAQ, pTargets, allComp, repBtns, qSum, aTitle = parseActiveQuest()
         local lv = getPlayerLevel()
         local qEntry = GRIND_QUESTS[selectedQuestIndex] or GRIND_QUESTS[1]
-        ProgLabel.Text = string.format("[%s] %s\nCiclo: %d/%d | Lv: %s",
+        ProgLabel.Text = string.format("[%s] %s\nCiclo: %d/%d | Estado: %s | Lv: %s",
             aTitle ~= "" and aTitle or qEntry.quest,
             #qSum > 0 and table.concat(qSum, " | ") or "Sem objetivo ativo",
-            currentQuestReps, settings.questRepeatGoal, lv and tostring(lv) or "?")
+            currentQuestReps, settings.questRepeatGoal, botState, lv and tostring(lv) or "?")
 
         if settings.autoGrind and not isTraveling and not isGrindingMob and not isQuestBusy and root and tick() >= islandSettleUntil then
             local qRemote = getQuestsRemote()
-            if allComp and not lastQuestCompletedFlag and tick() >= repeatCooldownUntil then
-                lastQuestCompletedFlag = true
-                currentQuestReps = currentQuestReps + 1
-            elseif not allComp then
-                lastQuestCompletedFlag = false
-            end
 
-            local triggeredQuestAction = false
-            if settings.autoAcceptQuest and qRemote then
-                if not hasAQ and (tick() - lastQuestActionTime) > 2.2 then
-                    lastQuestActionTime = tick()
-                    triggeredQuestAction = true
-                    travelAndAcceptQuest(qEntry, false)
-                elseif allComp and tick() >= repeatCooldownUntil and (tick() - lastQuestActionTime) > 1.3 then
-                    lastQuestActionTime = tick()
-                    repeatCooldownUntil = tick() + 1.2
+            if settings.autoAcceptQuest and qRemote and not hasAQ then
+                botState = "IDLE"
+                runAcceptMissionAtNpc(qEntry, false)
+            elseif settings.autoAcceptQuest and qRemote and allComp then
+                if (tick() - lastRepeatSentAt) > 1.2 then
+                    lastRepeatSentAt = tick()
+                    currentQuestReps = currentQuestReps + 1
+
                     if settings.autoAdvanceQuest and currentQuestReps >= settings.questRepeatGoal then
                         currentQuestReps = 0
-                        lastQuestCompletedFlag = false
+                        botState = "ADVANCING"
                         if selectedQuestIndex < #GRIND_QUESTS then
                             selectedQuestIndex = selectedQuestIndex + 1
                             settings.savedQuestIndex = selectedQuestIndex
                             saveSettings()
                             refreshSelUI()
                         end
-                        travelAndAcceptQuest(GRIND_QUESTS[selectedQuestIndex], true)
+                        runAcceptMissionAtNpc(GRIND_QUESTS[selectedQuestIndex], true)
                     else
+                        botState = "REPEATING"
+                        StatusLabel.Text = string.format("Repetindo missao (%d/%d)...", currentQuestReps, settings.questRepeatGoal)
                         pcall(function() qRemote:FireServer("Repeat") end)
                         for _, btn in ipairs(repeatButtons) do clickGuiButton(btn) end
-                        lastQuestCompletedFlag = false
-                        triggeredQuestAction = false
+                        task.wait(0.45)
+                        botState = "HUNTING"
                     end
                 end
-            end
-
-            if not triggeredQuestAction and not isTraveling and not isQuestBusy then
+            else
+                botState = "HUNTING"
+                local keywords = buildTargetKeywords(pTargets, qEntry)
                 local islSpawn = ISLAND_SPAWNS[qEntry.island]
-                local targetMob = findBestGrindMob(pTargets, islSpawn, false) or findBestGrindMob(pTargets, islSpawn, true)
+                local targetMob = findQuestMob(keywords, islSpawn)
 
-                if not targetMob and islSpawn and (islSpawn - root.Position).Magnitude > 120 then
+                if not targetMob and islSpawn and (islSpawn - root.Position).Magnitude > 140 then
                     isTraveling = true
                     moveRootToPosition(islSpawn, qEntry.island, nil, false)
                     isTraveling = false
-                    targetMob = findBestGrindMob(pTargets, islSpawn, false) or findBestGrindMob(pTargets, islSpawn, true)
+                    targetMob = findQuestMob(keywords, islSpawn)
                 end
 
                 if targetMob then
-                    engageGrindTarget(targetMob)
+                    local hrp = targetMob:FindFirstChild("HumanoidRootPart")
+                    local hum = targetMob:FindFirstChildOfClass("Humanoid")
+                    local mLabel = tostring(targetMob:GetAttribute("OriginalName") or targetMob.Name)
+
+                    if hrp and (hrp.Position - root.Position).Magnitude > 45 then
+                        isTraveling = true
+                        moveRootToPosition(hrp.Position + Vector3.new(0, settings.grindHeight, 0), mLabel, nil, false)
+                        isTraveling = false
+                    end
+
+                    if not isTraveling and not isQuestBusy and hrp and hrp.Parent and isMobAlive(targetMob) then
+                        isGrindingMob = true
+                        local lockedPos = applyHoverLock(hrp, settings.grindHeight)
+                        local tool = equipCombatTool()
+
+                        while settings.autoGrind and not isTraveling and not isQuestBusy and isMobAlive(targetMob) and hrp.Parent do
+                            local _, _, cNow = parseActiveQuest()
+                            if cNow then break end
+
+                            local des = hrp.Position + Vector3.new(0, settings.grindHeight, 0)
+                            if not lockedPos or (des - lockedPos).Magnitude > 4.5 then
+                                lockedPos = applyHoverLock(hrp, settings.grindHeight)
+                            end
+
+                            local hHP = hum and hum:GetAttribute("HandlerHealth")
+                            StatusLabel.Text = type(hHP) == "number"
+                                and string.format("Travado em %s [HP: %.0f]...", mLabel, math.max(0, hHP))
+                                or string.format("Travado em %s...", mLabel)
+
+                            if not tool or tool.Parent ~= char then tool = equipCombatTool() end
+                            triggerCombatAttack(tool, targetMob)
+                            task.wait(0.25)
+                        end
+
+                        clearHoverConstraints(root)
+                        isGrindingMob = false
+                    end
                 else
                     clearHoverConstraints(root)
-                    StatusLabel.Text = "Aguardando respawn em " .. qEntry.island .. "..."
+                    StatusLabel.Text = "Aguardando alvo da missao em " .. qEntry.island .. "..."
                 end
             end
         end
