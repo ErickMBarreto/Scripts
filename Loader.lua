@@ -795,7 +795,7 @@ end)
 
 local FruitScroll = Instance.new("ScrollingFrame", FruitPage)
 FruitScroll.LayoutOrder = nextOrder()
-FruitScroll.Size = UDim2.new(1, 0, 0, 100)
+FruitScroll.Size = UDim2.new(1, 0, 0, 130)
 FruitScroll.BackgroundColor3 = Color3.fromRGB(13, 15, 20)
 FruitScroll.ScrollBarThickness = 3
 FruitScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
@@ -803,6 +803,231 @@ Instance.new("UICorner", FruitScroll).CornerRadius = UDim.new(0, 8)
 local fLay = Instance.new("UIListLayout", FruitScroll)
 fLay.Padding = UDim.new(0, 5)
 fLay.SortOrder = Enum.SortOrder.LayoutOrder
+
+local function getFruitPosition(fruitObj)
+    if not fruitObj or not fruitObj.Parent then return nil end
+    local handle = fruitObj:FindFirstChild("Handle")
+    if handle and handle:IsA("BasePart") then return handle.Position end
+    local subModel = fruitObj:FindFirstChild("Fruit")
+    if subModel and subModel:IsA("Model") then return subModel:GetPivot().Position end
+    if fruitObj:IsA("Model") then return fruitObj:GetPivot().Position end
+    if fruitObj:IsA("BasePart") then return fruitObj.Position end
+    local anyPart = fruitObj:FindFirstChildWhichIsA("BasePart", true)
+    return anyPart and anyPart.Position or nil
+end
+
+local function attachFruitESP(fruitObj, meta)
+    if activeEspTags[fruitObj] and activeEspTags[fruitObj].Parent then
+        activeEspTags[fruitObj].Enabled = settings.esp
+        return
+    end
+    local targetPart = fruitObj:FindFirstChild("Handle") or fruitObj:FindFirstChildWhichIsA("BasePart", true)
+    if not targetPart then return end
+
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "FruitESPTag"
+    bb.Adornee = targetPart
+    bb.Size = UDim2.new(0, 180, 0, 42)
+    bb.StudsOffset = Vector3.new(0, 2.5, 0)
+    bb.AlwaysOnTop = true
+    bb.Enabled = settings.esp
+    bb.Parent = targetPart
+
+    local lbl = Instance.new("TextLabel", bb)
+    lbl.Size = UDim2.new(1, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.TextColor3 = meta.color
+    lbl.TextStrokeTransparency = 0.2
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = 11
+    lbl.Text = fruitObj.Name
+
+    activeEspTags[fruitObj] = bb
+
+    task.spawn(function()
+        while bb and bb.Parent and fruitObj and fruitObj.Parent do
+            if root and root.Parent then
+                local dist = (targetPart.Position - root.Position).Magnitude
+                lbl.Text = string.format("[%s] %s\n%.0f studs", meta.tag, fruitObj.Name, dist)
+            end
+            task.wait(0.3)
+        end
+        activeEspTags[fruitObj] = nil
+    end)
+end
+
+local function findFruitToolInPlayer()
+    if char then
+        for _, item in ipairs(char:GetChildren()) do
+            if item:IsA("Tool") and item.Name:lower():find("fruit") then
+                return item
+            end
+        end
+    end
+    local bp = player:FindFirstChild("Backpack")
+    if bp then
+        for _, item in ipairs(bp:GetChildren()) do
+            if item:IsA("Tool") and item.Name:lower():find("fruit") then
+                return item
+            end
+        end
+    end
+    return nil
+end
+
+local function tryAutoStoreFruit()
+    if not settings.autoStore then return end
+    local tool = findFruitToolInPlayer()
+    if not tool then return end
+
+    StatusLabel.Text = "Guardando fruta: " .. tool.Name
+    if tool.Parent ~= char and char and char:FindFirstChildOfClass("Humanoid") then
+        char:FindFirstChildOfClass("Humanoid"):EquipTool(tool)
+        task.wait(0.2)
+    end
+    pcall(function() tool:Activate() end)
+    task.wait(0.2)
+
+    pcall(function()
+        local fruitOpts = pGui:FindFirstChild("ScreenGuis")
+            and pGui.ScreenGuis:FindFirstChild("MainUI")
+            and pGui.ScreenGuis.MainUI:FindFirstChild("InteractionHUD")
+            and pGui.ScreenGuis.MainUI.InteractionHUD:FindFirstChild("FruitOptions")
+        local storeBtn = fruitOpts and fruitOpts:FindFirstChild("Background") and fruitOpts.Background:FindFirstChild("StoreButton")
+        if storeBtn then clickGuiButton(storeBtn) end
+    end)
+
+    pcall(function()
+        local fruitsRE = ReplicatedStorage:FindFirstChild("NetworkInstances")
+            and ReplicatedStorage.NetworkInstances:FindFirstChild("RemoteEvents")
+            and ReplicatedStorage.NetworkInstances.RemoteEvents:FindFirstChild("Fruits")
+        if fruitsRE then
+            fruitsRE:FireServer("Store", tool.Name)
+            fruitsRE:FireServer("StoreFruit", tool.Name)
+        end
+    end)
+end
+
+local function collectFruitTarget(fruitObj, meta, stopHop)
+    if isTraveling or not root or not fruitObj or not fruitObj.Parent then return end
+    local pos = getFruitPosition(fruitObj)
+    if not pos then return end
+
+    if stopHop and settings.autoHop then
+        settings.autoHop = false
+        saveSettings()
+        if switchUpdaters["autoHop"] then switchUpdaters["autoHop"](false) end
+    end
+
+    isTraveling = true
+    isGrindingMob = false
+    clearHoverConstraints(root)
+    moveRootToPosition(pos + Vector3.new(0, 2.5, 0), fruitObj.Name, nil, false)
+
+    task.wait(0.2)
+    pcall(function()
+        local handle = fruitObj:FindFirstChild("Handle") or fruitObj:FindFirstChildWhichIsA("BasePart", true)
+        if handle and typeof(firetouchinterest) == "function" then
+            firetouchinterest(root, handle, 0)
+            task.wait(0.05)
+            firetouchinterest(root, handle, 1)
+        end
+        if fruitObj:IsA("Tool") and char and char:FindFirstChildOfClass("Humanoid") then
+            char:FindFirstChildOfClass("Humanoid"):EquipTool(fruitObj)
+        end
+    end)
+
+    task.wait(0.25)
+    tryAutoStoreFruit()
+    StatusLabel.Text = string.format("Fruta [%s] %s coletada!", meta.tag, fruitObj.Name)
+    isTraveling = false
+end
+
+local function getDroppedFruitContainers()
+    local containers = {}
+    local playability = Workspace:FindFirstChild("Playability")
+    if playability and playability:FindFirstChild("DroppedTools") then
+        table.insert(containers, playability.DroppedTools)
+    end
+    for _, obj in ipairs(Workspace:GetChildren()) do
+        if obj:IsA("Folder") and (obj.Name:lower():find("fruit") or obj.Name:lower():find("drop")) then
+            table.insert(containers, obj)
+        end
+    end
+    return containers
+end
+
+local function scanFruitsAndRenderList()
+    for _, child in ipairs(FruitScroll:GetChildren()) do
+        if child:IsA("Frame") or child:IsA("TextLabel") then
+            child:Destroy()
+        end
+    end
+
+    local containers = getDroppedFruitContainers()
+    local foundCount = 0
+    local bestObj, bestMeta = nil, nil
+
+    for _, folder in ipairs(containers) do
+        for _, item in ipairs(folder:GetChildren()) do
+            local pos = getFruitPosition(item)
+            if pos and item.Name:lower():find("fruit") then
+                foundCount = foundCount + 1
+                local meta = getFruitMeta(item.Name)
+                attachFruitESP(item, meta)
+
+                if meta.tier >= settings.minRarityId then
+                    if not bestObj or meta.tier > bestMeta.tier then
+                        bestObj = item
+                        bestMeta = meta
+                    end
+                end
+
+                local dist = (root and root.Parent) and (pos - root.Position).Magnitude or 0
+                local row = Instance.new("Frame", FruitScroll)
+                row.Size = UDim2.new(1, -4, 0, 38)
+                row.BackgroundColor3 = C_CARD
+                Instance.new("UICorner", row).CornerRadius = UDim.new(0, 6)
+
+                local info = Instance.new("TextLabel", row)
+                info.Size = UDim2.new(1, -76, 1, 0)
+                info.Position = UDim2.new(0, 8, 0, 0)
+                info.BackgroundTransparency = 1
+                info.Text = string.format("[%s] %s (%.0f studs)", meta.tag, item.Name, dist)
+                info.TextColor3 = meta.color
+                info.Font = Enum.Font.GothamBold
+                info.TextSize = 9.5
+                info.TextXAlignment = Enum.TextXAlignment.Left
+                info.TextTruncate = Enum.TextTruncate.AtEnd
+
+                local goBtn = Instance.new("TextButton", row)
+                goBtn.Size = UDim2.new(0, 60, 0, 24)
+                goBtn.Position = UDim2.new(1, -66, 0.5, -12)
+                goBtn.Text = "Pegar"
+                goBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                goBtn.Font = Enum.Font.GothamBold
+                goBtn.TextSize = 9.5
+                goBtn.BackgroundColor3 = (meta.tier >= settings.minRarityId) and C_ACCENT or Color3.fromRGB(65, 72, 90)
+                Instance.new("UICorner", goBtn).CornerRadius = UDim.new(0, 5)
+                goBtn.MouseButton1Click:Connect(function()
+                    task.spawn(function() collectFruitTarget(item, meta, false) end)
+                end)
+            end
+        end
+    end
+
+    if foundCount == 0 then
+        local empty = Instance.new("TextLabel", FruitScroll)
+        empty.Size = UDim2.new(1, 0, 0, 32)
+        empty.BackgroundTransparency = 1
+        empty.Text = "Nenhuma fruta detectada no servidor."
+        empty.TextColor3 = C_MUTED
+        empty.Font = Enum.Font.Gotham
+        empty.TextSize = 9.5
+    end
+
+    return foundCount, bestObj, bestMeta
+end
 
 local function executeServerHop()
     if isHopping or isTraveling or isQuestBusy then return end
@@ -831,6 +1056,32 @@ local function executeServerHop()
 end
 
 HopNowBtn.MouseButton1Click:Connect(executeServerHop)
+
+task.spawn(function()
+    while ScreenGui and ScreenGui.Parent do
+        if FruitPage.Visible or settings.esp or settings.autoFruit or settings.autoHop then
+            local totalFound, targetFruit, targetMeta = scanFruitsAndRenderList()
+
+            if settings.autoStore and findFruitToolInPlayer() and not isTraveling then
+                tryAutoStoreFruit()
+            end
+
+            if targetFruit and not isTraveling then
+                if settings.autoFruit or settings.autoHop then
+                    collectFruitTarget(targetFruit, targetMeta, true)
+                end
+            elseif settings.autoHop and totalFound == 0 and not findFruitToolInPlayer() and not isTraveling and not isHopping then
+                local rem = hopEligibleTime - tick()
+                if rem > 0 then
+                    StatusLabel.Text = string.format("Sem frutas alvo. Hop em %.1fs...", rem)
+                else
+                    executeServerHop()
+                end
+            end
+        end
+        task.wait(0.6)
+    end
+end)
 
 -- ============================================================================
 -- [MODULO: AUTO_GRIND]
