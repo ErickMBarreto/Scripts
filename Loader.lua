@@ -1,4 +1,4 @@
--- main.lua (Arquivo Único Modularizado p/ GitHub Raw + Proteção pcall)
+-- main.lua (v9.2 - Correção de Referência de Character/Root, ESP e Aproximação de NPC)
 repeat task.wait() until game:IsLoaded()
 
 local Players = game:GetService("Players")
@@ -12,40 +12,40 @@ local CoreGui = game:GetService("CoreGui")
 local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
 local pGui = player:WaitForChild("PlayerGui")
 
-local char = player.Character
-local root = char and char:FindFirstChild("HumanoidRootPart")
-
-player.CharacterAdded:Connect(function(newChar)
-    char = newChar
-    root = newChar:WaitForChild("HumanoidRootPart")
-end)
+local function getRoot()
+    local c = player.Character
+    if not c then return nil end
+    return c:FindFirstChild("HumanoidRootPart") or c:FindFirstChildWhichIsA("BasePart")
+end
 
 local parentUI = nil
 pcall(function() if typeof(gethui) == "function" then parentUI = gethui() end end)
 if not parentUI then pcall(function() parentUI = CoreGui end) end
-if not parentUI then parentUI = pGui end
+if not parentUI then pcall(function() parentUI = pGui end) end
 
 pcall(function()
-    for _, name in ipairs({"RPGFruitFinderV4", "RPGFruitFinderV5", "UnifiedModularHubV6", "UnifiedModularHubV7", "IsolatedGrindV88", "GitSingleHubV9"}) do
+    for _, name in ipairs({"RPGFruitFinderV4", "RPGFruitFinderV5", "UnifiedModularHubV6", "UnifiedModularHubV7", "IsolatedGrindV88", "GitSingleHubV9", "FullGitHubV91", "FullGitHubV92"}) do
         local old = parentUI:FindFirstChild(name)
         if old then old:Destroy() end
     end
 end)
 
 -- ============================================================================
--- 1. CORE & PERSISTÊNCIA
+-- 1. CORE, CONFIGURAÇÕES & PERSISTÊNCIA
 -- ============================================================================
 local Core = {}
 local CONFIG_FILE = "ff_config_" .. tostring(game.PlaceId) .. ".json"
 local HISTORY_FILE = "ff_visited_" .. tostring(game.PlaceId) .. ".json"
 local ISLAND_FILE = "ff_islands_" .. tostring(game.PlaceId) .. ".json"
+local EXPIRE_SECONDS = 2400
+local HOP_WAIT_SECONDS = 10.0
 
 Core.State = {
     busyWithFruit = false,
     busyWithGrind = false,
     isHopping = false,
     isTravelingIsland = false,
-    hopEligibleTime = tick() + 10
+    hopEligibleTime = tick() + HOP_WAIT_SECONDS
 }
 
 Core.Settings = {
@@ -134,46 +134,70 @@ function Core.ClickButton(btn)
     end)
 end
 
-function Core.MoveTo(pos, speed)
-    if not root or not pos then return end
-    speed = speed or 300
+function Core.MoveToPosition(targetPos, speedStudsPerSec)
+    local root = getRoot()
+    if not root or not targetPos then return end
+    speedStudsPerSec = speedStudsPerSec or 300
+
     if Core.Settings.tweenTravel then
-        local highStart = Vector3.new(root.Position.X, math.max(root.Position.Y, pos.Y) + 70, root.Position.Z)
-        local highDest = Vector3.new(pos.X, highStart.Y, pos.Z)
+        local highStart = Vector3.new(root.Position.X, math.max(root.Position.Y, targetPos.Y) + 70, root.Position.Z)
+        local highDest = Vector3.new(targetPos.X, highStart.Y, targetPos.Z)
         root.CFrame = CFrame.new(highStart)
-        local dur = math.clamp((highDest - highStart).Magnitude / speed, 0.25, 10)
-        local tw = TweenService:Create(root, TweenInfo.new(dur, Enum.EasingStyle.Linear), {CFrame = CFrame.new(highDest)})
-        tw:Play(); tw.Completed:Wait()
+        local dist = (highDest - highStart).Magnitude
+        local duration = math.clamp(dist / speedStudsPerSec, 0.25, 10.0)
+
+        local tween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = CFrame.new(highDest)})
+        tween:Play()
+        tween.Completed:Wait()
     end
-    root.CFrame = CFrame.new(pos)
+
+    root.CFrame = CFrame.new(targetPos)
     root.AssemblyLinearVelocity = Vector3.zero
 end
 
-function Core.SafeIslandTravel(targetPos, onMsg)
+function Core.SafeIslandTravel(targetPos, onProgress)
+    local root = getRoot()
     if not root or not targetPos or Core.State.isTravelingIsland then return false end
     Core.State.isTravelingIsland = true
 
-    local alt = 380
-    local airStart = Vector3.new(root.Position.X, alt, root.Position.Z)
-    local t1 = TweenService:Create(root, TweenInfo.new(0.6, Enum.EasingStyle.Quad), {CFrame = CFrame.new(airStart)})
-    t1:Play(); t1.Completed:Wait()
+    local safeAltitude = 380
+    local cruiseSpeed = 190
 
-    local airDest = Vector3.new(targetPos.X, alt, targetPos.Z)
-    local dist = (airDest - airStart).Magnitude
-    local dur = math.clamp(dist / 190, 0.8, 40)
-    if onMsg then onMsg(string.format("Voando %.0f studs (~%.0fs)...", dist, dur)) end
+    local startAir = Vector3.new(root.Position.X, safeAltitude, root.Position.Z)
+    local upTween = TweenService:Create(root, TweenInfo.new(0.65, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        CFrame = CFrame.new(startAir)
+    })
+    upTween:Play()
+    upTween.Completed:Wait()
 
-    local t2 = TweenService:Create(root, TweenInfo.new(dur, Enum.EasingStyle.Linear), {CFrame = CFrame.new(airDest)})
-    t2:Play(); t2.Completed:Wait()
+    local destAir = Vector3.new(targetPos.X, safeAltitude, targetPos.Z)
+    local horizontalDist = (destAir - startAir).Magnitude
+    local travelTime = math.clamp(horizontalDist / cruiseSpeed, 0.8, 45.0)
 
-    local t3 = TweenService:Create(root, TweenInfo.new(0.5, Enum.EasingStyle.Quad), {CFrame = CFrame.new(targetPos + Vector3.new(0, 3, 0))})
-    t3:Play(); t3.Completed:Wait()
+    if onProgress then
+        onProgress(string.format("Voando p/ ilha (%.0f studs • ~%.0fs)...", horizontalDist, travelTime))
+    end
+
+    local flightTween = TweenService:Create(root, TweenInfo.new(travelTime, Enum.EasingStyle.Linear), {
+        CFrame = CFrame.new(destAir)
+    })
+    flightTween:Play()
+    flightTween.Completed:Wait()
+
+    local landTween = TweenService:Create(root, TweenInfo.new(0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+        CFrame = CFrame.new(targetPos + Vector3.new(0, 3, 0))
+    })
+    landTween:Play()
+    landTween.Completed:Wait()
 
     root.AssemblyLinearVelocity = Vector3.zero
     Core.State.isTravelingIsland = false
     return true
 end
 
+-- ============================================================================
+-- 2. BANCO DE DADOS DAS 38 MISSÕES & RARIDADES DE FRUTAS
+-- ============================================================================
 local QUEST_ROADMAP = {
     { id = 1,  island = "Solmar Island",    title = "Defeat Pirates",             minLvl = 1,   giver = "Solmar Island Quest Giver",    mobs = {"Cutlass Pirate", "Flint Pirate"} },
     { id = 2,  island = "Solmar Island",    title = "Defeat Corrupt Marine",      minLvl = 5,   giver = "Solmar Island Quest Giver",    mobs = {"Marine Recruit", "Marine Corporal"} },
@@ -215,231 +239,537 @@ local QUEST_ROADMAP = {
     { id = 38, island = "Volcano Island",   title = "Defeat Elite Volcano Guards",minLvl = 430, giver = "Volcano Island Quest Giver", mobs = {"Elite Volcano Guard", "Elite Volcano Supervisor"} }
 }
 
+local RARITY_LEVELS = {
+    { id = 1, name = "All",       badge = "ALL",       desc = "Todas as frutas (Common+)",  color = Color3.fromRGB(148, 163, 184) },
+    { id = 2, name = "Rare",      badge = "RARE+",     desc = "Ignora Kilo e Thorn",        color = Color3.fromRGB(59, 130, 246) },
+    { id = 3, name = "Epic",      badge = "EPIC+",     desc = "Apenas 2.5% ou menor",       color = Color3.fromRGB(168, 85, 247) },
+    { id = 4, name = "Legendary", badge = "LEGEND+",   desc = "Apenas 1.0% ou menor",       color = Color3.fromRGB(245, 158, 11) },
+    { id = 5, name = "Mythical",  badge = "MYTHICAL",  desc = "Apenas 0.3% (Top Tier)",     color = Color3.fromRGB(244, 63, 94) }
+}
+
+local FRUIT_CATALOG = {
+    ["kilo"]     = { tier = 1, tag = "COMMON",    color = Color3.fromRGB(156, 163, 175) },
+    ["thorn"]    = { tier = 1, tag = "COMMON",    color = Color3.fromRGB(156, 163, 175) },
+    ["haze"]     = { tier = 2, tag = "RARE",      color = Color3.fromRGB(59, 130, 246) },
+    ["bomb"]     = { tier = 2, tag = "RARE",      color = Color3.fromRGB(59, 130, 246) },
+    ["barrier"]  = { tier = 2, tag = "RARE",      color = Color3.fromRGB(59, 130, 246) },
+    ["magma"]    = { tier = 3, tag = "EPIC",      color = Color3.fromRGB(168, 85, 247) },
+    ["divide"]   = { tier = 3, tag = "EPIC",      color = Color3.fromRGB(168, 85, 247) },
+    ["flame"]    = { tier = 3, tag = "EPIC",      color = Color3.fromRGB(168, 85, 247) },
+    ["sand"]     = { tier = 3, tag = "EPIC",      color = Color3.fromRGB(168, 85, 247) },
+    ["dark"]     = { tier = 4, tag = "LEGENDARY", color = Color3.fromRGB(245, 158, 11) },
+    ["light"]    = { tier = 4, tag = "LEGENDARY", color = Color3.fromRGB(245, 158, 11) },
+    ["mirror"]   = { tier = 4, tag = "LEGENDARY", color = Color3.fromRGB(245, 158, 11) },
+    ["ice"]      = { tier = 4, tag = "LEGENDARY", color = Color3.fromRGB(245, 158, 11) },
+    ["buddha"]   = { tier = 5, tag = "MYTHICAL",  color = Color3.fromRGB(244, 63, 94) },
+    ["gravity"]  = { tier = 5, tag = "MYTHICAL",  color = Color3.fromRGB(244, 63, 94) },
+    ["venom"]    = { tier = 5, tag = "MYTHICAL",  color = Color3.fromRGB(244, 63, 94) },
+    ["rubber"]   = { tier = 4, tag = "SPECIAL",   color = Color3.fromRGB(245, 158, 11) },
+    ["forest"]   = { tier = 5, tag = "MYTHICAL",  color = Color3.fromRGB(244, 63, 94) },
+    ["operator"] = { tier = 5, tag = "MYTHICAL",  color = Color3.fromRGB(244, 63, 94) }
+}
+
+local function getFruitMeta(fruitName)
+    local low = tostring(fruitName):lower()
+    for key, meta in pairs(FRUIT_CATALOG) do
+        if low:find(key) then return meta end
+    end
+    return { tier = 4, tag = "UNKNOWN", color = Color3.fromRGB(16, 185, 129) }
+end
+
 -- ============================================================================
--- 2. INTERFACE (SEMPRE CARREGADA PRIMEIRO)
+-- 3. INTERFACE COMPLETA (ABAS AUTO-GRIND E FRUTAS & HOP)
 -- ============================================================================
+local UI = {
+    SwitchUpdaters = {},
+    FruitScroll = nil,
+    HopNowBtn = nil,
+    QuestSelectLabel = nil,
+    QuotaLabel = nil,
+    StatusLabel = nil
+}
+
+local C_BG = Color3.fromRGB(18, 20, 26)
+local C_HEADER = Color3.fromRGB(24, 27, 36)
+local C_CARD = Color3.fromRGB(26, 30, 40)
+local C_BORDER = Color3.fromRGB(45, 50, 66)
+local C_TEXT = Color3.fromRGB(240, 244, 248)
+local C_MUTED = Color3.fromRGB(148, 156, 172)
+local C_ACCENT = Color3.fromRGB(16, 185, 129)
+local C_FRUIT = Color3.fromRGB(245, 158, 11)
+local C_BLUE = Color3.fromRGB(59, 130, 246)
+local C_RED = Color3.fromRGB(239, 68, 68)
+
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "GitSingleHubV9"
+ScreenGui.Name = "FullGitHubV92"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.DisplayOrder = 999999
 ScreenGui.Parent = parentUI
 
-local Main = Instance.new("Frame", ScreenGui)
-Main.Size = UDim2.new(0, 330, 0, 390)
-Main.Position = UDim2.new(0.5, -165, 0.22, 0)
-Main.BackgroundColor3 = Color3.fromRGB(18, 20, 26)
-Main.Active = true
-Main.Draggable = true
-Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 10)
-Instance.new("UIStroke", Main).Color = Color3.fromRGB(45, 50, 66)
+function UI.SetStatus(text)
+    if UI.StatusLabel and UI.StatusLabel.Parent then
+        UI.StatusLabel.Text = tostring(text)
+    end
+end
 
-local Header = Instance.new("TextLabel", Main)
-Header.Size = UDim2.new(1, -40, 0, 32)
-Header.Position = UDim2.new(0, 12, 0, 2)
-Header.BackgroundTransparency = 1
-Header.Text = "Vox Seas Hub v9.0 (Git Single)"
-Header.TextColor3 = Color3.fromRGB(240, 244, 248)
-Header.Font = Enum.Font.GothamBold
-Header.TextSize = 12
-Header.TextXAlignment = Enum.TextXAlignment.Left
+function UI.RefreshQuestUI()
+    local idx = math.clamp(Core.Settings.currentQuestIndex, 1, #QUEST_ROADMAP)
+    local q = QUEST_ROADMAP[idx]
+    if UI.QuestSelectLabel and q then
+        UI.QuestSelectLabel.Text = string.format("#%d/%d • %s (Lvl %d)\nIlha: %s", q.id, #QUEST_ROADMAP, q.title, q.minLvl, q.island)
+    end
+    if UI.QuotaLabel then
+        UI.QuotaLabel.Text = string.format("Meta por Missão: %d / %d vezes", Core.Settings.currentQuestDoneCount, Core.Settings.repeatsPerQuest)
+    end
+end
 
-local CloseBtn = Instance.new("TextButton", Main)
-CloseBtn.Size = UDim2.new(0, 26, 0, 24)
-CloseBtn.Position = UDim2.new(1, -32, 0, 5)
-CloseBtn.Text = "X"
-CloseBtn.TextColor3 = Color3.fromRGB(239, 68, 68)
+local MainFrame = Instance.new("Frame", ScreenGui)
+MainFrame.Size = UDim2.new(0, 345, 0, 560)
+MainFrame.Position = UDim2.new(0.5, -172, 0.5, -280)
+MainFrame.BackgroundColor3 = C_BG
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.ClipsDescendants = true
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 12)
+Instance.new("UIStroke", MainFrame).Color = C_BORDER
+
+local TopBar = Instance.new("Frame", MainFrame)
+TopBar.Size = UDim2.new(1, 0, 0, 42)
+TopBar.BackgroundColor3 = C_HEADER
+Instance.new("UICorner", TopBar).CornerRadius = UDim.new(0, 12)
+
+local Title = Instance.new("TextLabel", TopBar)
+Title.Size = UDim2.new(1, -76, 1, 0)
+Title.Position = UDim2.new(0, 12, 0, 0)
+Title.BackgroundTransparency = 1
+Title.Text = "Vox Seas Hub v9.2 (Git Full)"
+Title.TextColor3 = C_TEXT
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 13
+Title.TextXAlignment = Enum.TextXAlignment.Left
+
+local MinBtn = Instance.new("TextButton", TopBar)
+MinBtn.Size = UDim2.new(0, 28, 0, 26)
+MinBtn.Position = UDim2.new(1, -64, 0.5, -13)
+MinBtn.Text = "—"
+MinBtn.TextColor3 = C_TEXT
+MinBtn.Font = Enum.Font.GothamBold
+MinBtn.BackgroundColor3 = C_CARD
+Instance.new("UICorner", MinBtn).CornerRadius = UDim.new(0, 6)
+
+local CloseBtn = Instance.new("TextButton", TopBar)
+CloseBtn.Size = UDim2.new(0, 28, 0, 26)
+CloseBtn.Position = UDim2.new(1, -33, 0.5, -13)
+CloseBtn.Text = "✕"
+CloseBtn.TextColor3 = C_RED
 CloseBtn.Font = Enum.Font.GothamBold
-CloseBtn.BackgroundColor3 = Color3.fromRGB(28, 32, 42)
+CloseBtn.BackgroundColor3 = C_CARD
 Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 6)
 CloseBtn.MouseButton1Click:Connect(function() ScreenGui:Destroy() end)
 
-local TabBar = Instance.new("Frame", Main)
-TabBar.Size = UDim2.new(1, -20, 0, 28)
-TabBar.Position = UDim2.new(0, 10, 0, 38)
+local TabBar = Instance.new("Frame", MainFrame)
+TabBar.Size = UDim2.new(1, -20, 0, 30)
+TabBar.Position = UDim2.new(0, 10, 0, 46)
 TabBar.BackgroundTransparency = 1
 
-local TabGrind = Instance.new("TextButton", TabBar)
-TabGrind.Size = UDim2.new(0.49, 0, 1, 0)
-TabGrind.Text = "Auto-Grind"
-TabGrind.Font = Enum.Font.GothamBold
-TabGrind.TextSize = 10.5
-TabGrind.TextColor3 = Color3.fromRGB(255, 255, 255)
-TabGrind.BackgroundColor3 = Color3.fromRGB(16, 185, 129)
-Instance.new("UICorner", TabGrind).CornerRadius = UDim.new(0, 6)
+local TabGrindBtn = Instance.new("TextButton", TabBar)
+TabGrindBtn.Size = UDim2.new(0.49, 0, 1, 0)
+TabGrindBtn.Text = "⚔️ Auto-Grind"
+TabGrindBtn.Font = Enum.Font.GothamBold
+TabGrindBtn.TextSize = 10.5
+TabGrindBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+TabGrindBtn.BackgroundColor3 = C_ACCENT
+Instance.new("UICorner", TabGrindBtn).CornerRadius = UDim.new(0, 7)
 
-local TabFruit = Instance.new("TextButton", TabBar)
-TabFruit.Size = UDim2.new(0.49, 0, 1, 0)
-TabFruit.Position = UDim2.new(0.51, 0, 0, 0)
-TabFruit.Text = "Frutas & Hop"
-TabFruit.Font = Enum.Font.GothamBold
-TabFruit.TextSize = 10.5
-TabFruit.TextColor3 = Color3.fromRGB(160, 168, 184)
-TabFruit.BackgroundColor3 = Color3.fromRGB(28, 32, 42)
-Instance.new("UICorner", TabFruit).CornerRadius = UDim.new(0, 6)
+local TabFruitBtn = Instance.new("TextButton", TabBar)
+TabFruitBtn.Size = UDim2.new(0.49, 0, 1, 0)
+TabFruitBtn.Position = UDim2.new(0.51, 0, 0, 0)
+TabFruitBtn.Text = "🍎 Frutas & Hop"
+TabFruitBtn.Font = Enum.Font.GothamBold
+TabFruitBtn.TextSize = 10.5
+TabFruitBtn.TextColor3 = C_MUTED
+TabFruitBtn.BackgroundColor3 = C_CARD
+Instance.new("UICorner", TabFruitBtn).CornerRadius = UDim.new(0, 7)
 
-local GrindPage = Instance.new("Frame", Main)
-GrindPage.Size = UDim2.new(1, -20, 1, -116)
-GrindPage.Position = UDim2.new(0, 10, 0, 72)
-GrindPage.BackgroundTransparency = 1
+local GrindPanel = Instance.new("ScrollingFrame", MainFrame)
+GrindPanel.Size = UDim2.new(1, -20, 1, -124)
+GrindPanel.Position = UDim2.new(0, 10, 0, 82)
+GrindPanel.BackgroundTransparency = 1
+GrindPanel.ScrollBarThickness = 3
+GrindPanel.CanvasSize = UDim2.new(0, 0, 0, 0)
+GrindPanel.AutomaticCanvasSize = Enum.AutomaticSize.Y
 
-local FruitPage = Instance.new("Frame", Main)
-FruitPage.Size = UDim2.new(1, -20, 1, -116)
-FruitPage.Position = UDim2.new(0, 10, 0, 72)
-FruitPage.BackgroundTransparency = 1
-FruitPage.Visible = false
+local GrindLayout = Instance.new("UIListLayout", GrindPanel)
+GrindLayout.Padding = UDim.new(0, 6)
+GrindLayout.SortOrder = Enum.SortOrder.LayoutOrder
 
-TabGrind.MouseButton1Click:Connect(function()
-    GrindPage.Visible = true; FruitPage.Visible = false
-    TabGrind.BackgroundColor3 = Color3.fromRGB(16, 185, 129); TabGrind.TextColor3 = Color3.fromRGB(255, 255, 255)
-    TabFruit.BackgroundColor3 = Color3.fromRGB(28, 32, 42); TabFruit.TextColor3 = Color3.fromRGB(160, 168, 184)
+local FruitPanel = Instance.new("ScrollingFrame", MainFrame)
+FruitPanel.Size = UDim2.new(1, -20, 1, -124)
+FruitPanel.Position = UDim2.new(0, 10, 0, 82)
+FruitPanel.BackgroundTransparency = 1
+FruitPanel.ScrollBarThickness = 3
+FruitPanel.CanvasSize = UDim2.new(0, 0, 0, 0)
+FruitPanel.AutomaticCanvasSize = Enum.AutomaticSize.Y
+FruitPanel.Visible = false
+
+local FruitLayout = Instance.new("UIListLayout", FruitPanel)
+FruitLayout.Padding = UDim.new(0, 6)
+FruitLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+TabGrindBtn.MouseButton1Click:Connect(function()
+    GrindPanel.Visible = true; FruitPanel.Visible = false
+    TabGrindBtn.BackgroundColor3 = C_ACCENT; TabGrindBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    TabFruitBtn.BackgroundColor3 = C_CARD; TabFruitBtn.TextColor3 = C_MUTED
 end)
 
-TabFruit.MouseButton1Click:Connect(function()
-    GrindPage.Visible = false; FruitPage.Visible = true
-    TabFruit.BackgroundColor3 = Color3.fromRGB(59, 130, 246); TabFruit.TextColor3 = Color3.fromRGB(255, 255, 255)
-    TabGrind.BackgroundColor3 = Color3.fromRGB(28, 32, 42); TabGrind.TextColor3 = Color3.fromRGB(160, 168, 184)
+TabFruitBtn.MouseButton1Click:Connect(function()
+    GrindPanel.Visible = false; FruitPanel.Visible = true
+    TabFruitBtn.BackgroundColor3 = C_BLUE; TabFruitBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    TabGrindBtn.BackgroundColor3 = C_CARD; TabGrindBtn.TextColor3 = C_MUTED
 end)
 
-local StatusLbl = Instance.new("TextLabel", Main)
-StatusLbl.Size = UDim2.new(1, -20, 0, 32)
-StatusLbl.Position = UDim2.new(0, 10, 1, -38)
-StatusLbl.BackgroundColor3 = Color3.fromRGB(24, 27, 36)
-StatusLbl.TextColor3 = Color3.fromRGB(235, 240, 245)
-StatusLbl.Font = Enum.Font.Gotham
-StatusLbl.TextSize = 9.5
-StatusLbl.TextWrapped = true
-StatusLbl.Text = "Pronto. Selecione a aba desejada."
-Instance.new("UICorner", StatusLbl).CornerRadius = UDim.new(0, 6)
-
-local function setStatus(t)
-    if StatusLbl and StatusLbl.Parent then StatusLbl.Text = tostring(t) end
+local orderMap = { [GrindPanel] = 0, [FruitPanel] = 0 }
+local function nextOrder(p)
+    orderMap[p] = (orderMap[p] or 0) + 1
+    return orderMap[p]
 end
 
-local function makeToggle(parent, yPos, text, key)
-    local btn = Instance.new("TextButton", parent)
-    btn.Size = UDim2.new(1, 0, 0, 30)
-    btn.Position = UDim2.new(0, 0, 0, yPos)
-    btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 10.5
-    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+local function addSwitch(parent, key, labelText, subText, defaultState)
+    local row = Instance.new("Frame", parent)
+    row.LayoutOrder = nextOrder(parent)
+    row.Size = UDim2.new(1, 0, 0, 42)
+    row.BackgroundColor3 = C_CARD
+    Instance.new("UICorner", row).CornerRadius = UDim.new(0, 8)
+    Instance.new("UIStroke", row).Color = C_BORDER
 
-    local function sync()
-        local on = Core.Settings[key]
-        btn.Text = text .. ": " .. (on and "ON" or "OFF")
-        btn.BackgroundColor3 = on and Color3.fromRGB(16, 185, 129) or Color3.fromRGB(50, 56, 72)
+    local lbl = Instance.new("TextLabel", row)
+    lbl.Size = UDim2.new(1, -68, 0, 19)
+    lbl.Position = UDim2.new(0, 10, 0, 4)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = labelText
+    lbl.TextColor3 = C_TEXT
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = 11
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+
+    local sub = Instance.new("TextLabel", row)
+    sub.Size = UDim2.new(1, -68, 0, 15)
+    sub.Position = UDim2.new(0, 10, 0, 22)
+    sub.BackgroundTransparency = 1
+    sub.Text = subText
+    sub.TextColor3 = C_MUTED
+    sub.Font = Enum.Font.Gotham
+    sub.TextSize = 9.5
+    sub.TextXAlignment = Enum.TextXAlignment.Left
+
+    local switchBg = Instance.new("TextButton", row)
+    switchBg.Size = UDim2.new(0, 44, 0, 22)
+    switchBg.Position = UDim2.new(1, -54, 0.5, -11)
+    switchBg.Text = ""
+    switchBg.BackgroundColor3 = defaultState and C_ACCENT or Color3.fromRGB(50, 56, 72)
+    Instance.new("UICorner", switchBg).CornerRadius = UDim.new(1, 0)
+
+    local knob = Instance.new("Frame", switchBg)
+    knob.Size = UDim2.new(0, 16, 0, 16)
+    knob.Position = defaultState and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8)
+    knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+
+    local state = defaultState
+    local function setVisual(newVal)
+        state = newVal
+        TweenService:Create(switchBg, TweenInfo.new(0.18), {
+            BackgroundColor3 = state and C_ACCENT or Color3.fromRGB(50, 56, 72)
+        }):Play()
+        TweenService:Create(knob, TweenInfo.new(0.18), {
+            Position = state and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8)
+        }):Play()
     end
-    sync()
 
-    btn.MouseButton1Click:Connect(function()
-        Core.Settings[key] = not Core.Settings[key]
+    UI.SwitchUpdaters[key] = setVisual
+    switchBg.MouseButton1Click:Connect(function()
+        setVisual(not state)
+        Core.Settings[key] = state
+        if key == "autoHop" and state then
+            Core.State.hopEligibleTime = math.max(Core.State.hopEligibleTime, tick() + HOP_WAIT_SECONDS)
+        end
         Core.SaveSettings()
-        sync()
     end)
-    return sync
 end
 
--- Controles da Aba Grind
-makeToggle(GrindPage, 0, "Auto-Grind", "autoGrind")
-makeToggle(GrindPage, 34, "Auto-Aceitar Missao", "autoAcceptQuest")
-makeToggle(GrindPage, 68, "Auto-Repetir Missao", "autoRepeatQuest")
+-- Switches Grind
+addSwitch(GrindPanel, "autoGrind", "Auto-Grind Progressivo", "Vai ao NPC, aceita, caça e repete", Core.Settings.autoGrind)
+addSwitch(GrindPanel, "autoAcceptQuest", "Auto-Aceitar Missão", "Vai até o NPC e aceita quando sem missão", Core.Settings.autoAcceptQuest)
+addSwitch(GrindPanel, "autoRepeatQuest", "Auto-Repetir Missão", "Clica em repetir ao concluir 100%", Core.Settings.autoRepeatQuest)
 
-local QBar = Instance.new("Frame", GrindPage)
-QBar.Size = UDim2.new(1, 0, 0, 38)
-QBar.Position = UDim2.new(0, 0, 0, 104)
-QBar.BackgroundColor3 = Color3.fromRGB(26, 30, 40)
-Instance.new("UICorner", QBar).CornerRadius = UDim.new(0, 6)
+-- Seletor de Missão
+local QuestCard = Instance.new("Frame", GrindPanel)
+QuestCard.LayoutOrder = nextOrder(GrindPanel)
+QuestCard.Size = UDim2.new(1, 0, 0, 46)
+QuestCard.BackgroundColor3 = C_CARD
+Instance.new("UICorner", QuestCard).CornerRadius = UDim.new(0, 8)
+Instance.new("UIStroke", QuestCard).Color = C_BLUE
 
-local PrevQ = Instance.new("TextButton", QBar)
-PrevQ.Size = UDim2.new(0, 30, 0, 28)
-PrevQ.Position = UDim2.new(0, 5, 0.5, -14)
-PrevQ.Text = "<"
-PrevQ.TextColor3 = Color3.fromRGB(255, 255, 255)
-PrevQ.Font = Enum.Font.GothamBold
-PrevQ.BackgroundColor3 = Color3.fromRGB(40, 46, 60)
-Instance.new("UICorner", PrevQ).CornerRadius = UDim.new(0, 5)
+local PrevQBtn = Instance.new("TextButton", QuestCard)
+PrevQBtn.Size = UDim2.new(0, 32, 0, 30)
+PrevQBtn.Position = UDim2.new(0, 8, 0.5, -15)
+PrevQBtn.Text = "◀"
+PrevQBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+PrevQBtn.Font = Enum.Font.GothamBold
+PrevQBtn.BackgroundColor3 = C_HEADER
+Instance.new("UICorner", PrevQBtn).CornerRadius = UDim.new(0, 6)
 
-local QLabel = Instance.new("TextLabel", QBar)
-QLabel.Size = UDim2.new(1, -78, 1, 0)
-QLabel.Position = UDim2.new(0, 39, 0, 0)
-QLabel.BackgroundTransparency = 1
-QLabel.TextColor3 = Color3.fromRGB(240, 244, 248)
-QLabel.Font = Enum.Font.GothamBold
-QLabel.TextSize = 9.5
-QLabel.TextWrapped = true
+UI.QuestSelectLabel = Instance.new("TextLabel", QuestCard)
+UI.QuestSelectLabel.Size = UDim2.new(1, -88, 1, -6)
+UI.QuestSelectLabel.Position = UDim2.new(0, 44, 0, 3)
+UI.QuestSelectLabel.BackgroundTransparency = 1
+UI.QuestSelectLabel.TextColor3 = C_TEXT
+UI.QuestSelectLabel.Font = Enum.Font.GothamBold
+UI.QuestSelectLabel.TextSize = 9.5
+UI.QuestSelectLabel.TextWrapped = true
 
-local NextQ = Instance.new("TextButton", QBar)
-NextQ.Size = UDim2.new(0, 30, 0, 28)
-NextQ.Position = UDim2.new(1, -35, 0.5, -14)
-NextQ.Text = ">"
-NextQ.TextColor3 = Color3.fromRGB(255, 255, 255)
-NextQ.Font = Enum.Font.GothamBold
-NextQ.BackgroundColor3 = Color3.fromRGB(40, 46, 60)
-Instance.new("UICorner", NextQ).CornerRadius = UDim.new(0, 5)
+local NextQBtn = Instance.new("TextButton", QuestCard)
+NextQBtn.Size = UDim2.new(0, 32, 0, 30)
+NextQBtn.Position = UDim2.new(1, -40, 0.5, -15)
+NextQBtn.Text = "▶"
+NextQBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+NextQBtn.Font = Enum.Font.GothamBold
+NextQBtn.BackgroundColor3 = C_HEADER
+Instance.new("UICorner", NextQBtn).CornerRadius = UDim.new(0, 6)
 
-local QuotaLabel = Instance.new("TextLabel", GrindPage)
-QuotaLabel.Size = UDim2.new(1, 0, 0, 20)
-QuotaLabel.Position = UDim2.new(0, 0, 0, 146)
-QuotaLabel.BackgroundTransparency = 1
-QuotaLabel.TextColor3 = Color3.fromRGB(16, 185, 129)
-QuotaLabel.Font = Enum.Font.GothamBold
-QuotaLabel.TextSize = 10
-
-local function refreshQuestUI()
-    local idx = math.clamp(Core.Settings.currentQuestIndex, 1, #QUEST_ROADMAP)
-    local q = QUEST_ROADMAP[idx]
-    if q then
-        QLabel.Text = string.format("#%d %s\nIlha: %s", q.id, q.title, q.island)
-    end
-    QuotaLabel.Text = string.format("Meta: %d / %d vezes", Core.Settings.currentQuestDoneCount, Core.Settings.repeatsPerQuest)
-end
-refreshQuestUI()
-
-PrevQ.MouseButton1Click:Connect(function()
+PrevQBtn.MouseButton1Click:Connect(function()
     Core.Settings.currentQuestIndex = ((Core.Settings.currentQuestIndex - 2) % #QUEST_ROADMAP) + 1
     Core.Settings.currentQuestDoneCount = 0
-    Core.SaveSettings()
-    refreshQuestUI()
+    Core.SaveSettings(); UI.RefreshQuestUI()
 end)
 
-NextQ.MouseButton1Click:Connect(function()
+NextQBtn.MouseButton1Click:Connect(function()
     Core.Settings.currentQuestIndex = (Core.Settings.currentQuestIndex % #QUEST_ROADMAP) + 1
     Core.Settings.currentQuestDoneCount = 0
-    Core.SaveSettings()
-    refreshQuestUI()
+    Core.SaveSettings(); UI.RefreshQuestUI()
 end)
 
-local SaveIslBtn = Instance.new("TextButton", GrindPage)
-SaveIslBtn.Size = UDim2.new(1, 0, 0, 28)
-SaveIslBtn.Position = UDim2.new(0, 0, 0, 170)
-SaveIslBtn.Text = "Salvar Posicao da Ilha Atual"
+-- Meta de Repetições
+local QuotaCard = Instance.new("Frame", GrindPanel)
+QuotaCard.LayoutOrder = nextOrder(GrindPanel)
+QuotaCard.Size = UDim2.new(1, 0, 0, 38)
+QuotaCard.BackgroundColor3 = C_CARD
+Instance.new("UICorner", QuotaCard).CornerRadius = UDim.new(0, 8)
+Instance.new("UIStroke", QuotaCard).Color = C_BORDER
+
+local MinusBtn = Instance.new("TextButton", QuotaCard)
+MinusBtn.Size = UDim2.new(0, 32, 0, 26)
+MinusBtn.Position = UDim2.new(0, 8, 0.5, -13)
+MinusBtn.Text = "-1"
+MinusBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+MinusBtn.Font = Enum.Font.GothamBold
+MinusBtn.TextSize = 10.5
+MinusBtn.BackgroundColor3 = C_HEADER
+Instance.new("UICorner", MinusBtn).CornerRadius = UDim.new(0, 6)
+
+UI.QuotaLabel = Instance.new("TextLabel", QuotaCard)
+UI.QuotaLabel.Size = UDim2.new(1, -88, 1, 0)
+UI.QuotaLabel.Position = UDim2.new(0, 44, 0, 0)
+UI.QuotaLabel.BackgroundTransparency = 1
+UI.QuotaLabel.TextColor3 = C_ACCENT
+UI.QuotaLabel.Font = Enum.Font.GothamBold
+UI.QuotaLabel.TextSize = 10.5
+
+local PlusBtn = Instance.new("TextButton", QuotaCard)
+PlusBtn.Size = UDim2.new(0, 32, 0, 26)
+PlusBtn.Position = UDim2.new(1, -40, 0.5, -13)
+PlusBtn.Text = "+1"
+PlusBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+PlusBtn.Font = Enum.Font.GothamBold
+PlusBtn.TextSize = 10.5
+PlusBtn.BackgroundColor3 = C_HEADER
+Instance.new("UICorner", PlusBtn).CornerRadius = UDim.new(0, 6)
+
+MinusBtn.MouseButton1Click:Connect(function()
+    Core.Settings.repeatsPerQuest = math.max(1, Core.Settings.repeatsPerQuest - 1)
+    Core.SaveSettings(); UI.RefreshQuestUI()
+end)
+
+PlusBtn.MouseButton1Click:Connect(function()
+    Core.Settings.repeatsPerQuest = math.min(500, Core.Settings.repeatsPerQuest + 1)
+    Core.SaveSettings(); UI.RefreshQuestUI()
+end)
+
+UI.RefreshQuestUI()
+
+local SaveIslBtn = Instance.new("TextButton", GrindPanel)
+SaveIslBtn.LayoutOrder = nextOrder(GrindPanel)
+SaveIslBtn.Size = UDim2.new(1, 0, 0, 30)
+SaveIslBtn.Text = "📍 Salvar Posicao da Ilha Atual"
 SaveIslBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 SaveIslBtn.Font = Enum.Font.GothamBold
 SaveIslBtn.TextSize = 10
-SaveIslBtn.BackgroundColor3 = Color3.fromRGB(59, 130, 246)
-Instance.new("UICorner", SaveIslBtn).CornerRadius = UDim.new(0, 6)
+SaveIslBtn.BackgroundColor3 = C_FRUIT
+Instance.new("UICorner", SaveIslBtn).CornerRadius = UDim.new(0, 7)
 SaveIslBtn.MouseButton1Click:Connect(function()
     local q = QUEST_ROADMAP[Core.Settings.currentQuestIndex]
-    if q and root then
-        Core.SaveIsland(q.island, root.Position)
-        setStatus("Salvo " .. q.island .. " no JSON.")
+    local r = getRoot()
+    if q and r then
+        Core.SaveIsland(q.island, r.Position)
+        UI.SetStatus("Salvo " .. q.island .. " no JSON.")
     end
 end)
 
--- Controles da Aba Frutas
-makeToggle(FruitPage, 0, "ESP Frutas", "esp")
-makeToggle(FruitPage, 34, "Auto-Coletar Frutas", "autoFruit")
-makeToggle(FruitPage, 68, "Auto-Store (Guardar)", "autoStore")
-makeToggle(FruitPage, 102, "Voo Suave", "tweenTravel")
-makeToggle(FruitPage, 136, "Auto Server Hop", "autoHop")
+-- Switches Frutas
+addSwitch(FruitPanel, "autoPlayIntro", "Auto-Iniciar (Pular Intro)", "Pula tela inicial ao entrar", Core.Settings.autoPlayIntro)
+addSwitch(FruitPanel, "esp", "Radar Visual (ESP)", "Mostra frutas caídas no mapa", Core.Settings.esp)
+addSwitch(FruitPanel, "autoFruit", "Coleta Automática", "Busca frutas do filtro alvo", Core.Settings.autoFruit)
+addSwitch(FruitPanel, "autoStore", "Auto-Store (Guardar)", "Equipa e guarda fruta coletada", Core.Settings.autoStore)
+addSwitch(FruitPanel, "tweenTravel", "Voo Suave", "Voa pelo alto ao deslocar", Core.Settings.tweenTravel)
+addSwitch(FruitPanel, "autoHop", "Auto Server Hop (1-4P)", "Troca de sala se não achar alvo", Core.Settings.autoHop)
+
+-- Filtro de Raridade
+local RarityCard = Instance.new("Frame", FruitPanel)
+RarityCard.LayoutOrder = nextOrder(FruitPanel)
+RarityCard.Size = UDim2.new(1, 0, 0, 42)
+RarityCard.BackgroundColor3 = C_CARD
+Instance.new("UICorner", RarityCard).CornerRadius = UDim.new(0, 8)
+local RarityStroke = Instance.new("UIStroke", RarityCard)
+RarityStroke.Thickness = 1.5
+
+local RarityBadge = Instance.new("TextLabel", RarityCard)
+RarityBadge.Size = UDim2.new(0, 74, 0, 24)
+RarityBadge.Position = UDim2.new(0, 10, 0.5, -12)
+RarityBadge.Font = Enum.Font.GothamBold
+RarityBadge.TextSize = 10
+RarityBadge.TextColor3 = Color3.fromRGB(255, 255, 255)
+Instance.new("UICorner", RarityBadge).CornerRadius = UDim.new(0, 6)
+
+local RaritySub = Instance.new("TextLabel", RarityCard)
+RaritySub.Size = UDim2.new(1, -100, 1, 0)
+RaritySub.Position = UDim2.new(0, 92, 0, 0)
+RaritySub.BackgroundTransparency = 1
+RaritySub.TextColor3 = C_MUTED
+RaritySub.Font = Enum.Font.Gotham
+RaritySub.TextSize = 9.5
+RaritySub.TextXAlignment = Enum.TextXAlignment.Left
+
+local RarityBtn = Instance.new("TextButton", RarityCard)
+RarityBtn.Size = UDim2.new(1, 0, 1, 0)
+RarityBtn.BackgroundTransparency = 1
+RarityBtn.Text = ""
+
+local function syncRarity()
+    local cur = RARITY_LEVELS[Core.Settings.minRarityId] or RARITY_LEVELS[2]
+    RarityBadge.Text = cur.badge
+    RarityBadge.BackgroundColor3 = cur.color
+    RarityStroke.Color = cur.color
+    RaritySub.Text = cur.desc
+end
+syncRarity()
+
+RarityBtn.MouseButton1Click:Connect(function()
+    Core.Settings.minRarityId = (Core.Settings.minRarityId % #RARITY_LEVELS) + 1
+    Core.SaveSettings()
+    syncRarity()
+end)
+
+-- Botão Novo Servidor + Limpar Histórico
+local HopRow = Instance.new("Frame", FruitPanel)
+HopRow.LayoutOrder = nextOrder(FruitPanel)
+HopRow.Size = UDim2.new(1, 0, 0, 32)
+HopRow.BackgroundTransparency = 1
+
+UI.HopNowBtn = Instance.new("TextButton", HopRow)
+UI.HopNowBtn.Size = UDim2.new(0.80, 0, 1, 0)
+UI.HopNowBtn.Text = "🔄 Novo Servidor"
+UI.HopNowBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+UI.HopNowBtn.Font = Enum.Font.GothamBold
+UI.HopNowBtn.TextSize = 11
+UI.HopNowBtn.BackgroundColor3 = C_BLUE
+Instance.new("UICorner", UI.HopNowBtn).CornerRadius = UDim.new(0, 7)
+
+local ClearHistBtn = Instance.new("TextButton", HopRow)
+ClearHistBtn.Size = UDim2.new(0.17, 0, 1, 0)
+ClearHistBtn.Position = UDim2.new(0.83, 0, 0, 0)
+ClearHistBtn.Text = "🗑️"
+ClearHistBtn.TextColor3 = C_TEXT
+ClearHistBtn.Font = Enum.Font.GothamBold
+ClearHistBtn.BackgroundColor3 = C_CARD
+Instance.new("UICorner", ClearHistBtn).CornerRadius = UDim.new(0, 7)
+
+UI.FruitScroll = Instance.new("ScrollingFrame", FruitPanel)
+UI.FruitScroll.LayoutOrder = nextOrder(FruitPanel)
+UI.FruitScroll.Size = UDim2.new(1, 0, 0, 110)
+UI.FruitScroll.BackgroundColor3 = Color3.fromRGB(13, 15, 20)
+UI.FruitScroll.ScrollBarThickness = 4
+UI.FruitScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+UI.FruitScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+Instance.new("UICorner", UI.FruitScroll).CornerRadius = UDim.new(0, 8)
+Instance.new("UIStroke", UI.FruitScroll).Color = C_BORDER
+
+local fListLayout = Instance.new("UIListLayout", UI.FruitScroll)
+fListLayout.Padding = UDim.new(0, 6)
+
+-- Barra de Status Fixa
+local StatusBox = Instance.new("Frame", MainFrame)
+StatusBox.Size = UDim2.new(1, -20, 0, 34)
+StatusBox.Position = UDim2.new(0, 10, 1, -42)
+StatusBox.BackgroundColor3 = C_HEADER
+Instance.new("UICorner", StatusBox).CornerRadius = UDim.new(0, 7)
+Instance.new("UIStroke", StatusBox).Color = C_BORDER
+
+UI.StatusLabel = Instance.new("TextLabel", StatusBox)
+UI.StatusLabel.Size = UDim2.new(1, -14, 1, -6)
+UI.StatusLabel.Position = UDim2.new(0, 7, 0, 3)
+UI.StatusLabel.BackgroundTransparency = 1
+UI.StatusLabel.Text = "Hub v9.2 pronto."
+UI.StatusLabel.TextColor3 = C_TEXT
+UI.StatusLabel.Font = Enum.Font.Gotham
+UI.StatusLabel.TextSize = 9.5
+UI.StatusLabel.TextWrapped = true
+UI.StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local FloatingIcon = Instance.new("TextButton", ScreenGui)
+FloatingIcon.Size = UDim2.new(0, 48, 0, 48)
+FloatingIcon.Position = UDim2.new(0.05, 0, 0.25, 0)
+FloatingIcon.BackgroundColor3 = C_HEADER
+FloatingIcon.Text = "🍎"
+FloatingIcon.TextSize = 22
+FloatingIcon.Visible = false
+FloatingIcon.Active = true
+FloatingIcon.Draggable = true
+Instance.new("UICorner", FloatingIcon).CornerRadius = UDim.new(1, 0)
+Instance.new("UIStroke", FloatingIcon).Color = C_FRUIT
+
+MinBtn.MouseButton1Click:Connect(function()
+    MainFrame.Visible = false; FloatingIcon.Visible = true
+end)
+FloatingIcon.MouseButton1Click:Connect(function()
+    FloatingIcon.Visible = false; MainFrame.Visible = true
+end)
 
 -- ============================================================================
--- 3. LOOP DE AUTO-GRIND (ISOLADO EM PCALL)
+-- 4. MÓDULO AUTO-GRIND (APROXIMAÇÃO DO NPC + ACEITE + COMBATE + REPETIÇÃO)
 -- ============================================================================
 task.spawn(function()
     local ignoreMap = {}
     local counted = false
     local lastAccept = 0
+
+    local function findNpcPos(qData)
+        if not qData then return nil end
+        local ok, pos = pcall(function()
+            local gFolder = Workspace.IgnoreList.Int.NPCs.Quests.Grinding
+            local islFolder = gFolder:FindFirstChild(qData.island)
+            local model = islFolder and (islFolder:FindFirstChild(qData.giver) or islFolder:FindFirstChildWhichIsA("Model", true))
+            if model then
+                local p = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true)
+                if p then return p.Position end
+            end
+            return nil
+        end)
+        if ok and pos then
+            Core.SaveIsland(qData.island, pos)
+            return pos
+        end
+        return Core.IslandCache[qData.island]
+    end
 
     local function getQuestInfo()
         local info = { active = false, title = "", allDone = false, mobTarget = nil, prog = "" }
@@ -525,6 +855,7 @@ task.spawn(function()
     end
 
     local function findTargetMob(tName, questMobs)
+        local root = getRoot()
         local folder = Workspace:FindFirstChild("Playability") and Workspace.Playability:FindFirstChild("Enemys")
         if not folder or not root then return nil, nil end
         local list = {}
@@ -548,9 +879,10 @@ task.spawn(function()
     end
 
     local function equipWeapon()
-        if not char then return nil end
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        for _, t in ipairs(char:GetChildren()) do
+        local c = player.Character
+        if not c then return nil end
+        local hum = c:FindFirstChildOfClass("Humanoid")
+        for _, t in ipairs(c:GetChildren()) do
             if t:IsA("Tool") and not t.Name:lower():find("fruit") then return t end
         end
         local bp = player:FindFirstChild("Backpack")
@@ -566,6 +898,7 @@ task.spawn(function()
 
     while ScreenGui and ScreenGui.Parent do
         pcall(function()
+            local root = getRoot()
             local qData = QUEST_ROADMAP[math.clamp(Core.Settings.currentQuestIndex, 1, #QUEST_ROADMAP)]
             local qInfo = getQuestInfo()
             local repBtn = findRepeatBtn()
@@ -581,21 +914,22 @@ task.spawn(function()
                         counted = true
                         Core.Settings.currentQuestDoneCount = Core.Settings.currentQuestDoneCount + 1
                         Core.SaveSettings()
-                        refreshQuestUI()
+                        UI.RefreshQuestUI()
                     end
                     if Core.Settings.currentQuestDoneCount >= Core.Settings.repeatsPerQuest then
                         local prevIsl = qData.island
                         Core.Settings.currentQuestIndex = (Core.Settings.currentQuestIndex % #QUEST_ROADMAP) + 1
                         Core.Settings.currentQuestDoneCount = 0
                         Core.SaveSettings()
-                        refreshQuestUI()
+                        UI.RefreshQuestUI()
                         local nextQ = QUEST_ROADMAP[Core.Settings.currentQuestIndex]
-                        if nextQ and nextQ.island ~= prevIsl and Core.IslandCache[nextQ.island] then
-                            Core.SafeIslandTravel(Core.IslandCache[nextQ.island], setStatus)
+                        if nextQ and nextQ.island ~= prevIsl then
+                            local nPos = findNpcPos(nextQ)
+                            if nPos then Core.SafeIslandTravel(nPos, UI.SetStatus) end
                         end
                         counted = false
                     elseif Core.Settings.autoRepeatQuest and repBtn then
-                        setStatus("Repetindo quest...")
+                        UI.SetStatus(string.format("Repetindo missão (%d/%d)...", Core.Settings.currentQuestDoneCount, Core.Settings.repeatsPerQuest))
                         Core.ClickButton(repBtn)
                         task.wait(0.8)
                         counted = false
@@ -604,8 +938,21 @@ task.spawn(function()
                     counted = false
                     if Core.Settings.autoAcceptQuest and (tick() - lastAccept) >= 1.2 then
                         lastAccept = tick()
-                        setStatus("Aceitando " .. qData.title .. "...")
-                        ReplicatedStorage.NetworkInstances.RemoteEvents.Quests:FireServer("AcceptGrinding", qData.title)
+                        local npcPos = findNpcPos(qData)
+                        if npcPos then
+                            local d = (root.Position - npcPos).Magnitude
+                            if d > 250 then
+                                Core.SafeIslandTravel(npcPos, UI.SetStatus)
+                            elseif d > 12 then
+                                UI.SetStatus("Indo até o NPC de " .. qData.island .. "...")
+                                Core.MoveToPosition(npcPos + Vector3.new(0, 2, 4), 250)
+                                task.wait(0.25)
+                            end
+                        end
+                        UI.SetStatus("Aceitando " .. qData.title .. "...")
+                        pcall(function()
+                            ReplicatedStorage.NetworkInstances.RemoteEvents.Quests:FireServer("AcceptGrinding", qData.title)
+                        end)
                     end
                 else
                     counted = false
@@ -614,17 +961,18 @@ task.spawn(function()
                         local weap = equipWeapon()
                         local tStart = tick()
                         while ScreenGui.Parent and Core.Settings.autoGrind and not Core.State.busyWithFruit and not Core.State.isTravelingIsland do
-                            if not mobReady(mob) or not mRoot.Parent or (tick() - tStart) > 7 then
+                            local rNow = getRoot()
+                            if not rNow or not mobReady(mob) or not mRoot.Parent or (tick() - tStart) > 7 then
                                 ignoreMap[mob] = tick() + 3.5
                                 break
                             end
-                            Core.MoveTo(mRoot.Position - (mRoot.CFrame.LookVector * Core.Settings.grindDistance) + Vector3.new(0, 1.5, 0))
-                            setStatus(string.format("[%d/%d] %s (%s)", Core.Settings.currentQuestDoneCount, Core.Settings.repeatsPerQuest, label, qInfo.prog))
+                            Core.MoveToPosition(mRoot.Position - (mRoot.CFrame.LookVector * Core.Settings.grindDistance) + Vector3.new(0, 1.5, 0), 280)
+                            UI.SetStatus(string.format("[#%d %d/%d] %s (%s)", qData.id, Core.Settings.currentQuestDoneCount, Core.Settings.repeatsPerQuest, label, qInfo.prog))
                             if weap then weap:Activate() end
                             task.wait(0.18)
                         end
                     else
-                        setStatus("Aguardando inimigo: " .. tostring(qInfo.mobTarget or qData.mobs[1]))
+                        UI.SetStatus("Aguardando inimigo: " .. tostring(qInfo.mobTarget or qData.mobs[1]))
                     end
                 end
                 Core.State.busyWithGrind = false
@@ -635,38 +983,192 @@ task.spawn(function()
 end)
 
 -- ============================================================================
--- 4. LOOP DE FRUTAS & SERVER HOP (ISOLADO EM PCALL)
+-- 5. MÓDULO FRUTAS, ESP & SERVER HOP (ISOLADO EM PCALL)
 -- ============================================================================
 task.spawn(function()
     local visited = {}
-    pcall(function()
-        if typeof(isfile) == "function" and typeof(readfile) == "function" and isfile(HISTORY_FILE) then
-            visited = HttpService:JSONDecode(readfile(HISTORY_FILE)) or {}
-        end
-    end)
-    if game.JobId ~= "" then visited[game.JobId] = os.time() end
-
-    while ScreenGui and ScreenGui.Parent do
+    local function loadHist()
+        local h, now = {}, os.time()
         pcall(function()
-            if Core.Settings.autoFruit and not Core.State.busyWithFruit and not Core.State.isTravelingIsland and root then
-                local dropped = Workspace:FindFirstChild("Playability") and Workspace.Playability:FindFirstChild("DroppedTools")
-                if dropped then
-                    for _, item in ipairs(dropped:GetChildren()) do
-                        if item.Name:lower():find("fruit") then
-                            local h = item:FindFirstChild("Handle") or item:FindFirstChildWhichIsA("BasePart", true)
-                            if h then
-                                Core.State.busyWithFruit = true
-                                setStatus("Coletando fruta: " .. item.Name)
-                                Core.MoveTo(h.Position + Vector3.new(0, 2.5, 0), 350)
-                                task.wait(0.3)
-                                Core.State.busyWithFruit = false
-                                break
-                            end
-                        end
+            if typeof(isfile) == "function" and typeof(readfile) == "function" and isfile(HISTORY_FILE) then
+                local dec = HttpService:JSONDecode(readfile(HISTORY_FILE))
+                if type(dec) == "table" then
+                    for id, ts in pairs(dec) do
+                        if (now - tonumber(ts)) < EXPIRE_SECONDS then h[id] = ts end
                     end
                 end
             end
         end)
-        task.wait(1.0)
+        if game.JobId ~= "" then h[game.JobId] = now end
+        return h
+    end
+
+    local function saveHist()
+        pcall(function()
+            if typeof(writefile) == "function" then writefile(HISTORY_FILE, HttpService:JSONEncode(visited)) end
+        end)
+    end
+
+    local function countKeys(t) local n = 0; for _ in pairs(t) do n = n + 1 end; return n end
+
+    visited = loadHist()
+    saveHist()
+    UI.HopNowBtn.Text = string.format("🔄 Novo Servidor (%d salvos)", countKeys(visited))
+
+    local function hopNow()
+        if Core.State.isHopping or Core.State.busyWithFruit then return end
+        Core.State.isHopping = true
+        UI.SetStatus("Buscando sala...")
+        local ok, raw = pcall(function()
+            return game:HttpGet(string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100", game.PlaceId))
+        end)
+        if not ok or not raw then Core.State.isHopping = false; return end
+        local dOk, data = pcall(function() return HttpService:JSONDecode(raw) end)
+        if not dOk or not data or not data.data then Core.State.isHopping = false; return end
+
+        local low, fb = {}, {}
+        for _, s in ipairs(data.data) do
+            if s.id and s.id ~= game.JobId and not visited[s.id] and s.playing and s.maxPlayers and s.playing < (s.maxPlayers - 1) and s.playing >= 1 then
+                table.insert(s.playing <= 4 and low or fb, s)
+            end
+        end
+        local pool = #low > 0 and low or fb
+        if #pool == 0 then UI.SetStatus("Sem salas novas salvas. Use 🗑️."); Core.State.isHopping = false; return end
+
+        local target = pool[math.random(1, #pool)]
+        visited[target.id] = os.time()
+        saveHist()
+        TeleportService:TeleportToPlaceInstance(game.PlaceId, target.id, player)
+    end
+
+    UI.HopNowBtn.MouseButton1Click:Connect(hopNow)
+    ClearHistBtn.MouseButton1Click:Connect(function()
+        visited = {[game.JobId] = os.time()}
+        saveHist()
+        UI.HopNowBtn.Text = string.format("🔄 Novo Servidor (%d salvos)", countKeys(visited))
+        UI.SetStatus("Histórico de salas limpo!")
+    end)
+
+    local espMap = {}
+    local function getFruitPos(obj)
+        if not obj or not obj.Parent then return nil end
+        local h = obj:FindFirstChild("Handle")
+        if h and h:IsA("BasePart") then return h.Position end
+        if obj:IsA("Model") then return obj:GetPivot().Position end
+        if obj:IsA("BasePart") then return obj.Position end
+        local p = obj:FindFirstChildWhichIsA("BasePart", true)
+        return p and p.Position or nil
+    end
+
+    local function ensureESP(obj, meta)
+        if espMap[obj] and espMap[obj].Parent then return end
+        local part = obj:FindFirstChild("Handle") or obj:FindFirstChildWhichIsA("BasePart", true)
+        if not part then return end
+        local bb = Instance.new("BillboardGui", part)
+        bb.Adornee = part; bb.Size = UDim2.new(0, 160, 0, 38); bb.StudsOffset = Vector3.new(0, 2.5, 0); bb.AlwaysOnTop = true
+        local lbl = Instance.new("TextLabel", bb)
+        lbl.Size = UDim2.new(1, 0, 1, 0); lbl.BackgroundTransparency = 1; lbl.TextColor3 = meta.color; lbl.TextStrokeTransparency = 0.2; lbl.Font = Enum.Font.GothamBold; lbl.TextSize = 10.5
+        espMap[obj] = bb
+        task.spawn(function()
+            while bb and bb.Parent and obj and obj.Parent do
+                bb.Enabled = Core.Settings.esp
+                local r = getRoot()
+                if r then lbl.Text = string.format("[%s] %s (%.0f)", meta.tag, obj.Name, (part.Position - r.Position).Magnitude) end
+                task.wait(0.35)
+            end
+        end)
+    end
+
+    local function collectFruit(item, meta)
+        local r = getRoot()
+        if Core.State.busyWithFruit or Core.State.isTravelingIsland or not r then return end
+        local pos = getFruitPos(item)
+        if not pos then return end
+        Core.State.busyWithFruit = true
+        UI.SetStatus("Coletando " .. item.Name .. "...")
+        Core.MoveToPosition(pos + Vector3.new(0, 2.5, 0), 350)
+        task.wait(0.25)
+        pcall(function()
+            local c = player.Character
+            if item:IsA("Tool") and c and c:FindFirstChild("Humanoid") then c.Humanoid:EquipTool(item) end
+        end)
+        task.wait(0.25)
+        if Core.Settings.autoStore then
+            pcall(function()
+                local storeBtn = pGui.ScreenGuis.MainUI.InteractionHUD.FruitOptions.Background.StoreButton
+                Core.ClickButton(storeBtn)
+            end)
+        end
+        Core.State.busyWithFruit = false
+    end
+
+    while ScreenGui and ScreenGui.Parent do
+        pcall(function()
+            if Core.Settings.autoPlayIntro then
+                local lGui = pGui:FindFirstChild("LoadingScreenUI")
+                if lGui and lGui.Enabled then
+                    for _, d in ipairs(lGui:GetDescendants()) do
+                        if (d:IsA("TextButton") or d:IsA("ImageButton")) and d.Visible then Core.ClickButton(d) end
+                    end
+                end
+            end
+
+            for _, c in ipairs(UI.FruitScroll:GetChildren()) do
+                if c:IsA("Frame") or c:IsA("TextLabel") then c:Destroy() end
+            end
+
+            local dropped = Workspace:FindFirstChild("Playability") and Workspace.Playability:FindFirstChild("DroppedTools")
+            local bestItem, bestMeta, count = nil, nil, 0
+            if dropped then
+                for _, item in ipairs(dropped:GetChildren()) do
+                    local pos = getFruitPos(item)
+                    if pos and item.Name:lower():find("fruit") then
+                        count = count + 1
+                        local meta = getFruitMeta(item.Name)
+                        ensureESP(item, meta)
+                        local okFilter = meta.tier >= Core.Settings.minRarityId
+                        if okFilter and (not bestItem or meta.tier > bestMeta.tier) then
+                            bestItem, bestMeta = item, meta
+                        end
+
+                        local row = Instance.new("Frame", UI.FruitScroll)
+                        row.Size = UDim2.new(1, -8, 0, 36); row.BackgroundColor3 = C_CARD
+                        Instance.new("UICorner", row).CornerRadius = UDim.new(0, 6)
+                        local info = Instance.new("TextLabel", row)
+                        info.Size = UDim2.new(1, -72, 1, 0); info.Position = UDim2.new(0, 8, 0, 0); info.BackgroundTransparency = 1
+                        info.Text = string.format("[%s] %s", meta.tag, item.Name); info.TextColor3 = meta.color; info.Font = Enum.Font.GothamBold; info.TextSize = 9.5; info.TextXAlignment = Enum.TextXAlignment.Left
+
+                        local takeBtn = Instance.new("TextButton", row)
+                        takeBtn.Size = UDim2.new(0, 56, 0, 24); takeBtn.Position = UDim2.new(1, -62, 0.5, -12)
+                        takeBtn.Text = "Pegar"; takeBtn.TextColor3 = Color3.fromRGB(255, 255, 255); takeBtn.Font = Enum.Font.GothamBold; takeBtn.TextSize = 9.5; takeBtn.BackgroundColor3 = C_ACCENT
+                        Instance.new("UICorner", takeBtn).CornerRadius = UDim.new(0, 5)
+                        takeBtn.MouseButton1Click:Connect(function() task.spawn(function() collectFruit(item, meta) end) end)
+                    end
+                end
+            end
+
+            if count == 0 then
+                local empty = Instance.new("TextLabel", UI.FruitScroll)
+                empty.Size = UDim2.new(1, 0, 0, 32); empty.BackgroundTransparency = 1; empty.Text = "Nenhuma fruta caída no mapa."; empty.TextColor3 = C_MUTED; empty.Font = Enum.Font.Gotham; empty.TextSize = 9.5
+            end
+
+            if bestItem and not Core.State.busyWithFruit then
+                if Core.Settings.autoHop then
+                    Core.Settings.autoHop = false; Core.SaveSettings()
+                    if UI.SwitchUpdaters["autoHop"] then UI.SwitchUpdaters["autoHop"](false) end
+                end
+                if Core.Settings.autoFruit then
+                    collectFruit(bestItem, bestMeta)
+                end
+            elseif Core.Settings.autoHop and not bestItem and not Core.State.busyWithFruit and not Core.State.busyWithGrind and not Core.State.isHopping then
+                local rem = Core.State.hopEligibleTime - tick()
+                if rem > 0 then
+                    UI.SetStatus(string.format("Sem fruta alvo. Hop em %.1fs...", rem))
+                else
+                    hopNow()
+                end
+            end
+        end)
+        task.wait(0.8)
     end
 end)
