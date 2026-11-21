@@ -826,13 +826,12 @@ task.spawn(function()
     end
 
     -- FIX #1: RepeatButton só conta se estiver visível DENTRO de frame visível E quest ativa
-    local function isRepeatReady(qInfo)
-        if not qInfo.active then return false end
+    local function isRepeatReady()
         local ready = false
         pcall(function()
             local rq = pGui.ScreenGuis.MainUI.ProgressHUD.ActiveQuest.Container.RepeatQuest
             local rb = rq and rq:FindFirstChild("RepeatButton")
-            ready = (rq ~= nil and rq.Visible and rb ~= nil)
+            ready = (rq ~= nil and rq.Visible and rb ~= nil and rb.Visible and rb.Active)
         end)
         return ready
     end
@@ -1011,55 +1010,70 @@ task.spawn(function()
                 Core.State.busyWithGrind = true
 
                 -- FIX #1: justFinished só com quest ativa ou RepeatButton visível DENTRO de frame visível
+                -- Detecta se RepeatButton está pronto (funciona mesmo com Title='')
+                local repeatReady = isRepeatReady()
+
+                -- Quest foi completada? (3 critérios, qualquer um serve)
                 local justFinished = (qInfo.active and qInfo.allDone)
-                    or isRepeatReady(qInfo)
-                    or (wasQuestActive and not qInfo.active and lastQuestTitle == qData.title)
+                    or repeatReady
+                    or (wasQuestActive and not qInfo.active and lastQuestTitle == qData.title and not repeatReady)
 
-                if justFinished then
-                    if not countedThisRun then
-                        countedThisRun = true
-                        Core.Settings.currentQuestDoneCount = Core.Settings.currentQuestDoneCount + 1
-                        Core.SaveSettings()
-                        UI.RefreshQuestUI()
-                    end
-                    wasQuestActive = false
-
-                    if Core.Settings.currentQuestDoneCount >= Core.Settings.repeatsPerQuest then
-                        local prevIsl = qData.island
-                        Core.Settings.currentQuestIndex = (Core.Settings.currentQuestIndex % #QUEST_ROADMAP) + 1
-                        Core.Settings.currentQuestDoneCount = 0
-                        Core.SaveSettings()
-                        UI.RefreshQuestUI()
-                        local nextQ = QUEST_ROADMAP[Core.Settings.currentQuestIndex]
-                        if nextQ and nextQ.island ~= prevIsl then
-                            local nPos = findNpcPos(nextQ)
-                            if nPos then Core.SafeIslandTravel(nPos, UI.SetStatus) end
+                if repeatReady then
+                    -- Prioridade absoluta: se RepeatButton existe, clica NELE
+                    if Core.Settings.autoRepeatQuest then
+                        if not countedThisRun then
+                            countedThisRun = true
+                            Core.Settings.currentQuestDoneCount = Core.Settings.currentQuestDoneCount + 1
+                            Core.SaveSettings()
+                            UI.RefreshQuestUI()
                         end
-                        countedThisRun = false
-                    elseif Core.Settings.autoRepeatQuest then
-                        -- FIX #1: só clica se repeat está PRONTO (frame visível)
-                        if isRepeatReady(qInfo) then
+                        wasQuestActive = false
+
+                        -- Verifica se já atingiu a meta
+                        if Core.Settings.currentQuestDoneCount >= Core.Settings.repeatsPerQuest then
+                            local prevIsl = qData.island
+                            Core.Settings.currentQuestIndex = (Core.Settings.currentQuestIndex % #QUEST_ROADMAP) + 1
+                            Core.Settings.currentQuestDoneCount = 0
+                            Core.SaveSettings()
+                            UI.RefreshQuestUI()
+                            local nextQ = QUEST_ROADMAP[Core.Settings.currentQuestIndex]
+                            if nextQ and nextQ.island ~= prevIsl then
+                                local nPos = findNpcPos(nextQ)
+                                if nPos then Core.SafeIslandTravel(nPos, UI.SetStatus) end
+                            end
+                            countedThisRun = false
+                        else
+                            -- Clica RepeatButton
                             UI.SetStatus(string.format("Repetindo missão (%d/%d)...", Core.Settings.currentQuestDoneCount, Core.Settings.repeatsPerQuest))
                             local rb = pGui.ScreenGuis.MainUI.ProgressHUD.ActiveQuest.Container.RepeatQuest.RepeatButton
                             Core.ClickButton(rb)
-                            task.wait(0.9)
+                            task.wait(1.2)  -- espera quest resetar
                             countedThisRun = false
-                        else
-                            UI.SetStatus("Aguardando botão Repetir...")
-                            task.wait(0.6)
                         end
+                    else
+                        -- autoRepeatQuest OFF: só marca e espera
+                        task.wait(0.5)
                     end
 
+                elseif justFinished and not qInfo.active then
+                    -- Quest sumiu E não tem RepeatButton ainda: aguarda (transição)
+                    -- NÃO vai pro NPC — espera até RepeatButton aparecer (até 5s)
+                    countedThisRun = true
+                    wasQuestActive = false
+                    UI.SetStatus("Aguardando botão Repetir...")
+                    task.wait(0.5)
+
                 elseif not qInfo.active then
+                    -- Sem quest ativa E sem RepeatButton: é hora de ir pro NPC
                     countedThisRun = false
                     wasQuestActive = false
-                    if Core.Settings.autoAcceptQuest and (tick() - lastAccept) >= 1.3 then
+                    if Core.Settings.autoAcceptQuest and (tick() - lastAccept) >= 1.5 then
                         lastAccept = tick()
                         tryAcceptQuest(qData)
                     end
 
                 else
-                    -- Quest ativa em andamento
+                    -- Quest ativa em andamento — caça
                     wasQuestActive = true
                     lastQuestTitle = qInfo.title
                     countedThisRun = false
@@ -1083,6 +1097,10 @@ task.spawn(function()
                             UI.SetStatus(string.format("[#%d %d/%d] %s (%s)", qData.id, Core.Settings.currentQuestDoneCount, Core.Settings.repeatsPerQuest, tostring(label), progStr))
                             if weap then weap:Activate() end
                             task.wait(0.18)
+
+                            -- Re-checa se quest completou no meio do combate
+                            local rq = pGui.ScreenGuis.MainUI.ProgressHUD.ActiveQuest.Container.RepeatQuest
+                            if rq and rq.Visible then break end
                         end
                     else
                         local pts = getSpawnPointsForQuest(qInfo.mobTargets, qData.mobs)
