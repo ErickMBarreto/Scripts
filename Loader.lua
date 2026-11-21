@@ -1,4 +1,4 @@
--- main.lua (v9.2 - Correção de Referência de Character/Root, ESP e Aproximação de NPC)
+-- main.lua (v9.3 - RepeatButton & Quota Fix + Respawn Patrol + ESP & Hop)
 repeat task.wait() until game:IsLoaded()
 
 local Players = game:GetService("Players")
@@ -24,7 +24,7 @@ if not parentUI then pcall(function() parentUI = CoreGui end) end
 if not parentUI then pcall(function() parentUI = pGui end) end
 
 pcall(function()
-    for _, name in ipairs({"RPGFruitFinderV4", "RPGFruitFinderV5", "UnifiedModularHubV6", "UnifiedModularHubV7", "IsolatedGrindV88", "GitSingleHubV9", "FullGitHubV91", "FullGitHubV92"}) do
+    for _, name in ipairs({"RPGFruitFinderV4", "RPGFruitFinderV5", "UnifiedModularHubV6", "UnifiedModularHubV7", "IsolatedGrindV88", "GitSingleHubV9", "FullGitHubV91", "FullGitHubV92", "FullGitHubV93"}) do
         local old = parentUI:FindFirstChild(name)
         if old then old:Destroy() end
     end
@@ -301,7 +301,7 @@ local C_BLUE = Color3.fromRGB(59, 130, 246)
 local C_RED = Color3.fromRGB(239, 68, 68)
 
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "FullGitHubV92"
+ScreenGui.Name = "FullGitHubV93"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.DisplayOrder = 999999
 ScreenGui.Parent = parentUI
@@ -342,7 +342,7 @@ local Title = Instance.new("TextLabel", TopBar)
 Title.Size = UDim2.new(1, -76, 1, 0)
 Title.Position = UDim2.new(0, 12, 0, 0)
 Title.BackgroundTransparency = 1
-Title.Text = "Vox Seas Hub v9.2 (Git Full)"
+Title.Text = "Vox Seas Hub v9.3 (Git Full)"
 Title.TextColor3 = C_TEXT
 Title.Font = Enum.Font.GothamBold
 Title.TextSize = 13
@@ -718,7 +718,7 @@ UI.StatusLabel = Instance.new("TextLabel", StatusBox)
 UI.StatusLabel.Size = UDim2.new(1, -14, 1, -6)
 UI.StatusLabel.Position = UDim2.new(0, 7, 0, 3)
 UI.StatusLabel.BackgroundTransparency = 1
-UI.StatusLabel.Text = "Hub v9.2 pronto."
+UI.StatusLabel.Text = "Hub v9.3 pronto."
 UI.StatusLabel.TextColor3 = C_TEXT
 UI.StatusLabel.Font = Enum.Font.Gotham
 UI.StatusLabel.TextSize = 9.5
@@ -745,12 +745,15 @@ FloatingIcon.MouseButton1Click:Connect(function()
 end)
 
 -- ============================================================================
--- 4. MÓDULO AUTO-GRIND (APROXIMAÇÃO DO NPC + ACEITE + COMBATE + REPETIÇÃO)
+-- 4. MÓDULO AUTO-GRIND (CONTAGEM DE CICLO + PATRULHA DE RESPAWN + REPEATBUTTON)
 -- ============================================================================
 task.spawn(function()
     local ignoreMap = {}
-    local counted = false
+    local wasQuestActive = false
+    local lastQuestTitle = ""
+    local countedThisRun = false
     local lastAccept = 0
+    local patrolIndex = 0
 
     local function findNpcPos(qData)
         if not qData then return nil end
@@ -808,8 +811,8 @@ task.spawn(function()
     local function findRepeatBtn()
         local found = nil
         pcall(function()
-            local prog = pGui.ScreenGuis.MainUI.ProgressHUD
-            for _, d in ipairs(prog:GetDescendants()) do
+            local mainUI = pGui.ScreenGuis.MainUI
+            for _, d in ipairs(mainUI:GetDescendants()) do
                 if d:IsA("GuiButton") and d.Visible then
                     local n = d.Name:lower()
                     if n:find("repeat") or n:find("repetir") then found = d; return end
@@ -878,6 +881,33 @@ task.spawn(function()
         return nil, nil, tName
     end
 
+    local function getSpawnPointsForQuest(tName, questMobs)
+        local pts = {}
+        local folder = Workspace:FindFirstChild("Playability") and Workspace.Playability:FindFirstChild("Enemys")
+        if not folder then return pts end
+        local list = {}
+        if tName then table.insert(list, tName) end
+        for _, m in ipairs(questMobs or {}) do table.insert(list, m) end
+
+        for _, mob in ipairs(folder:GetChildren()) do
+            if mob:IsA("Model") then
+                for _, name in ipairs(list) do
+                    if mobMatches(mob, name) then
+                        local dcf = mob:GetAttribute("DeadCFrame")
+                        if typeof(dcf) == "CFrame" and dcf.Position.Y > -300 then
+                            table.insert(pts, dcf.Position)
+                        else
+                            local mr = mob:FindFirstChild("HumanoidRootPart") or mob.PrimaryPart
+                            if mr and mr.Position.Y > -300 then table.insert(pts, mr.Position) end
+                        end
+                        break
+                    end
+                end
+            end
+        end
+        return pts
+    end
+
     local function equipWeapon()
         local c = player.Character
         if not c then return nil end
@@ -909,13 +939,22 @@ task.spawn(function()
 
             if Core.Settings.autoGrind and not Core.State.busyWithFruit and not Core.State.isTravelingIsland and root then
                 Core.State.busyWithGrind = true
-                if qInfo.active and qInfo.allDone then
-                    if not counted then
-                        counted = true
+
+                -- Detecta conclusão se allDone for true, ou se RepeatButton aparecer, ou se a quest ativa acabou de fechar após rodar
+                local justFinished = (qInfo.active and qInfo.allDone)
+                    or (repBtn ~= nil)
+                    or (wasQuestActive and not qInfo.active and lastQuestTitle == qData.title)
+
+                if justFinished then
+                    if not countedThisRun then
+                        countedThisRun = true
                         Core.Settings.currentQuestDoneCount = Core.Settings.currentQuestDoneCount + 1
                         Core.SaveSettings()
                         UI.RefreshQuestUI()
                     end
+
+                    wasQuestActive = false
+
                     if Core.Settings.currentQuestDoneCount >= Core.Settings.repeatsPerQuest then
                         local prevIsl = qData.island
                         Core.Settings.currentQuestIndex = (Core.Settings.currentQuestIndex % #QUEST_ROADMAP) + 1
@@ -927,16 +966,30 @@ task.spawn(function()
                             local nPos = findNpcPos(nextQ)
                             if nPos then Core.SafeIslandTravel(nPos, UI.SetStatus) end
                         end
-                        counted = false
-                    elseif Core.Settings.autoRepeatQuest and repBtn then
-                        UI.SetStatus(string.format("Repetindo missão (%d/%d)...", Core.Settings.currentQuestDoneCount, Core.Settings.repeatsPerQuest))
-                        Core.ClickButton(repBtn)
-                        task.wait(0.8)
-                        counted = false
+                        countedThisRun = false
+                    elseif Core.Settings.autoRepeatQuest then
+                        -- Tenta clicar no RepeatButton; se ainda não apareceu, aguarda um pouco antes de ir ao NPC
+                        if repBtn then
+                            UI.SetStatus(string.format("Repetindo missão (%d/%d)...", Core.Settings.currentQuestDoneCount, Core.Settings.repeatsPerQuest))
+                            Core.ClickButton(repBtn)
+                            task.wait(0.9)
+                            countedThisRun = false
+                        else
+                            UI.SetStatus("Aguardando botão Repetir...")
+                            task.wait(0.6)
+                            local retryBtn = findRepeatBtn()
+                            if retryBtn then
+                                Core.ClickButton(retryBtn)
+                                task.wait(0.9)
+                                countedThisRun = false
+                            end
+                        end
                     end
+
                 elseif not qInfo.active then
-                    counted = false
-                    if Core.Settings.autoAcceptQuest and (tick() - lastAccept) >= 1.2 then
+                    countedThisRun = false
+                    wasQuestActive = false
+                    if Core.Settings.autoAcceptQuest and (tick() - lastAccept) >= 1.3 then
                         lastAccept = tick()
                         local npcPos = findNpcPos(qData)
                         if npcPos then
@@ -954,8 +1007,13 @@ task.spawn(function()
                             ReplicatedStorage.NetworkInstances.RemoteEvents.Quests:FireServer("AcceptGrinding", qData.title)
                         end)
                     end
+
                 else
-                    counted = false
+                    -- Missão ativa em andamento
+                    wasQuestActive = true
+                    lastQuestTitle = qInfo.title
+                    countedThisRun = false
+
                     local mob, mRoot, label = findTargetMob(qInfo.mobTarget, qData.mobs)
                     if mob and mRoot then
                         local weap = equipWeapon()
@@ -963,7 +1021,7 @@ task.spawn(function()
                         while ScreenGui.Parent and Core.Settings.autoGrind and not Core.State.busyWithFruit and not Core.State.isTravelingIsland do
                             local rNow = getRoot()
                             if not rNow or not mobReady(mob) or not mRoot.Parent or (tick() - tStart) > 7 then
-                                ignoreMap[mob] = tick() + 3.5
+                                ignoreMap[mob] = tick() + 3.0
                                 break
                             end
                             Core.MoveToPosition(mRoot.Position - (mRoot.CFrame.LookVector * Core.Settings.grindDistance) + Vector3.new(0, 1.5, 0), 280)
@@ -972,13 +1030,23 @@ task.spawn(function()
                             task.wait(0.18)
                         end
                     else
-                        UI.SetStatus("Aguardando inimigo: " .. tostring(qInfo.mobTarget or qData.mobs[1]))
+                        -- Patrulha entre os pontos de respawn dos inimigos da quest até um nascer
+                        local pts = getSpawnPointsForQuest(qInfo.mobTarget, qData.mobs)
+                        if #pts > 0 then
+                            patrolIndex = (patrolIndex % #pts) + 1
+                            local targetSpawn = pts[patrolIndex]
+                            if (root.Position - targetSpawn).Magnitude > 14 then
+                                Core.MoveToPosition(targetSpawn + Vector3.new(0, 3, 0), 260)
+                            end
+                        end
+                        UI.SetStatus("Aguardando respawn: " .. tostring(qInfo.mobTarget or qData.mobs[1]))
+                        task.wait(0.35)
                     end
                 end
                 Core.State.busyWithGrind = false
             end
         end)
-        task.wait(0.25)
+        task.wait(0.22)
     end
 end)
 
