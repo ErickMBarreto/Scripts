@@ -1,4 +1,4 @@
--- main.lua (v9.4 - Bugfixes: Multi-Objective, RepeatButton, SafeTravel, MobMatch)
+-- main.lua (v9.5 - Title fallback, mobMatches permissivo, Render=false, GetDescendants)
 repeat task.wait() until game:IsLoaded()
 
 local Players = game:GetService("Players")
@@ -24,7 +24,7 @@ if not parentUI then pcall(function() parentUI = CoreGui end) end
 if not parentUI then pcall(function() parentUI = pGui end) end
 
 pcall(function()
-    for _, name in ipairs({"RPGFruitFinderV4", "RPGFruitFinderV5", "UnifiedModularHubV6", "UnifiedModularHubV7", "IsolatedGrindV88", "GitSingleHubV9", "FullGitHubV91", "FullGitHubV92", "FullGitHubV93", "FullGitHubV94"}) do
+    for _, name in ipairs({"RPGFruitFinderV4", "RPGFruitFinderV5", "UnifiedModularHubV6", "UnifiedModularHubV7", "IsolatedGrindV88", "GitSingleHubV9", "FullGitHubV91", "FullGitHubV92", "FullGitHubV93", "FullGitHubV94", "FullGitHubV95"}) do
         local old = parentUI:FindFirstChild(name)
         if old then old:Destroy() end
     end
@@ -37,9 +37,10 @@ local Core = {}
 local CONFIG_FILE = "ff_config_" .. tostring(game.PlaceId) .. ".json"
 local HISTORY_FILE = "ff_visited_" .. tostring(game.PlaceId) .. ".json"
 local ISLAND_FILE = "ff_islands_" .. tostring(game.PlaceId) .. ".json"
+local SPAWN_FILE = "ff_spawns_" .. tostring(game.PlaceId) .. ".json"
 local EXPIRE_SECONDS = 2400
 local HOP_WAIT_SECONDS = 10.0
-local ISLAND_CACHE_TTL = 6 * 3600  -- 6h
+local ISLAND_CACHE_TTL = 6 * 3600
 
 Core.State = {
     busyWithFruit = false,
@@ -86,7 +87,7 @@ function Core.SaveSettings()
     end)
 end
 
-Core.IslandCache = {}  -- { [nome] = { pos = Vector3, ts = number } }
+Core.IslandCache = {}
 pcall(function()
     if typeof(isfile) == "function" and typeof(readfile) == "function" and isfile(ISLAND_FILE) then
         local dec = HttpService:JSONDecode(readfile(ISLAND_FILE))
@@ -123,6 +124,14 @@ function Core.GetIsland(name)
     if os.time() - e.ts > ISLAND_CACHE_TTL then return nil end
     return e.pos
 end
+
+Core.SpawnCache = {}
+pcall(function()
+    if typeof(isfile) == "function" and typeof(readfile) == "function" and isfile(SPAWN_FILE) then
+        local dec = HttpService:JSONDecode(readfile(SPAWN_FILE))
+        if type(dec) == "table" then Core.SpawnCache = dec end
+    end
+end)
 
 function Core.ClickButton(btn)
     if not btn then return end
@@ -207,7 +216,7 @@ function Core.SafeIslandTravel(targetPos, onProgress)
 
     local ok, err = pcall(doTravel)
     if not ok then
-        warn("[v9.4] SafeIslandTravel falhou:", err)
+        warn("[v9.5] SafeIslandTravel falhou:", err)
     end
     Core.State.isTravelingIsland = false
     return ok
@@ -319,7 +328,7 @@ local C_BLUE = Color3.fromRGB(59, 130, 246)
 local C_RED = Color3.fromRGB(239, 68, 68)
 
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "FullGitHubV94"
+ScreenGui.Name = "FullGitHubV95"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.DisplayOrder = 999999
 ScreenGui.Parent = parentUI
@@ -360,7 +369,7 @@ local Title = Instance.new("TextLabel", TopBar)
 Title.Size = UDim2.new(1, -76, 1, 0)
 Title.Position = UDim2.new(0, 12, 0, 0)
 Title.BackgroundTransparency = 1
-Title.Text = "Vox Seas Hub v9.4 (Git Full)"
+Title.Text = "Vox Seas Hub v9.5"
 Title.TextColor3 = C_TEXT
 Title.Font = Enum.Font.GothamBold
 Title.TextSize = 13
@@ -729,7 +738,7 @@ UI.StatusLabel = Instance.new("TextLabel", StatusBox)
 UI.StatusLabel.Size = UDim2.new(1, -14, 1, -6)
 UI.StatusLabel.Position = UDim2.new(0, 7, 0, 3)
 UI.StatusLabel.BackgroundTransparency = 1
-UI.StatusLabel.Text = "Hub v9.4 pronto."
+UI.StatusLabel.Text = "Hub v9.5 pronto."
 UI.StatusLabel.TextColor3 = C_TEXT
 UI.StatusLabel.Font = Enum.Font.Gotham
 UI.StatusLabel.TextSize = 9.5
@@ -756,7 +765,7 @@ FloatingIcon.MouseButton1Click:Connect(function()
 end)
 
 -- ============================================================================
--- 4. MÓDULO AUTO-GRIND (v9.4 — Fix: multi-objetivo, contador, mob safe)
+-- 4. MÓDULO AUTO-GRIND (v9.5)
 -- ============================================================================
 task.spawn(function()
     local ignoreMap = {}
@@ -785,47 +794,71 @@ task.spawn(function()
         return Core.GetIsland(qData.island)
     end
 
-    -- FIX #2: retorna TODOS os objetivos, não só o primeiro
+    -- FIX A: getQuestInfo com fallback de Title
     local function getQuestInfo()
         local info = {
             active = false,
             title = "",
             allDone = false,
-            mobTargets = {},   -- lista de nomes-alvo
-            progress = {},     -- [nome] = {cur, req, completo}
+            mobTargets = {},
+            progress = {},
         }
         pcall(function()
             local aq = pGui.ScreenGuis.MainUI.ProgressHUD.ActiveQuest
             if not aq.Visible then return end
-            local total, done = 0, 0
-            for _, d in ipairs(aq:GetDescendants()) do
-                if d:IsA("TextLabel") and d.Visible and d.Text ~= "" then
-                    if d.Name == "Title" then
-                        info.title = d.Text
-                    elseif d.Text:match("%d+%s*/%s*%d+") then
-                        local nome, cur, req = d.Text:match("([^:]+):%s*(%d+)%s*/%s*(%d+)")
-                        if nome and tonumber(req) and tonumber(req) > 0 then
-                            local curN, reqN = tonumber(cur), tonumber(req)
-                            total = total + 1
-                            local completo = d.Text:find("^<s>") ~= nil or curN >= reqN
-                            if completo then done = done + 1 end
-                            local clean = nome:gsub("^%s+", ""):gsub("%s+$", "")
-                                :gsub("^[Dd]efeat%s+", ""):gsub("^[Kk]ill%s+", ""):gsub("^[Mm]ate%s+", "")
-                                :gsub("^%d+%s*", "")
-                            clean = clean:gsub("%s+$", "")
-                            table.insert(info.mobTargets, clean)
-                            info.progress[clean] = { cur = curN, req = reqN, completo = completo }
+
+            local qData = QUEST_ROADMAP[math.clamp(Core.Settings.currentQuestIndex, 1, #QUEST_ROADMAP)]
+            local titleCandidates = {
+                aq.Container:FindFirstChild("Title"),
+                aq:FindFirstChild("Title"),
+                aq.Container:FindFirstChild("Header") and aq.Container.Header:FindFirstChild("Title"),
+                aq.Container:FindFirstChild("QuestTitle"),
+                aq:FindFirstChild("QuestTitle"),
+            }
+            for _, cand in ipairs(titleCandidates) do
+                if cand and cand:IsA("TextLabel") and cand.Text ~= "" then
+                    info.title = cand.Text
+                    break
+                end
+            end
+
+            if info.title == "" then
+                for _, d in ipairs(aq:GetDescendants()) do
+                    if d:IsA("TextLabel") and d.Visible and d.Text ~= "" then
+                        if qData and d.Text == qData.title then
+                            info.title = d.Text
+                            break
+                        end
+                        if not d.Text:match("%d+/%d+") and #d.Text > 3 and #d.Text < 50 then
+                            if info.title == "" then info.title = d.Text end
                         end
                     end
                 end
             end
-            if info.title ~= "" or total > 0 then info.active = true end
+
+            local total, done = 0, 0
+            for _, d in ipairs(aq:GetDescendants()) do
+                if d:IsA("TextLabel") and d.Visible and d.Text:match("%d+%s*/%s*%d+") then
+                    local nome, cur, req = d.Text:match("([^:]+):%s*(%d+)%s*/%s*(%d+)")
+                    if nome and tonumber(req) and tonumber(req) > 0 then
+                        local curN, reqN = tonumber(cur), tonumber(req)
+                        total = total + 1
+                        local completo = d.Text:find("^<s>") ~= nil or curN >= reqN
+                        if completo then done = done + 1 end
+                        local clean = nome:gsub("^%s+", ""):gsub("%s+$", "")
+                            :gsub("^[Dd]efeat%s+", ""):gsub("^[Kk]ill%s+", ""):gsub("^[Mm]ate%s+", "")
+                            :gsub("^%d+%s*", ""):gsub("%s+$", "")
+                        table.insert(info.mobTargets, clean)
+                        info.progress[clean] = { cur = curN, req = reqN, completo = completo }
+                    end
+                end
+            end
+            if total > 0 then info.active = true end
             if total >= 1 and done >= total then info.allDone = true end
         end)
         return info
     end
 
-    -- FIX #1: RepeatButton só conta se estiver visível DENTRO de frame visível E quest ativa
     local function isRepeatReady()
         local ready = false
         pcall(function()
@@ -836,7 +869,7 @@ task.spawn(function()
         return ready
     end
 
-    -- FIX #3 + #5: aceita lista de alvos, match seguro
+    -- FIX B: mobMatches mais permissivo (dentro de Playability.Enemys é seguro)
     local function mobMatches(mob, tName)
         if not tName or tName == "" then return false end
         local tLow = tName:lower():gsub("%s+$", "")
@@ -849,57 +882,78 @@ task.spawn(function()
         if mBase == tLow or oBase == tLow then return true end
         if mBase:sub(1, #tLow + 1) == tLow .. " " then return true end
         if oBase:sub(1, #tLow + 1) == tLow .. " " then return true end
+        if mBase:sub(-(#tLow + 1)) == " " .. tLow then return true end
+        if oBase:sub(-(#tLow + 1)) == " " .. tLow then return true end
+        if mBase:sub(-(#tLow + 1)) == "_" .. tLow then return true end
+        if oBase:sub(-(#tLow + 1)) == "_" .. tLow then return true end
 
         if tLow:sub(-1) == "s" then
             local sg = tLow:sub(1, -2)
             if #sg >= 3 then
                 if mBase == sg or oBase == sg then return true end
                 if mBase:sub(1, #sg + 1) == sg .. " " then return true end
-                if oBase:sub(1, #sg + 1) == sg .. " " then return true end
+                if mBase:sub(-(#sg + 1)) == " " .. sg then return true end
+                if mBase:sub(-(#sg + 1)) == "_" .. sg then return true end
             end
         end
         return false
     end
 
+    -- FIX C: mobReady aceita Render=false
     local function mobReady(mob)
         if not mob or not mob.Parent then return false end
         if ignoreMap[mob] and tick() < ignoreMap[mob] then return false end
-        if mob:GetAttribute("Dead") == true then return false end
         local hum = mob:FindFirstChildOfClass("Humanoid")
         local mr = mob:FindFirstChild("HumanoidRootPart") or mob.PrimaryPart
         if not hum or not mr or hum.Health <= 0 or mr.Position.Y < -300 then return false end
-        local st = hum:GetState()
-        if st == Enum.HumanoidStateType.FallingDown or st == Enum.HumanoidStateType.Dead or st == Enum.HumanoidStateType.Physics then
-            return false
+
+        if mob:GetAttribute("Dead") == true then
+            local dcf = mob:GetAttribute("DeadCFrame")
+            if typeof(dcf) == "CFrame" and (mr.Position - dcf.Position).Magnitude < 10 then
+                return false
+            end
         end
-        local dcf = mob:GetAttribute("DeadCFrame")
-        if mob:GetAttribute("Render") == false and typeof(dcf) == "CFrame" and (mr.Position - dcf.Position).Magnitude < 10 then
+
+        local st = hum:GetState()
+        if st == Enum.HumanoidStateType.Dead or st == Enum.HumanoidStateType.Physics then
             return false
         end
         return true
     end
 
-    -- FIX #3: aceita lista de mobTargets
+    -- FIX D: GetDescendants + preferência por questMobs
     local function findTargetMob(mobTargets, questMobs)
         local root = getRoot()
         local folder = Workspace:FindFirstChild("Playability") and Workspace.Playability:FindFirstChild("Enemys")
         if not folder or not root then return nil, nil, nil end
 
         local allNames = {}
-        for _, n in ipairs(mobTargets or {}) do table.insert(allNames, n) end
         for _, n in ipairs(questMobs or {}) do table.insert(allNames, n) end
+        for _, n in ipairs(mobTargets or {}) do table.insert(allNames, n) end
 
         local best, bestRoot, bestName, bestScore = nil, nil, nil, math.huge
-        for _, name in ipairs(allNames) do
-            for _, mob in ipairs(folder:GetChildren()) do
-                if mob:IsA("Model") and mobMatches(mob, name) and mobReady(mob) then
-                    local mr = mob:FindFirstChild("HumanoidRootPart") or mob.PrimaryPart
-                    if mr then
-                        local sc = (mr.Position - root.Position).Magnitude
-                        if mob:GetAttribute("Render") == false then sc = sc + 350 end
-                        if sc < bestScore then
-                            bestScore = sc; best = mob; bestRoot = mr; bestName = name
+
+        for _, mob in ipairs(folder:GetDescendants()) do
+            if mob:IsA("Model") and mob:FindFirstChildOfClass("Humanoid") then
+                for _, name in ipairs(allNames) do
+                    if mobMatches(mob, name) and mobReady(mob) then
+                        local mr = mob:FindFirstChild("HumanoidRootPart") or mob.PrimaryPart
+                        if mr then
+                            local sc = (mr.Position - root.Position).Magnitude
+                            if mob:GetAttribute("Render") == false then sc = sc + 100 end
+                            if mob:GetAttribute("Dead") == true then sc = sc + 500 end
+
+                            local isQuestMob = false
+                            for _, qm in ipairs(questMobs or {}) do
+                                if mobMatches(mob, qm) then isQuestMob = true; break end
+                            end
+                            if not isQuestMob then sc = sc + 300 end
+
+                            if sc < bestScore then
+                                bestScore = sc; best = mob; bestRoot = mr; bestName = name
+                            end
                         end
+                        break
                     end
                 end
             end
@@ -907,7 +961,7 @@ task.spawn(function()
         return best, bestRoot, bestName
     end
 
-    local function getSpawnPointsForQuest(mobTargets, questMobs)
+    local function getSpawnPointsForQuest(mobTargets, questMobs, qData)
         local pts = {}
         local folder = Workspace:FindFirstChild("Playability") and Workspace.Playability:FindFirstChild("Enemys")
         if not folder then return pts end
@@ -915,7 +969,7 @@ task.spawn(function()
         for _, n in ipairs(mobTargets or {}) do table.insert(allNames, n) end
         for _, n in ipairs(questMobs or {}) do table.insert(allNames, n) end
 
-        for _, mob in ipairs(folder:GetChildren()) do
+        for _, mob in ipairs(folder:GetDescendants()) do
             if mob:IsA("Model") then
                 for _, name in ipairs(allNames) do
                     if mobMatches(mob, name) then
@@ -931,6 +985,37 @@ task.spawn(function()
                 end
             end
         end
+
+        if #pts > 0 and qData then
+            local cacheKey = "spawn_" .. qData.id
+            local saved = Core.SpawnCache and Core.SpawnCache[cacheKey]
+            if not saved or #saved ~= #pts then
+                Core.SpawnCache = Core.SpawnCache or {}
+                local serialized = {}
+                for _, p in ipairs(pts) do
+                    table.insert(serialized, {x = p.X, y = p.Y, z = p.Z})
+                end
+                Core.SpawnCache[cacheKey] = serialized
+                pcall(function()
+                    if writefile then
+                        writefile(SPAWN_FILE, HttpService:JSONEncode(Core.SpawnCache))
+                    end
+                end)
+            end
+        end
+
+        if #pts == 0 and qData then
+            local cacheKey = "spawn_" .. qData.id
+            local saved = Core.SpawnCache and Core.SpawnCache[cacheKey]
+            if saved then
+                for _, p in ipairs(saved) do
+                    if p.x and p.y and p.z then
+                        table.insert(pts, Vector3.new(p.x, p.y, p.z))
+                    end
+                end
+            end
+        end
+
         return pts
     end
 
@@ -952,7 +1037,6 @@ task.spawn(function()
         return nil
     end
 
-    -- FIX #7: tenta UI primeiro, fallback Remote
     local function tryAcceptQuest(qData)
         local npcPos = findNpcPos(qData)
         if npcPos then
@@ -969,7 +1053,6 @@ task.spawn(function()
             end
         end
 
-        -- Tenta UI
         local okUI = false
         pcall(function()
             local ib = pGui.ScreenGuis.MainUI.InteractionHUD.InteractionButton
@@ -987,7 +1070,6 @@ task.spawn(function()
             end
         end)
 
-        -- Fallback Remote
         if not okUI then
             UI.SetStatus("Aceitando via Remote: " .. qData.title)
             pcall(function()
@@ -1009,17 +1091,12 @@ task.spawn(function()
             if Core.Settings.autoGrind and not Core.State.busyWithFruit and not Core.State.isTravelingIsland and root then
                 Core.State.busyWithGrind = true
 
-                -- FIX #1: justFinished só com quest ativa ou RepeatButton visível DENTRO de frame visível
-                -- Detecta se RepeatButton está pronto (funciona mesmo com Title='')
                 local repeatReady = isRepeatReady()
-
-                -- Quest foi completada? (3 critérios, qualquer um serve)
                 local justFinished = (qInfo.active and qInfo.allDone)
                     or repeatReady
                     or (wasQuestActive and not qInfo.active and lastQuestTitle == qData.title and not repeatReady)
 
                 if repeatReady then
-                    -- Prioridade absoluta: se RepeatButton existe, clica NELE
                     if Core.Settings.autoRepeatQuest then
                         if not countedThisRun then
                             countedThisRun = true
@@ -1029,7 +1106,6 @@ task.spawn(function()
                         end
                         wasQuestActive = false
 
-                        -- Verifica se já atingiu a meta
                         if Core.Settings.currentQuestDoneCount >= Core.Settings.repeatsPerQuest then
                             local prevIsl = qData.island
                             Core.Settings.currentQuestIndex = (Core.Settings.currentQuestIndex % #QUEST_ROADMAP) + 1
@@ -1043,28 +1119,23 @@ task.spawn(function()
                             end
                             countedThisRun = false
                         else
-                            -- Clica RepeatButton
                             UI.SetStatus(string.format("Repetindo missão (%d/%d)...", Core.Settings.currentQuestDoneCount, Core.Settings.repeatsPerQuest))
                             local rb = pGui.ScreenGuis.MainUI.ProgressHUD.ActiveQuest.Container.RepeatQuest.RepeatButton
                             Core.ClickButton(rb)
-                            task.wait(1.2)  -- espera quest resetar
+                            task.wait(1.2)
                             countedThisRun = false
                         end
                     else
-                        -- autoRepeatQuest OFF: só marca e espera
                         task.wait(0.5)
                     end
 
                 elseif justFinished and not qInfo.active then
-                    -- Quest sumiu E não tem RepeatButton ainda: aguarda (transição)
-                    -- NÃO vai pro NPC — espera até RepeatButton aparecer (até 5s)
                     countedThisRun = true
                     wasQuestActive = false
                     UI.SetStatus("Aguardando botão Repetir...")
                     task.wait(0.5)
 
                 elseif not qInfo.active then
-                    -- Sem quest ativa E sem RepeatButton: é hora de ir pro NPC
                     countedThisRun = false
                     wasQuestActive = false
                     if Core.Settings.autoAcceptQuest and (tick() - lastAccept) >= 1.5 then
@@ -1073,7 +1144,6 @@ task.spawn(function()
                     end
 
                 else
-                    -- Quest ativa em andamento — caça
                     wasQuestActive = true
                     lastQuestTitle = qInfo.title
                     countedThisRun = false
@@ -1098,21 +1168,33 @@ task.spawn(function()
                             if weap then weap:Activate() end
                             task.wait(0.18)
 
-                            -- Re-checa se quest completou no meio do combate
                             local rq = pGui.ScreenGuis.MainUI.ProgressHUD.ActiveQuest.Container.RepeatQuest
                             if rq and rq.Visible then break end
                         end
                     else
-                        local pts = getSpawnPointsForQuest(qInfo.mobTargets, qData.mobs)
+                        local pts = getSpawnPointsForQuest(qInfo.mobTargets, qData.mobs, qData)
                         if #pts > 0 then
                             patrolIndex = (patrolIndex % #pts) + 1
                             local targetSpawn = pts[patrolIndex]
-                            if (root.Position - targetSpawn).Magnitude > 14 then
+                            if (root.Position - targetSpawn).Magnitude > 20 then
                                 Core.MoveToPosition(targetSpawn + Vector3.new(0, 3, 0), 260)
+                                UI.SetStatus("Patrulhando spawn: " .. tostring(qInfo.mobTargets[1] or qData.mobs[1]))
+                            else
+                                UI.SetStatus("Aguardando spawn (já no ponto)...")
                             end
+                            task.wait(0.4)
+                        else
+                            local npcPos = findNpcPos(qData)
+                            local center = npcPos or root.Position
+                            patrolIndex = patrolIndex + 1
+                            local angle = (patrolIndex * 45) * math.pi / 180
+                            local radius = 150
+                            local offset = Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
+                            local targetSpawn = center + offset
+                            Core.MoveToPosition(targetSpawn + Vector3.new(0, 3, 0), 220)
+                            UI.SetStatus("Procurando spawn (~150m ao redor)...")
+                            task.wait(0.5)
                         end
-                        UI.SetStatus("Aguardando respawn: " .. tostring(qInfo.mobTargets[1] or qData.mobs[1]))
-                        task.wait(0.35)
                     end
                 end
                 Core.State.busyWithGrind = false
